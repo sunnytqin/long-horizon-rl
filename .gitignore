@@ -130,4 +130,4 @@ ENV/
 logs
 log
 outputs
-.history
+.historycodecontest/__pycache__/

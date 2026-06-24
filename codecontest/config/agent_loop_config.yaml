@@ -1,0 +1,6 @@
+# Registers the CodeContests oracle code-refinement agent loop.
+# Wire in via: actor_rollout_ref.rollout.agent.agent_loop_config_path=codecontest/config/agent_loop_config.yaml
+# and select it with actor_rollout_ref.rollout.agent.default_agent_loop=code_refine_agent
+# (or per-sample via extra_info.agent_name=code_refine_agent in the parquet).
+- name: code_refine_agent
+  _target_: codecontest.code_refine_agent.CodeRefineAgentLoop
