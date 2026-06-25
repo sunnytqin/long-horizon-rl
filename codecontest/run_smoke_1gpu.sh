@@ -17,6 +17,10 @@
 
 set -xeuo pipefail
 
+# Expand Hydra's truncated traceback so the root cause prints to stdout/stderr
+# (visible directly in the GCP job logs -- no need to SSH into the node).
+export HYDRA_FULL_ERROR=1
+
 MODEL_PATH=${MODEL_PATH:-Qwen/Qwen2.5-0.5B-Instruct}     # tiny: fits a small GPU
 INFER_BACKEND=${INFER_BACKEND:-sglang}
 DATA_DIR=${DATA_DIR:-/data/codecontests_smoke}
@@ -29,7 +33,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_files="['${DATA_DIR}/test.parquet']" \
     data.train_batch_size=8 \
     data.max_prompt_length=1536 \
-    data.max_response_length=3072 \
+    data.max_response_length=16384 \
     data.return_raw_chat=True \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
@@ -50,14 +54,16 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.n=4 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.multi_turn.enable=True \
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=3 \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.agent.agent_loop_config_path=${AGENTLOOP_CONFIG_PATH} \
     actor_rollout_ref.rollout.agent.default_agent_loop=code_refine_agent \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     reward_model.reward_manager=naive \
-    +codecontest.max_new_tokens_per_turn=768 \
+    +codecontest.max_new_tokens_per_turn=2048 \
     +codecontest.max_failures_shown=3 \
     +codecontest.max_gt_test=8 \
     +codecontest.on_overflow=end_zero_reward \

@@ -35,6 +35,7 @@ still unsolved, we stop and assign reward 0 (``on_overflow=end_zero_reward``,
 default) -- we never reward a run that did not cleanly solve within budget.
 """
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -77,6 +78,11 @@ class CodeRefineAgentLoop(AgentLoopBase):
         self.default_exec_timeout = float(cc.get("exec_timeout", 6.0))
         self.default_max_failures_shown = int(cc.get("max_failures_shown", 3))
         self.default_max_gt_test = int(cc.get("max_gt_test", 20))
+        # Hard wall on a single env.step (code grading). Backstop against a wedged
+        # sandbox: on timeout we end the trajectory unsolved rather than hang the
+        # whole rollout. Generous by default since grading can queue behind the
+        # global exec-concurrency cap under heavy fan-out.
+        self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -160,7 +166,18 @@ class CodeRefineAgentLoop(AgentLoopBase):
             # Grade only the latest submission (env extracts the last ```python block).
             assistant_text = self.tokenizer.decode(resp_ids, skip_special_tokens=True)
             with simple_timer("env_step", metrics):
-                step = await self.loop.run_in_executor(None, env.step, assistant_text)
+                try:
+                    step = await asyncio.wait_for(
+                        self.loop.run_in_executor(None, env.step, assistant_text),
+                        timeout=self.env_step_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    # Sandbox wedged: end this trajectory unsolved (reward 0) instead of
+                    # silently stalling the rollout. The orphaned executor thread will
+                    # unwind on its own via the sandbox's per-case timeouts.
+                    logger.warning("env.step exceeded %.0fs; ending trajectory unsolved", self.env_step_timeout)
+                    metrics["env_step_timeout"] = 1
+                    break
 
             if step.solved:
                 solved = True

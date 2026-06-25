@@ -18,21 +18,63 @@ with a self-contained local executor, reusing the multiprocessing-based exec
 pattern from ``codecontest/eval_example.py``. It is used both for mid-conversation
 oracle feedback and for the final binary reward.
 
-Security note: this runs untrusted model output in a child process guarded only by
-a wall-clock timeout (same risk profile as the existing ``eval_example.py``).
-Run it on an isolated research node; rlimit/seccomp/container hardening (or a swap
-to SandboxFusion) is a follow-up if stronger isolation is needed.
+Security note: this runs untrusted model output in a child process guarded by a
+wall-clock timeout AND a per-process address-space cap (``RLIMIT_AS``), plus a
+global cap on how many executions run concurrently. The memory/concurrency caps
+keep a memory-bomb generation (e.g. ``x = [0]*10**10``) from exhausting host RAM
+and tripping the Ray OOM killer during large multi-turn rollouts. Run it on an
+isolated research node; seccomp/container hardening (or a swap to SandboxFusion)
+is a follow-up if stronger isolation is needed.
+
+Tunables (env vars, read at import):
+  CODECONTEST_EXEC_MEM_GB        per-process address-space headroom cap (default 2)
+  CODECONTEST_EXEC_CONCURRENCY   max concurrent child executions (default 64)
 """
 
 import io
 import multiprocessing as mp
+import os
 import re
+import resource
 import sys
+import threading
 import time
 import typing
 
 # A spawn/fork-safe context. "fork" is fastest on Linux and matches eval_example.py.
+# We keep fork (no torch/CUDA re-import tax that `spawn` would incur from the trainer
+# process) and rely on a *relative* RLIMIT_AS in the child for memory safety.
 _MP_CTX = mp.get_context("fork")
+
+# Per-process memory headroom: a forked child inherits the parent's (possibly huge,
+# CUDA-reserved) virtual address space, so an absolute cap is meaningless. Instead we
+# cap *growth* beyond the child's startup VSZ, which a memory bomb trips as MemoryError.
+_EXEC_MEM_LIMIT_BYTES = int(float(os.environ.get("CODECONTEST_EXEC_MEM_GB", "2")) * (1024**3))
+# Global ceiling on concurrently-alive child processes across all agent-loop threads,
+# so a 200+-way rollout fan-out can't launch thousands of exec processes at once.
+_EXEC_CONCURRENCY = int(os.environ.get("CODECONTEST_EXEC_CONCURRENCY", "64"))
+_EXEC_SLOTS = threading.BoundedSemaphore(_EXEC_CONCURRENCY)
+
+
+def _apply_mem_limit() -> None:
+    """Cap this (child) process's address-space growth to +_EXEC_MEM_LIMIT_BYTES.
+
+    Best-effort: any failure leaves the process uncapped rather than blocking exec.
+    Relative to startup VSZ so it works regardless of inherited CUDA VA reservations.
+    """
+    if _EXEC_MEM_LIMIT_BYTES <= 0:
+        return
+    try:
+        with open("/proc/self/statm") as f:
+            vsz_pages = int(f.read().split()[0])
+        current = vsz_pages * resource.getpagesize()
+        soft = current + _EXEC_MEM_LIMIT_BYTES
+        _, hard = resource.getrlimit(resource.RLIMIT_AS)
+        if hard != resource.RLIM_INFINITY:
+            soft = min(soft, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (soft, hard))
+    except Exception:  # noqa: BLE001 - never let rlimit setup break execution
+        pass
 
 # ── output normalization & comparison (matches eval_example.modify / test_if_eq) ──
 
@@ -66,6 +108,7 @@ def extract_code(text: str) -> typing.Optional[str]:
 
 def _worker(script: str, stdin_str: str, output_queue):
     """Execute ``script`` with ``stdin_str`` on stdin; put stdout (or error) on queue."""
+    _apply_mem_limit()  # bound this child's RAM growth before running untrusted code
     input_lines = iter(stdin_str.splitlines())
 
     def fake_input(prompt=""):
@@ -97,8 +140,45 @@ def _worker(script: str, stdin_str: str, output_queue):
         sys.stdout, sys.stdin = original_stdout, original_stdin
 
 
+def _run_single(code: str, stdin_str: str, time_limit: float) -> str:
+    """Run one (code, stdin) in a child process, holding one global concurrency slot.
+
+    Returns stdout, or "Timeout Error" / "error: ..." on failure. The slot bounds how
+    many child processes are alive at once across all calling threads; each call is
+    self-contained (acquire -> start -> reap -> release) so it can't deadlock against
+    other in-flight cases the way a batch holding several slots could.
+    """
+    with _EXEC_SLOTS:
+        q = _MP_CTX.Queue()
+        p = _MP_CTX.Process(target=_worker, args=(code, stdin_str, q))
+        p.start()
+        deadline = time.time() + time_limit
+        result = None
+        try:
+            while p.is_alive() and time.time() < deadline:
+                time.sleep(0.001)
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=0.5)
+                if p.is_alive():
+                    p.kill()
+                result = "Timeout Error"
+            else:
+                try:
+                    result = q.get_nowait()
+                except Exception as e:  # noqa: BLE001
+                    result = f"Execution Error: {e}"
+            p.join(timeout=0.1)
+            return result
+        finally:
+            try:
+                q.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def run_code_batch(codes, stdins, time_limits):
-    """Run a batch of (code, stdin) pairs in parallel child processes.
+    """Run a batch of (code, stdin) pairs in parallel, bounded by the global slot cap.
 
     Args:
         codes: list[str] python sources.
@@ -110,30 +190,17 @@ def run_code_batch(codes, stdins, time_limits):
     """
     n = len(codes)
     results: list = [None] * n
-    processes, queues, deadlines = [], [], []
-    for i in range(n):
-        q = _MP_CTX.Queue()
-        p = _MP_CTX.Process(target=_worker, args=(codes[i], stdins[i], q))
-        processes.append(p)
-        queues.append(q)
-        p.start()
-        deadlines.append(time.time() + time_limits[i])
 
-    while any(p.is_alive() for p in processes):
-        now = time.time()
-        for i, p in enumerate(processes):
-            if p.is_alive() and now >= deadlines[i]:
-                p.terminate()
-                results[i] = "Timeout Error"
-        time.sleep(0.001)
+    def runner(i):
+        results[i] = _run_single(codes[i], stdins[i], time_limits[i])
 
-    for i, p in enumerate(processes):
-        if results[i] is None:
-            try:
-                results[i] = queues[i].get_nowait()
-            except Exception as e:  # noqa: BLE001
-                results[i] = f"Execution Error: {e}"
-        p.join(timeout=0.1)
+    # One thread per case; each blocks on the global semaphore before spawning its
+    # child, so within-trajectory parallelism is preserved up to the global ceiling.
+    threads = [threading.Thread(target=runner, args=(i,), daemon=True) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
     return results
 
 
