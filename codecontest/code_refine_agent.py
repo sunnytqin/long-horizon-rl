@@ -110,6 +110,13 @@ class CodeRefineAgentLoop(AgentLoopBase):
         overflow = False
         solved_at_turn = -1
 
+        # Off-policy staleness bookkeeping the trainer requires (see
+        # trainer_base._compute_metrics). Each server.generate() tags the output with the
+        # weights version it was produced on; we keep the oldest (min) and freshest (max)
+        # across turns. Must be plain ints, not None, or np.array(dtype=int) blows up.
+        min_global_steps = None
+        max_global_steps = None
+
         for turn in range(self.max_assistant_turns):
             remaining = self.response_length - len(response_mask)
             if remaining <= 0:
@@ -131,6 +138,14 @@ class CodeRefineAgentLoop(AgentLoopBase):
                 )
             if metrics.get("num_preempted") is None:
                 metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
+
+            # Track weights-version span across turns (oldest stays, freshest advances).
+            turn_min = output.extra_fields.get("min_global_steps")
+            turn_max = output.extra_fields.get("max_global_steps")
+            if turn_min is not None and min_global_steps is None:
+                min_global_steps = turn_min
+            if turn_max is not None:
+                max_global_steps = turn_max
 
             resp_ids = output.token_ids
             prompt_ids += resp_ids
@@ -191,6 +206,8 @@ class CodeRefineAgentLoop(AgentLoopBase):
             extra_fields={
                 "turn_scores": [],
                 "tool_rewards": [],
+                "min_global_steps": min_global_steps,
+                "max_global_steps": max_global_steps,
                 "solved": solved,
                 "solved_at_turn": solved_at_turn,
                 "num_assistant_turns": assistant_turns,
