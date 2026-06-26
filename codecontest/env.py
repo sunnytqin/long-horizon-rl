@@ -35,7 +35,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Optional
 
-from codecontest import local_exec, templates
+from codecontest import exec_client, local_exec, templates
 
 
 @dataclass
@@ -105,7 +105,7 @@ class GTOracleEnv(BaseEnv):
                 had_code=False,
             )
 
-        all_pass, _per_case, failures = local_exec.eval_code_on_tests(
+        all_pass, _per_case, failures = exec_client.eval_code_on_tests(
             code,
             self.test_input,
             self.test_output,

@@ -1,0 +1,29 @@
+# Slim, isolated sandbox for executing untrusted model-generated Python.
+# Deliberately minimal: no torch/CUDA, stdlib-only HTTP server. Reward semantics are
+# identical to the in-process path because it runs the SAME local_exec grading code.
+#
+# Build (context = this directory, so the COPYs below resolve):
+#   docker build -f Dockerfile.sandbox -t cc-sandbox .
+#
+# Run-time hardening lives in the `docker run` flags (see run_oracle_codecontest_grpo.sh):
+#   --network <internal-or-none>  --read-only  --tmpfs /tmp  --memory  --pids-limit  --cpus
+FROM python:3.12-slim
+
+# Non-root: untrusted code runs unprivileged inside the container.
+RUN useradd --create-home --uid 10001 sandbox
+WORKDIR /app
+
+# Only the two modules the server needs. templates.py / env.py are intentionally NOT
+# copied -- feedback formatting and the env stay trainer-side; the sandbox only execs.
+RUN mkdir -p /app/codecontest && touch /app/codecontest/__init__.py
+COPY local_exec.py /app/codecontest/local_exec.py
+COPY exec_server.py /app/codecontest/exec_server.py
+
+ENV PYTHONUNBUFFERED=1 \
+    CODECONTEST_EXEC_PORT=8088 \
+    CODECONTEST_EXEC_CONCURRENCY=64 \
+    CODECONTEST_EXEC_MEM_GB=2
+
+USER sandbox
+EXPOSE 8088
+CMD ["python", "-m", "codecontest.exec_server"]

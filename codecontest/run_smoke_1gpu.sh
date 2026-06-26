@@ -21,6 +21,11 @@ set -xeuo pipefail
 # (visible directly in the GCP job logs -- no need to SSH into the node).
 export HYDRA_FULL_ERROR=1
 
+# Smoke runs in a single Singularity container with NO exec sidecar, so it must use
+# the in-process executor. That path is opt-in only (exec_client refuses it otherwise)
+# precisely so a REAL training run can never silently fall back to it.
+export CODECONTEST_ALLOW_INPROCESS=1
+
 MODEL_PATH=${MODEL_PATH:-Qwen/Qwen2.5-0.5B-Instruct}     # tiny: fits a small GPU
 INFER_BACKEND=${INFER_BACKEND:-sglang}
 DATA_DIR=${DATA_DIR:-/data/codecontests_smoke}
