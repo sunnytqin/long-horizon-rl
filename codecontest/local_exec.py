@@ -106,8 +106,26 @@ def extract_code(text: str) -> typing.Optional[str]:
 # ── subprocess execution (ported from eval_example.worker / run_scripts_with_timeout) ──
 
 
+# BLAS/OpenMP thread caps applied in each exec child BEFORE the untrusted code can
+# `import numpy`. OpenBLAS otherwise starts one worker thread PER CPU core on import;
+# across many concurrent execs that exhausts thread/process limits (OpenBLAS
+# "pthread_create failed ... Resource temporarily unavailable" / "can't start new
+# thread") and address space from thread stacks (mmap "failed to map segment from
+# shared object"). 1 thread is correct and ample for grading. Set in the child only,
+# so the trainer's / sidecar-parent's own threading is untouched.
+_THREAD_CAP_ENV = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
+
+
 def _worker(script: str, stdin_str: str, output_queue):
     """Execute ``script`` with ``stdin_str`` on stdin; put stdout (or error) on queue."""
+    for _var in _THREAD_CAP_ENV:
+        os.environ[_var] = "1"  # force single-thread BLAS before any numpy import
     _apply_mem_limit()  # bound this child's RAM growth before running untrusted code
     input_lines = iter(stdin_str.splitlines())
 

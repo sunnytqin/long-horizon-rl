@@ -31,11 +31,19 @@ tests). The agent loop turns the final ``solved`` into the binary 0/1 trajectory
 reward.
 """
 
+import os
 import random
+import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
 from codecontest import exec_client, local_exec, templates
+
+# Set CODECONTEST_DEBUG_FEEDBACK=1 to dump per-field feedback sizes (chars) so we can
+# see which field (raw test input, the model's program OUTPUT, or expected) is blowing
+# up the injected feedback turn. `actual` (model stdout) is unbounded and the usual
+# culprit -- a runaway/over-printing solution.
+_DEBUG_FEEDBACK = bool(int(os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") or "0"))
 
 
 @dataclass
@@ -126,6 +134,20 @@ class GTOracleEnv(BaseEnv):
         if len(failures) > self.max_failures_shown:
             shown = self._rng.sample(failures, self.max_failures_shown)
         feedback = templates.build_feedback_message(shown)
+
+        if _DEBUG_FEEDBACK:
+            # Per-field char sizes for each shown case: inp (dataset), actual (MODEL
+            # stdout, unbounded), expected (dataset). Flushed so it isn't swallowed by
+            # the rollout worker's buffering.
+            for i, (inp, actual, expected) in enumerate(shown, 1):
+                print(
+                    f"[FEEDBACK_DBG] failures_total={len(failures)} shown={len(shown)} "
+                    f"case{i}: inp={len(str(inp))} actual={len(str(actual))} "
+                    f"expected={len(str(expected))} chars",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            print(f"[FEEDBACK_DBG] total_feedback_chars={len(feedback)}", file=sys.stderr, flush=True)
         return StepResult(
             solved=False,
             should_terminate=False,
