@@ -42,8 +42,13 @@ MODEL_PATH=${MODEL_PATH:-Qwen/Qwen2.5-14B-Instruct}
 
 
 # Data hparams
-train_batch_size=${TRAIN_BATCH_SIZE:-256}
-ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-64}
+# Prompts per training step. trajectories/step = train_batch_size * rollout_n (drives ROLLOUT
+# time + host load, NOT training-phase GPU mem under dynamic bsz). Keep both divisible by
+# n_gpus (8) and train % mini == 0.
+train_batch_size=${TRAIN_BATCH_SIZE:-128}
+# = train_batch_size => fully ON-POLICY GRPO (one update per rollout batch). Smaller => more
+# gradient steps per batch but off-policy drift on the reused rollout data.
+ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-128}
 max_prompt_length=${MAX_PROMPT_LENGTH:-4096} # cap the initial prompt (coding queston itself) len
 max_response_length=${MAX_RESPONSE_LENGTH:-16384} # episode TAIL: all assistant turns + injected feedback (full seq = prompt + this)
 # Actor TRAINING dynamic-bsz token budget per GPU (NOT the SGLang context; that auto-resolves to prompt+response).
@@ -53,7 +58,9 @@ ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-24576}
 
 
 # Rollout hparams
-rollout_n=${ROLLOUT_N:-16}                       # GRPO group size
+# GRPO group size. KEY knob for sparse binary reward: too small => many all-pass/all-fail
+# groups with zero advantage (no gradient). 16 gives more mixed groups => more signal.
+rollout_n=${ROLLOUT_N:-16}
 rollout_tp=${ROLLOUT_TP:-2}                      # SGLang inference TP (helps ROLLOUT-phase GPU mem)
 # SGLang KV fraction; lower => more room for FSDP at the rollout->train transition.
 # Lowered 0.6 -> 0.5 after a GPU-VRAM OOM at the weight-sync resume: SGLang's
@@ -62,7 +69,7 @@ rollout_tp=${ROLLOUT_TP:-2}                      # SGLang inference TP (helps RO
 # inside resume_memory_occupation -> the TP scheduler died -> gloo barrier
 # "Connection closed by peer" -> raylet SYSTEM_ERROR. If you hit that again, drop
 # this further (0.45) and/or set PARAM_OFFLOAD=True (below).
-rollout_gpu_mem_util=${ROLLOUT_GPU_MEM_UTIL:-0.5}
+rollout_gpu_mem_util=${ROLLOUT_GPU_MEM_UTIL:-0.4}
 # NOTE: default OFF -- enabling this crashed SGLangHttpServer during launch_servers on this
 # container. Re-enable (MULTI_STAGE_WAKE_UP=True) only if your SGLang build supports it.
 multi_stage_wake_up=${MULTI_STAGE_WAKE_UP:-False}  # SGLang: stage engine wake-up to cut rollout->train peak mem
@@ -73,6 +80,14 @@ max_assistant_turns=${MAX_ASSISTANT_TURNS:-4}    # total solver attempts (1=sing
 max_new_tokens_per_turn=${MAX_NEW_TOKENS_PER_TURN:-4096} # controls solver generation len
 max_failures_shown=${MAX_FAILURES_SHOWN:-3}
 max_gt_test=${MAX_GT_TEST:-20}   # GT cases graded per turn -- DON'T shrink: fewer => false-positive rewards
+# Combined char budget for the failing-case fields in the injected feedback turn.
+# CodeContests has pathologically large test INPUTS (tens of KB); without this a single
+# failing case can blow the feedback to 100k+ tokens, which the agent loop then blindly
+# left-truncates (dropping the user-turn role framing). A water-filling policy clips only
+# the large fields (input/output/expected). Default 0 => the agent loop AUTO-DERIVES the
+# budget from max_prompt_length (the cap the feedback is actually checked against), so it
+# tracks that knob automatically. Set a positive value to pin an absolute char budget.
+max_feedback_chars=${MAX_FEEDBACK_CHARS:-0}
 on_overflow=${ON_OVERFLOW:-end_zero_reward}
 rollout_temp=${ROLLOUT_TEMP:-0.8}
 rollout_top_p=${ROLLOUT_TOP_P:-0.95}
@@ -104,23 +119,33 @@ save_freq=${SAVE_FREQ:-20}
 test_freq=${TEST_FREQ:-5}
 
 
-# GPU-OOM mitigation (training-phase / rollout->train transition). Tuned for 14B on 8xH100.
-# expandable_segments:True reduces allocator fragmentation BUT can crash SGLang's CUDA-graph
-# capture during server launch -- so it's UNSET by default. Opt in only with enforce_eager,
-# e.g.: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True ... actor_rollout_ref.rollout.enforce_eager=True
+# ===== GPU-OOM playbook (14B / 8xH100) -- debugging lessons, so future-you skips the dead ends =====
+# OOM hit at the ROLLOUT->TRAIN transition. The dominant tensor is the LM-head LOGITS
+# [per-GPU tokens x ~152k vocab x 2B ~= 6.9 GB at 24576 tokens], NOT attention activations.
+# WHAT ACTUALLY HELPS:
+#   - lower gpu_memory_utilization (smaller SGLang KV reservation)
+#   - PARAM_OFFLOAD / OPT_OFFLOAD (free GPU model+optimizer state; ~free here given ~1 TB host RAM)
+#   - lower ppo_max_token_len_per_gpu toward its 20480 floor (shrinks the logits tensor)
+# DEAD ENDS -- DON'T re-chase these when an OOM reappears:
+#   - ULYSSES_SP=2 : launched + trained FINE (it did NOT break the pipeline) but did NOT help the
+#       OOM -- it shards ATTENTION activations, not the logits tensor. Only useful if you ALSO
+#       lower the per-GPU token budget. Left at 1.
+#   - MULTI_STAGE_WAKE_UP=True : crashed SGLangHttpServer during launch_servers on this container.
+#   - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True : crashes SGLang's CUDA-graph capture at
+#       launch (would need rollout.enforce_eager=True). UNSET by default for that reason.
+# ===================================================================================================
 PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-}
 [ -n "${PYTORCH_CUDA_ALLOC_CONF}" ] && export PYTORCH_CUDA_ALLOC_CONF
-# Ulysses sequence parallelism: shard the long-episode (~20k tok) activations across SP
-# GPUs during the actor fwd/bwd -- the right lever for long-seq OOM (no host-RAM cost,
-# unlike offload). Needs use_remove_padding=True (set below). 1 = off.
-ulysses_sp=${ULYSSES_SP:-2}
+# Ulysses SP: shards attention activations only (see playbook -- did NOT help the logits OOM).
+# Needs use_remove_padding=True (set below). 1 = off (recommended here).
+ulysses_sp=${ULYSSES_SP:-1}
 # FSDP CPU offload: frees GPU model/optimizer state but ADDS host RAM. This is the
 # next escalation for the rollout->train transition GPU-OOM (cu_mem_create) above:
 # moving actor PARAMS off-GPU during rollout frees the VRAM SGLang needs to wake. With
 # ~1 TB host RAM here the cost is basically free -- flip to True if 0.5 KV util isn't
 # enough (optimizer_offload below is already commonly enabled via OPT_OFFLOAD=True).
-param_offload=${PARAM_OFFLOAD:-False}
-optimizer_offload=${OPT_OFFLOAD:-False}
+param_offload=${PARAM_OFFLOAD:-True}
+optimizer_offload=${OPT_OFFLOAD:-True}
 
 
 python3 -m verl.trainer.main_ppo \
@@ -166,6 +191,7 @@ python3 -m verl.trainer.main_ppo \
    +codecontest.max_new_tokens_per_turn=${max_new_tokens_per_turn} \
    +codecontest.max_failures_shown=${max_failures_shown} \
    +codecontest.max_gt_test=${max_gt_test} \
+   +codecontest.max_feedback_chars=${max_feedback_chars} \
    +codecontest.on_overflow=${on_overflow} \
    +codecontest.env_step_timeout=${env_step_timeout} \
    trainer.balance_batch=True \

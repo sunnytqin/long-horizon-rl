@@ -78,6 +78,21 @@ class CodeRefineAgentLoop(AgentLoopBase):
         self.default_exec_timeout = float(cc.get("exec_timeout", 6.0))
         self.default_max_failures_shown = int(cc.get("max_failures_shown", 3))
         self.default_max_gt_test = int(cc.get("max_gt_test", 20))
+        # Combined char budget for the injected feedback's failing-case fields. The
+        # feedback turn is checked against rollout.prompt_length (== data.max_prompt_length)
+        # and blindly tail-truncated above it (dropping the user-turn role framing), so we
+        # DERIVE the budget from that token cap instead of hardcoding. The cap is in tokens;
+        # convert with a conservative chars/token ratio for the digit/whitespace-heavy
+        # CodeContests I/O, times a fraction that leaves headroom for the chat-template
+        # wrapper + "Test i:"/"Input:" labels + indentation. Override (or pin an absolute
+        # value) with +codecontest.max_feedback_chars=<n>; <=0 falls back to the derived value.
+        _CHARS_PER_TOKEN = 3.0  # conservative for numeric/whitespace-heavy stdin/stdout
+        _FEEDBACK_BUDGET_FRACTION = 0.5  # share of prompt_length reserved for feedback content
+        _derived_max_feedback_chars = int(self.prompt_length * _CHARS_PER_TOKEN * _FEEDBACK_BUDGET_FRACTION)
+        _cfg_max_feedback_chars = int(cc.get("max_feedback_chars", 0) or 0)
+        self.default_max_feedback_chars = (
+            _cfg_max_feedback_chars if _cfg_max_feedback_chars > 0 else _derived_max_feedback_chars
+        )
         # Hard wall on a single env.step (code grading). Backstop against a wedged
         # sandbox: on timeout we end the trajectory unsolved rather than hang the
         # whole rollout. Generous by default since grading can queue behind the
@@ -99,6 +114,7 @@ class CodeRefineAgentLoop(AgentLoopBase):
             test_time_limit=float(gt.get("test_time_limit", self.default_exec_timeout)),
             max_failures_shown=int(extra_info.get("max_failures_shown", self.default_max_failures_shown)),
             max_gt_test=int(extra_info.get("max_gt_test", self.default_max_gt_test)),
+            max_feedback_chars=int(extra_info.get("max_feedback_chars", self.default_max_feedback_chars)),
             seed=int(kwargs.get("index", 0)),
         )
 

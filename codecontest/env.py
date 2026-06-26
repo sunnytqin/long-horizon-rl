@@ -94,6 +94,10 @@ class GTOracleEnv(BaseEnv):
         test_time_limit: per-case execution timeout (seconds).
         max_failures_shown: max failing cases revealed per turn (randomly sampled).
         max_gt_test: cap on number of GT cases executed per turn.
+        max_feedback_chars: combined char budget for the failing-case fields in the
+            injected feedback. Over budget, a single water-filling cap clips only the
+            large fields (input/output/expected) so the feedback turn stays well under
+            rollout.prompt_length instead of being blindly tail-truncated. 0 disables.
         seed: RNG seed for sampling which failures to show (deterministic per env).
     """
 
@@ -102,6 +106,7 @@ class GTOracleEnv(BaseEnv):
     test_time_limit: float = 6.0
     max_failures_shown: int = 3
     max_gt_test: int = 20
+    max_feedback_chars: int = 8000
     seed: int = 0
     _rng: random.Random = field(init=False, repr=False)
 
@@ -144,7 +149,9 @@ class GTOracleEnv(BaseEnv):
         shown = failures
         if len(failures) > self.max_failures_shown:
             shown = self._rng.sample(failures, self.max_failures_shown)
-        feedback = templates.build_feedback_message(shown)
+        feedback = templates.build_feedback_message(
+            shown, max_total_chars=(self.max_feedback_chars or None)
+        )
 
         if _DEBUG_FEEDBACK and len(feedback) > _DEBUG_FEEDBACK_MIN_CHARS:
             # Only the LONG outliers get here. Per-field char sizes + a head preview of
