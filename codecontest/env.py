@@ -31,19 +31,30 @@ tests). The agent loop turns the final ``solved`` into the binary 0/1 trajectory
 reward.
 """
 
+import logging
 import os
 import random
-import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
 from codecontest import exec_client, local_exec, templates
 
+logger = logging.getLogger(__file__)
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
 # Set CODECONTEST_DEBUG_FEEDBACK=1 to dump per-field feedback sizes (chars) so we can
 # see which field (raw test input, the model's program OUTPUT, or expected) is blowing
 # up the injected feedback turn. `actual` (model stdout) is unbounded and the usual
-# culprit -- a runaway/over-printing solution.
+# culprit -- a runaway/over-printing solution. Logged at WARNING so it surfaces under
+# the default VERL_LOGGING_LEVEL (plain print() gets swallowed by the Ray workers).
+# Only feedback whose total exceeds CODECONTEST_DEBUG_FEEDBACK_MIN_CHARS (default 8000,
+# ~2k tokens) is dumped -- healthy short episodes stay quiet. The dump includes a head
+# preview of each field so we can confirm the bloat is solver-written garbage output
+# (a real program dumping data) vs. the exec service injecting something weird
+# (tracebacks, repeated error strings, etc.).
 _DEBUG_FEEDBACK = bool(int(os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") or "0"))
+_DEBUG_FEEDBACK_MIN_CHARS = int(os.getenv("CODECONTEST_DEBUG_FEEDBACK_MIN_CHARS", "8000") or "8000")
+_DEBUG_FEEDBACK_PREVIEW = int(os.getenv("CODECONTEST_DEBUG_FEEDBACK_PREVIEW", "200") or "200")
 
 
 @dataclass
@@ -135,19 +146,22 @@ class GTOracleEnv(BaseEnv):
             shown = self._rng.sample(failures, self.max_failures_shown)
         feedback = templates.build_feedback_message(shown)
 
-        if _DEBUG_FEEDBACK:
-            # Per-field char sizes for each shown case: inp (dataset), actual (MODEL
-            # stdout, unbounded), expected (dataset). Flushed so it isn't swallowed by
-            # the rollout worker's buffering.
+        if _DEBUG_FEEDBACK and len(feedback) > _DEBUG_FEEDBACK_MIN_CHARS:
+            # Only the LONG outliers get here. Per-field char sizes + a head preview of
+            # each: inp (dataset), actual (MODEL stdout, unbounded), expected (dataset).
+            n = _DEBUG_FEEDBACK_PREVIEW
+            logger.warning(
+                "[FEEDBACK_DBG] LONG feedback: total_chars=%d failures_total=%d shown=%d",
+                len(feedback), len(failures), len(shown),
+            )
             for i, (inp, actual, expected) in enumerate(shown, 1):
-                print(
-                    f"[FEEDBACK_DBG] failures_total={len(failures)} shown={len(shown)} "
-                    f"case{i}: inp={len(str(inp))} actual={len(str(actual))} "
-                    f"expected={len(str(expected))} chars",
-                    file=sys.stderr,
-                    flush=True,
+                logger.warning(
+                    "[FEEDBACK_DBG]   case%d sizes: inp=%d actual=%d expected=%d chars",
+                    i, len(str(inp)), len(str(actual)), len(str(expected)),
                 )
-            print(f"[FEEDBACK_DBG] total_feedback_chars={len(feedback)}", file=sys.stderr, flush=True)
+                logger.warning("[FEEDBACK_DBG]   case%d inp[:%d]=%r", i, n, str(inp)[:n])
+                logger.warning("[FEEDBACK_DBG]   case%d actual[:%d]=%r", i, n, str(actual)[:n])
+                logger.warning("[FEEDBACK_DBG]   case%d expected[:%d]=%r", i, n, str(expected)[:n])
         return StepResult(
             solved=False,
             should_terminate=False,

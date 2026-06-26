@@ -193,15 +193,17 @@ class CodeRefineAgentLoop(AgentLoopBase):
                 [{"role": "user", "content": step.feedback}],
                 remove_system_prompt=True,
             )
-            if os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") not in ("0", ""):
-                # Tokenized size of the injected feedback turn AFTER apply_chat_template
-                # (which silently left-truncates to rollout.prompt_length). If this is
-                # near prompt_length the user turn is being corrupted -- see env.py dump
+            if (
+                os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") not in ("0", "")
+                and len(feedback_ids) >= self.prompt_length
+            ):
+                # Only fires when the feedback turn actually hit the cap, i.e. it was
+                # left-truncated and the user turn is now corrupted -- see env.py dump
                 # for which raw field (usually `actual`, the model's stdout) caused it.
-                print(
-                    f"[FEEDBACK_DBG] turn={turn} feedback_chars={len(step.feedback)} "
-                    f"feedback_tokens={len(feedback_ids)} prompt_length_cap={self.prompt_length}",
-                    flush=True,
+                # logger is WARN by default so this surfaces; print() gets swallowed.
+                logger.warning(
+                    "[FEEDBACK_DBG] turn=%d TRUNCATED feedback_chars=%d feedback_tokens=%d prompt_length_cap=%d",
+                    turn, len(step.feedback), len(feedback_ids), self.prompt_length,
                 )
             # Need room for the feedback AND at least one response token next turn.
             if len(response_mask) + len(feedback_ids) >= self.response_length:
