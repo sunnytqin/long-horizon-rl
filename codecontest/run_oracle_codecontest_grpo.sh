@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+lag#!/usr/bin/env bash
 # GRPO | Qwen2.5-14B-Instruct | FSDP | multi-turn oracle code-refinement on CodeContests
 #
 # Trains a solver with the custom `code_refine_agent` loop: the model writes code,
@@ -119,6 +119,28 @@ save_freq=${SAVE_FREQ:-20}
 test_freq=${TEST_FREQ:-5}
 
 
+# ===== Rollout<->training mismatch correction (TIS) =====
+# SGLang SAMPLES the rollout, but FSDP RECOMPUTES the log-probs used in the loss. Even with
+# identical weights the two distributions differ (bf16 vs the inference kernels, different
+# backends), so the policy ratio pi_theta/pi_old is being formed against the WRONG behavior
+# policy. That bias accumulates per token, so it is worse for long multi-turn sequences -- a
+# leading cause of the KL-explosion / reward-collapse cycle (see docs/algo/rollout_corr.md,
+# "When Speed Kills Stability").
+#
+# We enable truncated importance sampling in DECOUPLED mode (bypass_mode=False, the default):
+# GRPO is otherwise unchanged (it still recomputes old_log_prob), we just reweight each token
+# by the clamped pi_old/pi_rollout ratio. Cost is ~free -- no extra forward pass, the rollout
+# already returns its logprobs. calculate_log_probs=True is REQUIRED: it makes SGLang emit the
+# per-token rollout logprobs the agent loop forwards as `rollout_log_probs`.
+#
+# This ALSO logs the off-policy gap as `rollout_corr/*` (kl, log_ppl_abs_diff, chi2_token,
+# rollout_is_max, rollout_is_eff_sample_size, ...) -- pure diagnostics, no gradient/speed cost.
+# For a CONTROL run that confirms the mechanism WITHOUT touching training, set ROLLOUT_IS=null:
+# the metrics still log, the correction is off.
+rollout_is=${ROLLOUT_IS:-token}                     # token | sequence | null (null => metrics-only)
+rollout_is_threshold=${ROLLOUT_IS_THRESHOLD:-2.0}   # TIS upper bound on the IS weight
+
+
 # ===== GPU-OOM playbook (14B / 8xH100) -- debugging lessons, so future-you skips the dead ends =====
 # OOM hit at the ROLLOUT->TRAIN transition. The dominant tensor is the LM-head LOGITS
 # [per-GPU tokens x ~152k vocab x 2B ~= 6.9 GB at 24576 tokens], NOT attention activations.
@@ -151,6 +173,8 @@ optimizer_offload=${OPT_OFFLOAD:-True}
 python3 -m verl.trainer.main_ppo \
    algorithm.adv_estimator=grpo \
    algorithm.use_kl_in_reward=False \
+   algorithm.rollout_correction.rollout_is=${rollout_is} \
+   algorithm.rollout_correction.rollout_is_threshold=${rollout_is_threshold} \
    data.train_files="['${DATA_DIR}/train.parquet']" \
    data.val_files="['${DATA_DIR}/test.parquet']" \
    data.train_batch_size=${train_batch_size} \
@@ -180,6 +204,7 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.rollout.tensor_model_parallel_size=${rollout_tp} \
    actor_rollout_ref.rollout.gpu_memory_utilization=${rollout_gpu_mem_util} \
    actor_rollout_ref.rollout.multi_stage_wake_up=${multi_stage_wake_up} \
+   actor_rollout_ref.rollout.calculate_log_probs=True \
    actor_rollout_ref.rollout.n=${rollout_n} \
    actor_rollout_ref.rollout.multi_turn.enable=True \
    actor_rollout_ref.rollout.multi_turn.max_assistant_turns=${max_assistant_turns} \
