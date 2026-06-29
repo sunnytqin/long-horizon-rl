@@ -21,13 +21,13 @@
 set -xeuo pipefail
 
 
-# Exp configs
+# Exp configs.
+# In cloud runs launch.py/entrypoint set PROJECT_NAME + the STABLE EXPERIMENT_NAME
+# (`{model}_{exp_name}`), which we consume verbatim -- it is the single source of truth
+# for checkpoint/tensorboard/eval paths. The timestamped fallback below only fires for
+# ad-hoc LOCAL runs, so it can't collide with a tracked cloud experiment's checkpoints.
 PROJECT_NAME=${PROJECT_NAME:-codecontest_mt}
-if [ -n "${EXP_NAME:-}" ]; then
- EXPERIMENT_NAME=${EXPERIMENT_NAME:-qwen2_5_14b_grpo_oracle_${EXP_NAME}_$(date +%m%d_%H%M)}
-else
- EXPERIMENT_NAME=${EXPERIMENT_NAME:-qwen2_5_14b_grpo_oracle_$(date +%m%d_%H%M)}
-fi
+EXPERIMENT_NAME=${EXPERIMENT_NAME:-local_${EXP_NAME:-debug}_$(date +%m%d_%H%M)}
 
 AGENTLOOP_CONFIG_PATH=${AGENTLOOP_CONFIG_PATH:-codecontest/config/agent_loop_config.yaml}
 

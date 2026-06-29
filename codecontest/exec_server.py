@@ -94,6 +94,14 @@ class _Handler(BaseHTTPRequestHandler):
 class _Server(ThreadingHTTPServer):
     daemon_threads = True  # don't let in-flight grades block shutdown
     allow_reuse_address = True
+    # Kernel accept-queue depth (socketserver passes this to listen()). The default of
+    # 5 is overflowed by the rollout connect burst -- hundreds of trajectories POST a
+    # grade at their turn boundaries near-simultaneously, and connects past depth-5 get
+    # RST'd / dropped, surfacing in the trainer as ConnectionResetError(104) /
+    # TimeoutError(110) and a turn graded UNSOLVED with no feedback (a corrupted reward
+    # + an empty failing-case feedback turn). 1024 parks the burst instead of bouncing
+    # it; the kernel still clamps to net.core.somaxconn (4096 default), so this is safe.
+    request_queue_size = 1024
 
 
 def main() -> None:
