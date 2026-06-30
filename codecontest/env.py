@@ -68,6 +68,10 @@ class StepResult:
         feedback: the next user-turn text to inject when not terminating (else "").
         num_failures_shown: how many failing cases were included in ``feedback``.
         had_code: whether a ```python block was found in the submission.
+        failures: the shown (sampled) failing cases as (input, actual, expected) tuples.
+            Surfaced so a user-model feedback loop can build its own diagnosis prompt
+            without re-grading; the oracle path ignores it. Empty when solved/no code.
+        code: the extracted ```python submission (empty when no code was found).
     """
 
     solved: bool
@@ -75,6 +79,8 @@ class StepResult:
     feedback: str = ""
     num_failures_shown: int = 0
     had_code: bool = False
+    failures: list = field(default_factory=list)
+    code: str = ""
 
 
 class BaseEnv:
@@ -175,6 +181,8 @@ class GTOracleEnv(BaseEnv):
             feedback=feedback,
             num_failures_shown=len(shown),
             had_code=True,
+            failures=list(shown),
+            code=code,
         )
 
 

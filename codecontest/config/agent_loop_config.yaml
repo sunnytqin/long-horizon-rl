@@ -4,3 +4,7 @@
 # (or per-sample via extra_info.agent_name=code_refine_agent in the parquet).
 - name: code_refine_agent
   _target_: codecontest.code_refine_agent.CodeRefineAgentLoop
+# Variant where the between-turns user turn is written by the policy itself (the
+# "user model"), selected via default_agent_loop=model_feedback_agent.
+- name: model_feedback_agent
+  _target_: codecontest.model_feedback_agent.ModelFeedbackAgentLoop

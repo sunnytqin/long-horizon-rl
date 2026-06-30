@@ -1,4 +1,4 @@
-lag#!/usr/bin/env bash
+#!/usr/bin/env bash
 # GRPO | Qwen2.5-14B-Instruct | FSDP | multi-turn oracle code-refinement on CodeContests
 #
 # Trains a solver with the custom `code_refine_agent` loop: the model writes code,

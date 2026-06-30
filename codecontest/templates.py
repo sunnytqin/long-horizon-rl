@@ -61,6 +61,72 @@ SOLVER_CORRECT_MESSAGE = (
 )
 
 
+# ── Model-written feedback ("user model") ──────────────────────────────────────
+# In the model-feedback loop a SECOND inference call (the same policy, run as a
+# "user") reads (problem, failed code, failing cases) and writes the 3-bullet
+# diagnosis that the solver used to be asked to write itself. The diagnosis is then
+# injected as the next user turn. Ported from the tunix FEEDBACK_MODEL_PROMPT_TEMPLATE
+# but as structured chat content (system + user) since VERL applies a chat template.
+FEEDBACK_MODEL_SYSTEM_PROMPT = (
+    "You are a helpful assistant that analyzes code and test failures to provide "
+    "diagnostic feedback. Be concise. Do NOT write any code."
+)
+
+FEEDBACK_MODEL_USER_TEMPLATE = (
+    "A coding problem was given and a solution was attempted, but it failed some "
+    "test cases.\n\nProblem:\n{problem}\n\nAttempted solution:\n```python\n{code}\n"
+    "```\n\n{failures_section}Analyze the attempted solution and explain:\n"
+    "1. What approach or algorithm the previous solution used\n"
+    "2. Why it might produce incorrect results\n"
+    "3. What conceptual changes are needed to fix it\n\n"
+    "Be concise. Do NOT write any code."
+)
+
+# Wraps the user-model diagnosis as the user turn shown to the SOLVER. The concrete
+# failing cases are deliberately NOT included here (the diagnosis stands in for them);
+# the solver still sees its own previous code as earlier assistant turns.
+SOLVER_MODEL_FEEDBACK_TEMPLATE = (
+    "Your previous solution was incorrect. Here is an analysis of what went "
+    "wrong:\n\n{analysis}\n\nUsing this analysis, write an improved, complete "
+    "solution. Put the new complete code in a single ```python ... ``` code block.\n"
+)
+
+
+def build_feedback_model_messages(failures, problem: str, code: str, max_total_chars: Optional[int] = None):
+    """Build the [system, user] chat messages for the user-model feedback call.
+
+    Args:
+        failures: list of (input, actual_output, expected_output) tuples (the shown,
+            already-sampled failing cases).
+        problem: the problem statement (or the initial solver user-turn content).
+        code: the solver's extracted failing submission.
+        max_total_chars: combined char budget for the failing-case fields, applied via
+            ``format_oracle_feedback`` so the feedback prompt stays under prompt_length.
+
+    Returns:
+        ``[{"role": "system", ...}, {"role": "user", ...}]``.
+    """
+    if failures:
+        failures_section = "Failed test cases:\n" + format_oracle_feedback(failures, max_total_chars=max_total_chars) + "\n"
+    else:
+        failures_section = (
+            "The solution failed some test cases but the specific cases are not "
+            "shown. Analyze the code for potential bugs.\n\n"
+        )
+    user = FEEDBACK_MODEL_USER_TEMPLATE.format(
+        problem=problem, code=code, failures_section=failures_section
+    )
+    return [
+        {"role": "system", "content": FEEDBACK_MODEL_SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+
+
+def build_model_feedback_user_message(analysis: str) -> str:
+    """Wrap the user-model diagnosis as the next user turn shown to the solver."""
+    return SOLVER_MODEL_FEEDBACK_TEMPLATE.format(analysis=analysis)
+
+
 def _indent(s: str) -> str:
     return "\n".join("    " + line for line in s.rstrip("\n").splitlines())
 
