@@ -50,11 +50,11 @@ train_batch_size=${TRAIN_BATCH_SIZE:-128}
 # gradient steps per batch but off-policy drift on the reused rollout data.
 ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-128}
 max_prompt_length=${MAX_PROMPT_LENGTH:-4096} # cap the initial prompt (coding queston itself) len
-max_response_length=${MAX_RESPONSE_LENGTH:-16384} # episode TAIL: all assistant turns + injected feedback (full seq = prompt + this)
+max_response_length=${MAX_RESPONSE_LENGTH:-8192} # episode TAIL: all assistant turns + injected feedback (full seq = prompt + this)
 # Actor TRAINING dynamic-bsz token budget per GPU (NOT the SGLang context; that auto-resolves to prompt+response).
 # Also drives log_prob_max_token_len_per_gpu. HARD FLOOR = max_prompt_length + max_response_length (a single
 # trajectory can't be split across micro-batches), so it must be >= 4096+16384=20480. Bigger = more memory/GPU.
-ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-24576}
+ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-16384}
 
 
 # Rollout hparams
@@ -89,7 +89,7 @@ max_gt_test=${MAX_GT_TEST:-20}   # GT cases graded per turn -- DON'T shrink: few
 # tracks that knob automatically. Set a positive value to pin an absolute char budget.
 max_feedback_chars=${MAX_FEEDBACK_CHARS:-0}
 on_overflow=${ON_OVERFLOW:-end_zero_reward}
-rollout_temp=${ROLLOUT_TEMP:-0.8}
+rollout_temp=${ROLLOUT_TEMP:-0.6}
 rollout_top_p=${ROLLOUT_TOP_P:-0.95}
 env_step_timeout=${ENV_STEP_TIMEOUT:-180}        # hard wall on one code-grading step (sec)
 
@@ -108,12 +108,12 @@ export CODECONTEST_EXEC_URL=${CODECONTEST_EXEC_URL:-}
 # trainer they only affect the in-process FALLBACK used when CODECONTEST_EXEC_URL is
 # unset (e.g. the 1-GPU smoke run). Worst-case sandbox RAM ~= CONCURRENCY * MEM_GB.
 export CODECONTEST_EXEC_MEM_GB=${CODECONTEST_EXEC_MEM_GB:-2}        # per-process addr-space headroom cap (GB)
-export CODECONTEST_EXEC_CONCURRENCY=${CODECONTEST_EXEC_CONCURRENCY:-64}  # max concurrent child executions
+export CODECONTEST_EXEC_CONCURRENCY=${CODECONTEST_EXEC_CONCURRENCY:-32}  # max concurrent child executions
 
 
 # Training hparams
 actor_lr=${ACTOR_LR:-1e-6}
-kl_loss_coef=${KL_LOSS_COEF:-0.001}
+kl_loss_coef=${KL_LOSS_COEF:-0.02}
 total_epochs=${TOTAL_EPOCHS:-15}
 save_freq=${SAVE_FREQ:-20}
 test_freq=${TEST_FREQ:-5}
@@ -139,6 +139,16 @@ test_freq=${TEST_FREQ:-5}
 # the metrics still log, the correction is off.
 rollout_is=${ROLLOUT_IS:-token}                     # token | sequence | null (null => metrics-only)
 rollout_is_threshold=${ROLLOUT_IS_THRESHOLD:-2.0}   # TIS upper bound on the IS weight
+
+
+# ===== PPO clip range (clip-higher / DAPO) =====
+# Asymmetric clipping: keep the lower bound tight but widen the UPPER bound so low-prob
+# tokens are allowed to gain probability (preserves exploration) while the upside ratio
+# that drives KL spikes is still clamped. Defaults = symmetric 0.2/0.2 (verl default,
+# i.e. clip-higher OFF) so it's a no-op unless you opt in. Run B = TIS + clip-higher:
+# set CLIP_RATIO_HIGH=0.28 (the DAPO value; don't exceed ~0.3 or the clip stops protecting).
+clip_ratio_low=${CLIP_RATIO_LOW:-0.2}
+clip_ratio_high=${CLIP_RATIO_HIGH:-0.28}
 
 
 # ===== GPU-OOM playbook (14B / 8xH100) -- debugging lessons, so future-you skips the dead ends =====
@@ -195,6 +205,8 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.actor.fsdp_config.optimizer_offload=${optimizer_offload} \
    actor_rollout_ref.actor.use_kl_loss=True \
    actor_rollout_ref.actor.kl_loss_coef=${kl_loss_coef} \
+   actor_rollout_ref.actor.clip_ratio_low=${clip_ratio_low} \
+   actor_rollout_ref.actor.clip_ratio_high=${clip_ratio_high} \
    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
    actor_rollout_ref.actor.entropy_coeff=0 \
    actor_rollout_ref.rollout.temperature=${rollout_temp} \

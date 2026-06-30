@@ -604,6 +604,9 @@ class RayPPOTrainer:
         sample_scores = []
         sample_turns = []
         sample_uids = []
+        sample_solved = []
+        sample_solved_at_turn = []
+        sample_overflow = []
 
         for test_data in self.val_dataloader:
             test_batch = DataProto.from_single_dict(test_data)
@@ -688,6 +691,14 @@ class RayPPOTrainer:
             if "__num_turns__" in test_batch.non_tensor_batch:
                 sample_turns.append(test_batch.non_tensor_batch["__num_turns__"])
 
+            # collect multi-turn refinement diagnostics (codecontest oracle loop emits these)
+            if "solved" in test_batch.non_tensor_batch:
+                sample_solved.append(test_batch.non_tensor_batch["solved"])
+            if "solved_at_turn" in test_batch.non_tensor_batch:
+                sample_solved_at_turn.append(test_batch.non_tensor_batch["solved_at_turn"])
+            if "overflow" in test_batch.non_tensor_batch:
+                sample_overflow.append(test_batch.non_tensor_batch["overflow"])
+
             data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
@@ -713,12 +724,32 @@ class RayPPOTrainer:
                 "data_sources": data_source_lst,
                 "sample_uids": sample_uids,
                 "sample_turns": sample_turns,
+                "sample_solved": sample_solved,
+                "sample_solved_at_turn": sample_solved_at_turn,
+                "sample_overflow": sample_overflow,
                 "reward_extra_infos_dict": reward_extra_infos_dict,
             }
         data_sources = np.concatenate(data_source_lst, axis=0)
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        return self._val_metrics_update(
+            data_sources,
+            sample_uids,
+            reward_extra_infos_dict,
+            sample_turns,
+            sample_solved,
+            sample_solved_at_turn,
+            sample_overflow,
+        )
 
-    def _val_metrics_update(self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns):
+    def _val_metrics_update(
+        self,
+        data_sources,
+        sample_uids,
+        reward_extra_infos_dict,
+        sample_turns,
+        sample_solved=None,
+        sample_solved_at_turn=None,
+        sample_overflow=None,
+    ):
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_uids, reward_extra_infos_dict)
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
@@ -743,6 +774,24 @@ class RayPPOTrainer:
             metric_dict["val-aux/num_turns/max"] = sample_turns.max()
             metric_dict["val-aux/num_turns/mean"] = sample_turns.mean()
 
+        # Multi-turn refinement diagnostics (codecontest oracle loop). solved_at_turn is
+        # 0-indexed (turn 0 == first attempt) and -1 when the run never solved. final pass
+        # rate is computed only to derive feedback_lift; it is already logged as the
+        # val-core reward, so we don't re-emit it.
+        if sample_solved and sample_solved_at_turn:
+            solved = np.concatenate(sample_solved).astype(bool)
+            solved_at_turn = np.concatenate(sample_solved_at_turn).astype(float)
+            turn0_pass_rate = float((solved_at_turn == 0).mean())
+            final_pass_rate = float(solved.mean())
+            metric_dict["val-aux/solve/turn0_pass_rate"] = turn0_pass_rate
+            metric_dict["val-aux/solve/feedback_lift"] = final_pass_rate - turn0_pass_rate
+            if solved.any():
+                metric_dict["val-aux/solve/avg_solved_turn"] = float(solved_at_turn[solved].mean())
+
+        if sample_overflow:
+            overflow = np.concatenate(sample_overflow).astype(float)
+            metric_dict["val-aux/solve/overflow_rate"] = float(overflow.mean())
+
         return metric_dict
 
     def _merge_validation_results(self, result_a, result_b):
@@ -759,6 +808,9 @@ class RayPPOTrainer:
         data_sources = np.concatenate(result_a["data_sources"] + result_b["data_sources"], axis=0)
         sample_uids = result_a["sample_uids"] + result_b["sample_uids"]
         sample_turns = result_a["sample_turns"] + result_b["sample_turns"]
+        sample_solved = result_a.get("sample_solved", []) + result_b.get("sample_solved", [])
+        sample_solved_at_turn = result_a.get("sample_solved_at_turn", []) + result_b.get("sample_solved_at_turn", [])
+        sample_overflow = result_a.get("sample_overflow", []) + result_b.get("sample_overflow", [])
 
         reward_extra_infos_dict = {}
         all_keys = set(result_a["reward_extra_infos_dict"].keys()) | set(result_b["reward_extra_infos_dict"].keys())
@@ -767,7 +819,15 @@ class RayPPOTrainer:
             list_b = result_b["reward_extra_infos_dict"].get(key, [])
             reward_extra_infos_dict[key] = list_a + list_b
 
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        return self._val_metrics_update(
+            data_sources,
+            sample_uids,
+            reward_extra_infos_dict,
+            sample_turns,
+            sample_solved,
+            sample_solved_at_turn,
+            sample_overflow,
+        )
 
     def init_workers(self):
         """Initialize distributed training workers using Ray backend.
@@ -1713,6 +1773,19 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                # CodeContests multi-turn diagnostics (emitted by the code_refine agent loop).
+                # solver_resp_len_mean is the per-conversation mean assistant-turn length,
+                # captured at generation time so it is independent of response_mask (which the
+                # gradient-masking study mutates). Averaging across conversations yields a
+                # per-turn, across-turns-then-across-conversations mega-average.
+                if "solver_resp_len_mean" in batch.non_tensor_batch:
+                    vals = np.asarray(batch.non_tensor_batch["solver_resp_len_mean"], dtype=np.float32)
+                    metrics["solver/resp_len_per_turn/mean"] = float(np.mean(vals))
+                    metrics["solver/resp_len_per_turn/max"] = float(np.max(vals))
+                    metrics["solver/resp_len_per_turn/min"] = float(np.min(vals))
+                if "overflow" in batch.non_tensor_batch:
+                    ovf = np.asarray(batch.non_tensor_batch["overflow"], dtype=np.float32)
+                    metrics["solver/overflow_rate"] = float(np.mean(ovf))
                 # GDPO per-component reward metrics
                 gdpo_reward_keys = self.config.algorithm.get("gdpo_reward_keys", None)
                 if gdpo_reward_keys and self.config.algorithm.adv_estimator in ("gdpo", AdvantageEstimator.GDPO):

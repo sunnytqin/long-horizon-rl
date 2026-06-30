@@ -131,6 +131,10 @@ class CodeRefineAgentLoop(AgentLoopBase):
         solved = False
         overflow = False
         solved_at_turn = -1
+        # True solver-generated length per assistant turn, captured at generation time.
+        # Deliberately NOT derived from response_mask: the gradient-masking study mutates
+        # that mask, so it no longer reflects what the solver actually wrote.
+        solver_turn_lengths: list[int] = []
 
         # Off-policy staleness bookkeeping the trainer requires (see
         # trainer_base._compute_metrics). Each server.generate() tags the output with the
@@ -172,6 +176,7 @@ class CodeRefineAgentLoop(AgentLoopBase):
             resp_ids = output.token_ids
             prompt_ids += resp_ids
             response_mask += [1] * len(resp_ids)
+            solver_turn_lengths.append(len(resp_ids))
             if track_logprobs and output.log_probs:
                 response_logprobs += output.log_probs
             else:
@@ -257,6 +262,11 @@ class CodeRefineAgentLoop(AgentLoopBase):
                 "solved_at_turn": solved_at_turn,
                 "num_assistant_turns": assistant_turns,
                 "overflow": overflow,
+                # Per-conversation mean assistant-turn length (tokens). Trainer averages this
+                # across conversations -> per-turn, across-turns-then-across-convos mega-avg.
+                "solver_resp_len_mean": (
+                    sum(solver_turn_lengths) / len(solver_turn_lengths) if solver_turn_lengths else 0.0
+                ),
             },
         )
         return output
