@@ -57,6 +57,9 @@ _DEBUG_FEEDBACK = bool(int(os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") or "0"))
 _DEBUG_FEEDBACK_PREVIEW = int(os.getenv("CODECONTEST_DEBUG_FEEDBACK_PREVIEW", "200") or "200")
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+# Conservative chars/token ratio for the digit/whitespace-heavy CodeContests I/O; used to
+# size char budgets from the token-based prompt_length cap.
+_CHARS_PER_TOKEN = 3.0
 
 
 @register("model_feedback_agent")
@@ -87,18 +90,47 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
         self.default_exec_timeout = float(cc.get("exec_timeout", 6.0))
         self.default_max_failures_shown = int(cc.get("max_failures_shown", 3))
         self.default_max_gt_test = int(cc.get("max_gt_test", 20))
-        # Combined char budget for the failing-case fields. Derived from prompt_length
-        # (see code_refine_agent for the rationale) and reused to bound the failing-case
-        # block inside the FEEDBACK MODEL prompt as well.
-        _CHARS_PER_TOKEN = 3.0
+        # Combined char budget for the failing-case fields inside the FEEDBACK MODEL
+        # PROMPT (problem + code + failures). Because those failures now live only in the
+        # user model's single-turn prompt -- NOT the solver's cumulative conversation --
+        # this can be set generously; the only ceiling is that problem+code+failures must
+        # still fit prompt_length (else the agent loop left-truncates the problem). Derived
+        # from prompt_length by default; pin an absolute value via +codecontest.max_feedback_chars.
         _FEEDBACK_BUDGET_FRACTION = 0.5
         _derived_max_feedback_chars = int(self.prompt_length * _CHARS_PER_TOKEN * _FEEDBACK_BUDGET_FRACTION)
         _cfg_max_feedback_chars = int(cc.get("max_feedback_chars", 0) or 0)
         self.default_max_feedback_chars = (
             _cfg_max_feedback_chars if _cfg_max_feedback_chars > 0 else _derived_max_feedback_chars
         )
+        # Max NEW tokens the user model may generate for its diagnosis. Exact, hard bound on
+        # the diagnosis length: the injected solver turn is the fixed skeleton (~50 tokens)
+        # plus <= this, so it stays far under prompt_length and the agent loop never left-
+        # truncates it. The cap only bites when the model WOULD write more (diagnoses are
+        # prompted "Be concise", so it usually won't). IMPORTANT: the diagnosis lands in the
+        # solver's response tail, so it shares response_length with ALL solver code turns +
+        # all feedback turns. With response_length=8192 and up to 3 feedback turns, 2048 each
+        # already reserves 6144 for feedback -- push higher only if you also raise
+        # MAX_RESPONSE_LENGTH, else the solver starves and overflows (unsolved => reward 0).
+        # Watch feedback_resp_len_mean (logged) for actual usage. Pin via
+        # +codecontest.max_feedback_tokens.
+        self.max_feedback_tokens = int(cc.get("max_feedback_tokens", 2048))
         # Hard wall on a single env.step (code grading). See code_refine_agent.
         self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
+
+    async def _tokenize_uncapped(self, messages: list[dict]) -> list[int]:
+        """Tokenize a chat-message list WITHOUT the solver's prompt_length cap.
+
+        ``AgentLoopBase.apply_chat_template`` left-truncates any prompt over
+        ``rollout.prompt_length`` -- correct for the solver's trajectory, wrong for the
+        user model's throwaway feedback prompt (it would drop the problem statement). This
+        variant returns the full ids; the caller bounds generation so prompt+gen fit the
+        engine context. Text-only path (``self.processor`` is None for this model).
+        """
+        ids = await self.loop.run_in_executor(
+            None,
+            lambda: self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True),
+        )
+        return list(ids)
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -225,10 +257,18 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
                     code=step.code,
                     max_total_chars=(self.default_max_feedback_chars or None),
                 )
-                fb_prompt_ids = await self.apply_chat_template(fb_messages)
-                # Reuse the solver's per-turn length cap, clamped to the remaining budget.
+                # The user-model prompt is a throwaway inference on a SEPARATE sequence, so
+                # it does NOT go through the solver's prompt_length cap (which would left-
+                # truncate the problem). Tokenize it uncapped; its only real ceiling is the
+                # SGLang engine context window (prompt_length + response_length).
+                fb_prompt_ids = await self._tokenize_uncapped(fb_messages)
+                # Cap the diagnosis at max_feedback_tokens (exact token bound => the injected
+                # solver turn is skeleton + <= this, well under prompt_length). Never exceed
+                # the remaining solver response budget (the diagnosis lands in the response
+                # tail) nor overflow the engine context on this generate call.
+                engine_ctx = self.prompt_length + self.response_length
                 fb_remaining = self.response_length - len(response_mask)
-                fb_cap = fb_remaining if self.max_new_tokens_per_turn is None else min(self.max_new_tokens_per_turn, fb_remaining)
+                fb_cap = min(self.max_feedback_tokens, fb_remaining, max(1, engine_ctx - len(fb_prompt_ids)))
                 fb_sampling_params = {**sampling_params, "max_new_tokens": max(1, fb_cap)}
                 with simple_timer("generate_feedback", metrics):
                     fb_output: TokenOutput = await self.server_manager.generate(
@@ -249,10 +289,13 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
                         "approach and edge cases, then write a corrected solution."
                     )
                 if _DEBUG_FEEDBACK:
+                    # Distinct tag from env.py's [FEEDBACK_DBG] failing-case dump so the
+                    # user-model diagnosis is unambiguous in the logs. This is the text the
+                    # solver actually sees next turn.
                     n = _DEBUG_FEEDBACK_PREVIEW
                     logger.warning(
-                        "[FEEDBACK_DBG] turn=%d analysis_chars=%d analysis[:%d]=%r",
-                        turn, len(analysis), n, analysis[:n],
+                        "[MODELFB_DBG] turn=%d n_failures=%d analysis_chars=%d analysis[:%d]=%r",
+                        turn, len(step.failures), len(analysis), n, analysis[:n],
                     )
                 user_content = templates.build_model_feedback_user_message(analysis)
             else:

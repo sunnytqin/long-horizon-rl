@@ -6,7 +6,8 @@
 # user turn is written by the SAME policy run as a "user model" (a second, masked inference call
 # that diagnoses the failing tests), instead of injecting the raw failing cases for the solver to
 # reflect on itself. Training is still solver-only (the diagnosis turn is mask=0). The feedback call
-# reuses the solver's sampling params and the existing max_new_tokens_per_turn cap -- no new knobs.
+# reuses the solver's sampling params; two dedicated knobs govern it: MAX_FEEDBACK_CHARS (failing
+# cases fed INTO the user model) and MAX_FEEDBACK_TOKENS (diagnosis length OUT of it).
 #
 # Prereq: python codecontest/preprocess_codecontests.py --local_dir ~/data/codecontests
 # Run from the repo root (so `codecontest` is importable, like `recipe`).
@@ -14,6 +15,7 @@
 # Env overrides: MODEL_PATH, INFER_BACKEND(sglang|vllm), NGPUS_PER_NODE, ROLLOUT_N,
 #   MAX_ASSISTANT_TURNS, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH, MAX_RESPONSE_LENGTH,
 #   MAX_NEW_TOKENS_PER_TURN, MAX_FAILURES_SHOWN, MAX_GT_TEST,
+#   MAX_FEEDBACK_CHARS, MAX_FEEDBACK_TOKENS,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ENV_STEP_TIMEOUT,
 #   ROLLOUT_GPU_MEM_UTIL, MULTI_STAGE_WAKE_UP, ULYSSES_SP, PARAM_OFFLOAD, OPT_OFFLOAD.
 
@@ -55,10 +57,23 @@ multi_stage_wake_up=${MULTI_STAGE_WAKE_UP:-False}  # SGLang: stage engine wake-u
 
 # Multi-turn / oracle knob.
 max_assistant_turns=${MAX_ASSISTANT_TURNS:-4}    # total solver attempts (1=single turn RL)
-max_new_tokens_per_turn=${MAX_NEW_TOKENS_PER_TURN:-4096} # controls solver generation len (and the user-model feedback cap)
+max_new_tokens_per_turn=${MAX_NEW_TOKENS_PER_TURN:-4096} # solver generation len (the user-model feedback cap is MAX_FEEDBACK_TOKENS)
 max_failures_shown=${MAX_FAILURES_SHOWN:-3}
 max_gt_test=${MAX_GT_TEST:-20}   # GT cases graded per turn -- DON'T shrink: fewer => false-positive rewards
-max_feedback_chars=${MAX_FEEDBACK_CHARS:-0}
+# Char budget for the failing cases in the USER-MODEL PROMPT (problem+code+failures). These
+# live only in the user model's throwaway single-turn prompt (NOT the solver's cumulative
+# conversation) and that prompt is tokenized UNCAPPED -- its only ceiling is the engine
+# context (MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH), so we set it generously at 8000
+# (~2700 tokens, leaves ample room alongside the problem+code). Set 0 to auto-derive
+# (~0.5 * prompt_length chars) instead.
+max_feedback_chars=${MAX_FEEDBACK_CHARS:-8000}
+# Max NEW tokens the user model may generate for its diagnosis -- the exact hard bound on
+# the injected solver turn (skeleton + <= this). The diagnosis lands in the solver's
+# response tail, so it SHARES MAX_RESPONSE_LENGTH with all solver code turns + all feedback
+# turns: at 2048 with up to 3 feedback turns that reserves ~6144 of 8192 for feedback. Push
+# higher only if you also raise MAX_RESPONSE_LENGTH, else the solver starves -> overflow
+# (unsolved => reward 0). Check feedback_resp_len_mean for actual usage before bumping.
+max_feedback_tokens=${MAX_FEEDBACK_TOKENS:-2048}
 on_overflow=${ON_OVERFLOW:-end_zero_reward}
 rollout_temp=${ROLLOUT_TEMP:-0.6}
 rollout_top_p=${ROLLOUT_TOP_P:-0.95}
@@ -146,6 +161,7 @@ python3 -m verl.trainer.main_ppo \
    +codecontest.max_failures_shown=${max_failures_shown} \
    +codecontest.max_gt_test=${max_gt_test} \
    +codecontest.max_feedback_chars=${max_feedback_chars} \
+   +codecontest.max_feedback_tokens=${max_feedback_tokens} \
    +codecontest.on_overflow=${on_overflow} \
    +codecontest.env_step_timeout=${env_step_timeout} \
    trainer.balance_batch=True \

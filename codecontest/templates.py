@@ -123,7 +123,13 @@ def build_feedback_model_messages(failures, problem: str, code: str, max_total_c
 
 
 def build_model_feedback_user_message(analysis: str) -> str:
-    """Wrap the user-model diagnosis as the next user turn shown to the solver."""
+    """Wrap the user-model diagnosis as the next user turn shown to the solver.
+
+    The diagnosis length is bounded upstream by the user model's ``max_new_tokens`` cap
+    (see ``max_feedback_tokens`` in the agent loop), so the skeleton -- the intro and the
+    trailing "write an improved solution ... ```python" instruction -- plus the diagnosis
+    stay well under ``prompt_length`` and the agent loop never left-truncates this turn.
+    """
     return SOLVER_MODEL_FEEDBACK_TEMPLATE.format(analysis=analysis)
 
 
