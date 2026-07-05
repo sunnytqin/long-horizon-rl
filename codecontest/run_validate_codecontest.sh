@@ -47,9 +47,13 @@ OUT=${OUT:-runs/validate_$(date +%m%d_%H%M).json}
 
 # Eval scope
 MAX_PROBLEMS=${MAX_PROBLEMS:-64}
-N_SAMPLES=${N_SAMPLES:-4}
+N_SAMPLES=${N_SAMPLES:-1}
 
 # Inference hparams (tune these to probe the model)
+# TEMPERATURES (space-separated, e.g. "0.0 0.8") sweeps several temps in ONE run: the
+# engine is loaded once and each temp writes its own JSON tagged '<out_stem>_t<temp>.json'.
+# Leave it empty to fall back to the single TEMPERATURE below.
+TEMPERATURES=${TEMPERATURES:-}
 TEMPERATURE=${TEMPERATURE:-0.8}
 TOP_P=${TOP_P:-0.95}
 TOP_K=${TOP_K:--1}
@@ -68,13 +72,21 @@ MAX_FEEDBACK_CHARS=${MAX_FEEDBACK_CHARS:-0}
 ROLLOUT_TP=${ROLLOUT_TP:-2}
 GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.85}   # SGLang mem_fraction_static
 
+# Sweep TEMPERATURES if set, else the single TEMPERATURE. Left unquoted below so a
+# space-separated list word-splits into multiple --temperatures values.
+if [[ -n "${TEMPERATURES}" ]]; then
+    TEMP_ARG="--temperatures ${TEMPERATURES}"
+else
+    TEMP_ARG="--temperature ${TEMPERATURE}"
+fi
+
 python3 codecontest/validate_codecontest.py \
     --model "${MODEL_PATH}" \
     --val_file "${VAL_FILE}" \
     --out "${OUT}" \
     --max_problems ${MAX_PROBLEMS} \
     --n_samples ${N_SAMPLES} \
-    --temperature ${TEMPERATURE} \
+    ${TEMP_ARG} \
     --top_p ${TOP_P} \
     --top_k ${TOP_K} \
     --seed ${SEED} \
