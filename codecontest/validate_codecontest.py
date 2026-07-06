@@ -57,8 +57,10 @@ Example (inside the verl SGLang container, run from the repo root):
         --max_assistant_turns 4 --max_new_tokens_per_turn 4096
 
 Sweep several temperatures in ONE submission (engine loaded once). Each temperature
-writes its own JSON with the value tagged into the name, so --out runs/eval_step120.json
-produces runs/eval_step120_t0.json and runs/eval_step120_t0.8.json:
+writes its own JSON with the config tagged into the name (turns / n_samples / temp), so
+--out runs/eval_step120.json with --max_assistant_turns 4 --n_samples 8 --temperatures 0.0 0.8
+produces runs/eval_step120_turns4_n1_t0.json and runs/eval_step120_turns4_n8_t0.8.json
+(t=0 is forced to a single sample, hence _n1):
     PYTHONPATH=$(pwd) python codecontest/validate_codecontest.py \
         --model /path/to/merged_hf_checkpoint --out runs/eval_step120.json \
         --n_samples 8 --temperatures 0.0 0.8
@@ -160,13 +162,17 @@ def build_trajectories(val_df, n_samples, eval_args):
     return trajs
 
 
-def temp_tagged_path(base_out, temperature):
-    """Insert a '_t<temp>' tag before the extension so each temperature gets its own file.
+def eval_tagged_path(base_out, turns, n_samples, temperature):
+    """Insert a '_turns<N>_n<K>_t<temp>' tag before the extension so each eval config
+    gets its own self-documenting file (and can never clobber a different config).
 
-    e.g. ("runs/eval_step120.json", 0.8) -> "runs/eval_step120_t0.8.json"
+    ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced to 1),
+    so the tag faithfully records what was run.
+
+    e.g. ("runs/eval_step120.json", 4, 8, 0.8) -> "runs/eval_step120_turns4_n8_t0.8.json"
     """
     root, ext = os.path.splitext(base_out)
-    return f"{root}_t{temperature:g}{ext or '.json'}"
+    return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}{ext or '.json'}"
 
 
 def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len):
@@ -425,7 +431,7 @@ def main():
         n_samples = 1 if temperature == 0.0 else args.n_samples
         if temperature == 0.0 and args.n_samples > 1:
             print(f"[validate] temperature=0 is greedy; forcing n_samples 1 (was {args.n_samples}).")
-        out_path = temp_tagged_path(args.out, temperature)
+        out_path = eval_tagged_path(args.out, args.max_assistant_turns, n_samples, temperature)
         summary = run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len)
         results_index.append({"temperature": temperature, "out": out_path,
                               "pass@1": summary["pass@1"], f"pass@{n_samples}": summary[f"pass@{n_samples}"]})
