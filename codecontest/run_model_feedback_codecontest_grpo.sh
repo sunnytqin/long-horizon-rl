@@ -85,7 +85,7 @@ on_overflow=${ON_OVERFLOW:-end_zero_reward}
 # Masked solver tokens stay in-sequence (later turns still attend to them); they are
 # only excluded from the gradient. Feedback/user turns are always mask=0 regardless.
 train_turns=${TRAIN_TURNS:-all}
-rollout_temp=${ROLLOUT_TEMP:-0.6}
+rollout_temp=${ROLLOUT_TEMP:-0.8}
 rollout_top_p=${ROLLOUT_TOP_P:-0.95}
 env_step_timeout=${ENV_STEP_TIMEOUT:-180}        # hard wall on one code-grading step (sec)
 
@@ -105,7 +105,7 @@ test_freq=${TEST_FREQ:-5}
 
 
 # ===== Rollout<->training mismatch correction (TIS) ===== (see run_oracle_codecontest_grpo.sh)
-rollout_is=${ROLLOUT_IS:-token}                     # token | sequence | null (null => metrics-only)
+rollout_is=${ROLLOUT_IS:-sequence}                     # token | sequence | null (null => metrics-only)
 rollout_is_threshold=${ROLLOUT_IS_THRESHOLD:-2.0}   # TIS upper bound on the IS weight
 
 
