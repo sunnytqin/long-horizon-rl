@@ -46,7 +46,7 @@ VAL_FILE=${VAL_FILE:-$HOME/data/codecontests/test.parquet}
 OUT=${OUT:-runs/validate_$(date +%m%d_%H%M).json}
 
 # Eval scope
-MAX_PROBLEMS=${MAX_PROBLEMS:-64}
+MAX_PROBLEMS=${MAX_PROBLEMS:-200}
 N_SAMPLES=${N_SAMPLES:-1}
 
 # Inference hparams (tune these to probe the model)

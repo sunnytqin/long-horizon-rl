@@ -71,6 +71,7 @@ import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from math import comb
 
 import pandas as pd
 import sglang as sgl
@@ -160,6 +161,56 @@ def build_trajectories(val_df, n_samples, eval_args):
                 )
             )
     return trajs
+
+
+def pass_at_k(n, c, k):
+    """Unbiased pass@k estimator (Kulal et al. / HumanEval): probability that at least one
+    of k samples drawn WITHOUT replacement from n total (c of which succeed) is a success.
+
+        pass@k = 1 - C(n-c, k) / C(n, k)
+
+    Returns None when k > n (not enough samples to define it). Uses exact integer binomials
+    (n is tiny here, so no overflow concern).
+    """
+    if k > n:
+        return None
+    if c <= 0:
+        return 0.0
+    if n - c < k:
+        return 1.0
+    return 1.0 - comb(n - c, k) / comb(n, k)
+
+
+def per_turn_pass_at_k(by_problem, max_turns):
+    """Per-turn pass@k surface for the multi-turn eval.
+
+    For each turn cutoff ``t`` (0..max_turns-1) a sample counts as a success iff it solved
+    *by* turn t, i.e. ``traj.solved and traj.solved_at_turn <= t``. NOTE we deliberately use
+    ``solved_at_turn`` rather than ``turn_records[t].solved`` because an early-solving
+    trajectory stops and has no records past its solve turn -- the cutoff form is monotonic
+    and correct. Each problem contributes its own (n, c_t); we average the unbiased pass@k
+    over problems, reporting the full k=1..n curve (per-problem n; smaller groups skip larger k).
+
+    per_turn[0]["pass@k"]["1"] is the sample-averaged single-turn solve rate -- the number
+    that must match a matched-n single-turn run's pass@1.
+    """
+    per_turn = []
+    for t in range(max_turns):
+        # Collect (n, c_t) per problem for this cutoff.
+        groups = []
+        max_n = 0
+        for grp in by_problem.values():
+            n = len(grp)
+            c = sum(1 for tr in grp if tr.solved and tr.solved_at_turn <= t)
+            groups.append((n, c))
+            max_n = max(max_n, n)
+        pass_k = {}
+        for k in range(1, max_n + 1):
+            vals = [pass_at_k(n, c, k) for (n, c) in groups if k <= n]
+            if vals:
+                pass_k[str(k)] = sum(vals) / len(vals)
+        per_turn.append({"turn": t, "pass@k": pass_k})
+    return per_turn
 
 
 def eval_tagged_path(base_out, turns, n_samples, temperature):
@@ -298,12 +349,18 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
     n_traj = len(trajs)
     traj_solved = sum(1 for t in trajs if t.solved)
     pass_at_1 = sum(1 for grp in by_problem.values() if grp[0].solved) / max(1, n_problems)
-    pass_at_k = sum(1 for grp in by_problem.values() if any(t.solved for t in grp)) / max(1, n_problems)
+    # "final" pass@n: fraction of problems solved by ANY of the n samples at end-of-conversation
+    # (naive any-solved rate, kept for backward-compat; the unbiased curve lives in per_turn).
+    pass_at_n = sum(1 for grp in by_problem.values() if any(t.solved for t in grp)) / max(1, n_problems)
     solved_trajs = [t for t in trajs if t.solved]
     avg_turns_to_solve = (
         sum(t.solved_at_turn + 1 for t in solved_trajs) / len(solved_trajs) if solved_trajs else None
     )
     overflow_rate = sum(1 for t in trajs if t.overflow) / max(1, n_traj)
+    # Per-turn pass@k surface: for each turn cutoff, the sample-averaged unbiased pass@k
+    # over problems. per_turn[0]["pass@k"]["1"] is the single-turn (turn-0) solve rate that
+    # should match a matched-n single-turn run's pass@1.
+    per_turn = per_turn_pass_at_k(by_problem, args.max_assistant_turns)
 
     summary = {
         "model": args.model,
@@ -313,7 +370,8 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         "n_trajectories": n_traj,
         "trajectory_solve_rate": traj_solved / max(1, n_traj),
         "pass@1": pass_at_1,
-        f"pass@{n_samples}": pass_at_k,
+        f"pass@{n_samples}": pass_at_n,
+        "per_turn": per_turn,
         "avg_turns_to_solve": avg_turns_to_solve,
         "overflow_rate": overflow_rate,
         "elapsed_sec": round(elapsed, 1),
