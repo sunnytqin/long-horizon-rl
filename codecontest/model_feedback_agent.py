@@ -43,6 +43,7 @@ from uuid import uuid4
 
 from codecontest import templates
 from codecontest.env import GTOracleEnv
+from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
@@ -116,6 +117,13 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
         self.max_feedback_tokens = int(cc.get("max_feedback_tokens", 2048))
         # Hard wall on a single env.step (code grading). See code_refine_agent.
         self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
+        # SET 2 gradient-masking study: which solver turns get trained. "all" (default)
+        # reproduces prior behavior; "final_only" trains only the last solver turn (clean
+        # credit -- see codecontest/masking.py for why "refinement_only" was dropped). The
+        # masked user-model feedback turns are unaffected -- they are already mask=0.
+        self.train_turns = cc.get("train_turns", "all")
+        if self.train_turns not in TRAIN_TURNS_MODES:
+            raise ValueError(f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}")
 
     async def _tokenize_uncapped(self, messages: list[dict]) -> list[int]:
         """Tokenize a chat-message list WITHOUT the solver's prompt_length cap.
@@ -172,6 +180,9 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
         solved_at_turn = -1
         # True solver-generated length per assistant turn, captured at generation time.
         solver_turn_lengths: list[int] = []
+        # (start, end) span of each solver turn within response_mask, for the SET 2
+        # gradient-masking policy applied after the loop (see codecontest/masking.py).
+        solver_turn_spans: list[tuple[int, int]] = []
         # User-model diagnosis length per feedback turn, and degeneracy counters.
         feedback_turn_lengths: list[int] = []
         feedback_empty = 0
@@ -215,7 +226,9 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
 
             resp_ids = output.token_ids
             prompt_ids += resp_ids
+            seg_start = len(response_mask)
             response_mask += [1] * len(resp_ids)
+            solver_turn_spans.append((seg_start, len(response_mask)))
             solver_turn_lengths.append(len(resp_ids))
             if track_logprobs and output.log_probs:
                 response_logprobs += output.log_probs
@@ -319,6 +332,10 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
 
         # Binary outcome reward. Overflow while unsolved -> 0.
         reward = 1.0 if solved else 0.0
+
+        # SET 2: restrict the training loss to the selected solver turns (no-op for
+        # the "all" default). Applied before truncation so the spans stay valid.
+        apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
 
         response_ids = prompt_ids[-len(response_mask):]
         prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]

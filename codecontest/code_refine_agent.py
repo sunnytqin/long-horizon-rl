@@ -42,6 +42,7 @@ from typing import Any
 from uuid import uuid4
 
 from codecontest.env import GTOracleEnv
+from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
@@ -98,6 +99,12 @@ class CodeRefineAgentLoop(AgentLoopBase):
         # whole rollout. Generous by default since grading can queue behind the
         # global exec-concurrency cap under heavy fan-out.
         self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
+        # SET 2 gradient-masking study: which solver turns get trained. "all" (default)
+        # reproduces prior behavior; "final_only" trains only the last solver turn (clean
+        # credit -- see codecontest/masking.py for why "refinement_only" was dropped).
+        self.train_turns = cc.get("train_turns", "all")
+        if self.train_turns not in TRAIN_TURNS_MODES:
+            raise ValueError(f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}")
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -135,6 +142,9 @@ class CodeRefineAgentLoop(AgentLoopBase):
         # Deliberately NOT derived from response_mask: the gradient-masking study mutates
         # that mask, so it no longer reflects what the solver actually wrote.
         solver_turn_lengths: list[int] = []
+        # (start, end) span of each solver turn within response_mask, for the SET 2
+        # gradient-masking policy applied after the loop (see codecontest/masking.py).
+        solver_turn_spans: list[tuple[int, int]] = []
 
         # Off-policy staleness bookkeeping the trainer requires (see
         # trainer_base._compute_metrics). Each server.generate() tags the output with the
@@ -175,7 +185,9 @@ class CodeRefineAgentLoop(AgentLoopBase):
 
             resp_ids = output.token_ids
             prompt_ids += resp_ids
+            seg_start = len(response_mask)
             response_mask += [1] * len(resp_ids)
+            solver_turn_spans.append((seg_start, len(response_mask)))
             solver_turn_lengths.append(len(resp_ids))
             if track_logprobs and output.log_probs:
                 response_logprobs += output.log_probs
@@ -241,6 +253,10 @@ class CodeRefineAgentLoop(AgentLoopBase):
         # because the agent loop cannot drop a sample without breaking GRPO grouping;
         # true discarding, if ever needed, must happen upstream in the trainer.
         reward = 1.0 if solved else 0.0
+
+        # SET 2: restrict the training loss to the selected solver turns (no-op for
+        # the "all" default). Applied before truncation so the spans stay valid.
+        apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
 
         response_ids = prompt_ids[-len(response_mask):]
         prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]

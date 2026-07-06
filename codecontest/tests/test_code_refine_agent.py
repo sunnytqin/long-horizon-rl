@@ -54,7 +54,7 @@ class _FakeServer:
         return TokenOutput(token_ids=ids, log_probs=None)
 
 
-def _build_loop(turns, response_length=4096, max_assistant_turns=3):
+def _build_loop(turns, response_length=4096, max_assistant_turns=3, train_turns="all"):
     """turns: list of (token_ids, decoded_text). Returns (loop, decode_map)."""
     loop = object.__new__(CodeRefineAgentLoop)
     loop.response_length = response_length
@@ -65,6 +65,7 @@ def _build_loop(turns, response_length=4096, max_assistant_turns=3):
     loop.default_exec_timeout = 4.0
     loop.default_max_failures_shown = 3
     loop.default_max_gt_test = 20
+    loop.train_turns = train_turns
 
     id_to_text = {tuple(ids): text for ids, text in turns}
     loop.tokenizer = _FakeTokenizer(id_to_text)
@@ -94,6 +95,23 @@ def test_fail_fail_pass_gets_reward_1_and_correct_mask():
     # assistant token (1) + feedback(0,0,0) + assistant(1) + feedback(0,0,0) + assistant(1)
     assert out.response_mask == [1, 0, 0, 0, 1, 0, 0, 0, 1]
     assert out.num_turns == 3 + 2 + 1
+
+
+def test_train_turns_final_only_trains_last_turn():
+    # final_only zeroes every solver turn except the last; the rolled-out sequence
+    # (response_ids) is unchanged, only the loss mask differs. Feedback turns stay 0.
+    out = _run(_build_loop([([1], FAIL_CODE), ([2], FAIL_CODE), ([3], PASS_CODE)], train_turns="final_only"))
+    assert out.reward_score == 1.0
+    assert out.response_mask == [0, 0, 0, 0, 0, 0, 0, 0, 1]
+    assert len(out.response_ids) == len(out.response_mask)
+
+
+def test_train_turns_final_only_turn0_solve_trains_turn0():
+    # Solving at turn 0: the last (== only) solver turn IS turn 0, so it stays trained.
+    out = _run(_build_loop([([7], PASS_CODE)], train_turns="final_only"))
+    assert out.reward_score == 1.0
+    assert out.extra_fields["solved_at_turn"] == 0
+    assert out.response_mask == [1]
 
 
 def test_all_fail_gets_reward_0_no_trailing_feedback():

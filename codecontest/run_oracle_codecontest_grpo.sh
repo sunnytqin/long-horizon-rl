@@ -13,7 +13,7 @@
 #
 # Env overrides: MODEL_PATH, INFER_BACKEND(sglang|vllm), NGPUS_PER_NODE, ROLLOUT_N,
 #   MAX_ASSISTANT_TURNS, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH, MAX_RESPONSE_LENGTH,
-#   MAX_NEW_TOKENS_PER_TURN, MAX_FAILURES_SHOWN, MAX_GT_TEST,
+#   MAX_NEW_TOKENS_PER_TURN, MAX_FAILURES_SHOWN, MAX_GT_TEST, TRAIN_TURNS,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ENV_STEP_TIMEOUT,
 #   ROLLOUT_GPU_MEM_UTIL, MULTI_STAGE_WAKE_UP, ULYSSES_SP, PARAM_OFFLOAD, OPT_OFFLOAD.
 
@@ -89,6 +89,16 @@ max_gt_test=${MAX_GT_TEST:-20}   # GT cases graded per turn -- DON'T shrink: few
 # tracks that knob automatically. Set a positive value to pin an absolute char budget.
 max_feedback_chars=${MAX_FEEDBACK_CHARS:-0}
 on_overflow=${ON_OVERFLOW:-end_zero_reward}
+# SET 2 gradient-masking study: which solver turns contribute to the loss.
+#   all         train every solver turn (baseline; prior behavior).
+#   final_only  train ONLY the last solver turn. Since the loop breaks on solve, that
+#               turn's own pass/fail == the trajectory reward => clean per-token credit,
+#               no reinforcement of failed intermediate attempts, still conditioned on
+#               feedback. (An earlier "refinement_only" arm was dropped as confounded;
+#               see codecontest/masking.py.)
+# Masked solver tokens stay in-sequence (later turns still attend to them); they are
+# only excluded from the gradient. Feedback/user turns are always mask=0 regardless.
+train_turns=${TRAIN_TURNS:-all}
 rollout_temp=${ROLLOUT_TEMP:-0.6}
 rollout_top_p=${ROLLOUT_TOP_P:-0.95}
 env_step_timeout=${ENV_STEP_TIMEOUT:-180}        # hard wall on one code-grading step (sec)
@@ -229,6 +239,7 @@ python3 -m verl.trainer.main_ppo \
    +codecontest.max_failures_shown=${max_failures_shown} \
    +codecontest.max_gt_test=${max_gt_test} \
    +codecontest.max_feedback_chars=${max_feedback_chars} \
+   +codecontest.train_turns=${train_turns} \
    +codecontest.on_overflow=${on_overflow} \
    +codecontest.env_step_timeout=${env_step_timeout} \
    trainer.balance_batch=True \
