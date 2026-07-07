@@ -59,6 +59,9 @@ _DEBUG_FEEDBACK_PREVIEW = int(os.getenv("CODECONTEST_DEBUG_FEEDBACK_PREVIEW", "2
 # Conservative chars/token ratio for the digit/whitespace-heavy CodeContests I/O; used to
 # size char budgets from the token-based prompt_length cap.
 _CHARS_PER_TOKEN = 3.0
+# Safety margin (tokens) kept free between a feedback request's prompt+completion and the
+# engine context window, since the engine rejects prompt_len+max_new_tokens == context_length.
+_CTX_MARGIN = 8
 
 
 @register("model_feedback_agent")
@@ -279,24 +282,34 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
                 # tail) nor overflow the engine context on this generate call.
                 engine_ctx = self.prompt_length + self.response_length
                 fb_remaining = self.response_length - len(response_mask)
-                fb_cap = min(self.max_feedback_tokens, fb_remaining, max(1, engine_ctx - len(fb_prompt_ids)))
-                fb_sampling_params = {**sampling_params, "max_new_tokens": max(1, fb_cap)}
-                with simple_timer("generate_feedback", metrics):
-                    fb_output: TokenOutput = await self.server_manager.generate(
-                        request_id=uuid4().hex,  # throwaway: not part of the solver sequence
-                        prompt_ids=fb_prompt_ids,
-                        sampling_params=fb_sampling_params,
-                        image_data=None,
-                        video_data=None,
-                        audio_data=None,
-                    )
-                feedback_turn_lengths.append(len(fb_output.token_ids))
-                raw_analysis = self.tokenizer.decode(fb_output.token_ids, skip_special_tokens=True)
-                # Shared normalization (<think>-strip + empty fallback) so the offline
-                # validator injects byte-identical feedback. See templates.normalize_diagnosis.
-                analysis, was_empty = templates.normalize_diagnosis(raw_analysis)
-                if was_empty:
+                # Leave a margin so input+completion stays STRICTLY under engine_ctx: SGLang
+                # rejects a request whose prompt_len + max_new_tokens EQUALS the context length.
+                fb_cap = min(self.max_feedback_tokens, fb_remaining, engine_ctx - len(fb_prompt_ids) - _CTX_MARGIN)
+                if fb_cap < 1:
+                    # The problem+code+failures prompt nearly fills the context (or the solver
+                    # response budget is spent), leaving no room to generate a diagnosis. Skip
+                    # the user-model call and fall back to the generic instruction (no raw cases
+                    # leaked) rather than issuing an over-context request that would crash.
+                    analysis = templates.EMPTY_DIAGNOSIS_FALLBACK
                     feedback_empty += 1
+                else:
+                    fb_sampling_params = {**sampling_params, "max_new_tokens": fb_cap}
+                    with simple_timer("generate_feedback", metrics):
+                        fb_output: TokenOutput = await self.server_manager.generate(
+                            request_id=uuid4().hex,  # throwaway: not part of the solver sequence
+                            prompt_ids=fb_prompt_ids,
+                            sampling_params=fb_sampling_params,
+                            image_data=None,
+                            video_data=None,
+                            audio_data=None,
+                        )
+                    feedback_turn_lengths.append(len(fb_output.token_ids))
+                    raw_analysis = self.tokenizer.decode(fb_output.token_ids, skip_special_tokens=True)
+                    # Shared normalization (<think>-strip + empty fallback) so the offline
+                    # validator injects byte-identical feedback. See templates.normalize_diagnosis.
+                    analysis, was_empty = templates.normalize_diagnosis(raw_analysis)
+                    if was_empty:
+                        feedback_empty += 1
                 if _DEBUG_FEEDBACK:
                     # Distinct tag from env.py's [FEEDBACK_DBG] failing-case dump so the
                     # user-model diagnosis is unambiguous in the logs. This is the text the

@@ -280,6 +280,10 @@ def build_next_user_turns(pending, feedback_mode, llm, tokenizer, args, max_mode
     contents = [None] * len(pending)
     fb_prompts, fb_params, fb_slots = [], [], []
     engine_ctx = max_model_len  # prompt_length + response_length, the SGLang context window
+    # Small margin so input+completion stays STRICTLY under engine_ctx: SGLang rejects a
+    # request whose input_len + max_new_tokens EQUALS the context length (not just exceeds),
+    # and our token count can drift a little from the engine's. Matches the main loop's guard.
+    CTX_MARGIN = 8
     for i, (t, step) in enumerate(pending):
         if not step.failures:
             # No code / nothing to diagnose: use the env's fixed message (agent-loop parity).
@@ -298,8 +302,16 @@ def build_next_user_turns(pending, feedback_mode, llm, tokenizer, args, max_mode
         # Cap the diagnosis (mirrors the agent loop): <= max_feedback_tokens, <= remaining
         # response budget (it lands in the response tail), and never overflow the engine ctx.
         fb_remaining = t.response_budget - t.response_tokens
-        fb_cap = min(args.max_feedback_tokens, fb_remaining, max(1, engine_ctx - fb_input_len))
-        sp = {**sampling_params, "max_new_tokens": max(1, fb_cap)}
+        fb_cap = min(args.max_feedback_tokens, fb_remaining, engine_ctx - fb_input_len - CTX_MARGIN)
+        if fb_cap < 1:
+            # The problem+code+failures prompt nearly fills the context (or the response
+            # budget is spent), leaving no room to generate a diagnosis. Skip the user-model
+            # call and inject the generic fallback -- keeps model-feedback semantics (no raw
+            # cases leaked); the later overflow check still handles the response budget.
+            contents[i] = templates.build_model_feedback_user_message(templates.EMPTY_DIAGNOSIS_FALLBACK)
+            t.feedback_empty += 1
+            continue
+        sp = {**sampling_params, "max_new_tokens": fb_cap}
         fb_prompts.append(fb_prompt_text)
         fb_params.append(sp)
         fb_slots.append(i)
