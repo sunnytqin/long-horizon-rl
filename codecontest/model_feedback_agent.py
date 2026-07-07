@@ -37,7 +37,6 @@ temperature/top_p) and the existing per-turn length cap ``max_new_tokens_per_tur
 import asyncio
 import logging
 import os
-import re
 from typing import Any
 from uuid import uuid4
 
@@ -57,7 +56,6 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 _DEBUG_FEEDBACK = bool(int(os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") or "0"))
 _DEBUG_FEEDBACK_PREVIEW = int(os.getenv("CODECONTEST_DEBUG_FEEDBACK_PREVIEW", "200") or "200")
 
-_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 # Conservative chars/token ratio for the digit/whitespace-heavy CodeContests I/O; used to
 # size char budgets from the token-based prompt_length cap.
 _CHARS_PER_TOKEN = 3.0
@@ -293,14 +291,12 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
                         audio_data=None,
                     )
                 feedback_turn_lengths.append(len(fb_output.token_ids))
-                analysis = self.tokenizer.decode(fb_output.token_ids, skip_special_tokens=True)
-                analysis = _THINK_BLOCK.sub("", analysis).strip()
-                if not analysis:
+                raw_analysis = self.tokenizer.decode(fb_output.token_ids, skip_special_tokens=True)
+                # Shared normalization (<think>-strip + empty fallback) so the offline
+                # validator injects byte-identical feedback. See templates.normalize_diagnosis.
+                analysis, was_empty = templates.normalize_diagnosis(raw_analysis)
+                if was_empty:
                     feedback_empty += 1
-                    analysis = (
-                        "Your previous solution failed some test cases. Reconsider your "
-                        "approach and edge cases, then write a corrected solution."
-                    )
                 if _DEBUG_FEEDBACK:
                     # Distinct tag from env.py's [FEEDBACK_DBG] failing-case dump so the
                     # user-model diagnosis is unambiguous in the logs. This is the text the

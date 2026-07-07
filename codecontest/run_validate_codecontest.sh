@@ -20,11 +20,17 @@
 #     <verl.sif> \
 #     bash -c 'cd /workspace/verl && PYTHONPATH=/workspace/verl codecontest/run_validate_codecontest.sh'
 #
+# FEEDBACK_MODE selects the between-turns feedback, matching the two training launchers:
+#   oracle (default) -> raw failing cases injected       (run_oracle_codecontest_grpo.sh)
+#   model_feedback   -> a "user model" writes a diagnosis (run_model_feedback_codecontest_grpo.sh)
+# Eval a model-feedback-trained checkpoint with FEEDBACK_MODE=model_feedback for an apples-to-
+# apples measure; MAX_FEEDBACK_TOKENS then caps the diagnosis length (mirrors it there).
+#
 # Env overrides: MODEL_PATH, VAL_FILE, OUT, MAX_PROBLEMS, N_SAMPLES, TEMPERATURES,
 #   TOP_P, TOP_K, SEED, MAX_ASSISTANT_TURNS, MAX_NEW_TOKENS_PER_TURN,
 #   MAX_RESPONSE_LENGTH, MAX_PROMPT_LENGTH, MAX_GT_TEST, MAX_FAILURES_SHOWN,
-#   MAX_FEEDBACK_CHARS, ROLLOUT_TP, GPU_MEM_UTIL, CODECONTEST_EXEC_URL,
-#   CODECONTEST_ALLOW_INPROCESS, CODECONTEST_EXEC_CONCURRENCY.
+#   MAX_FEEDBACK_CHARS, FEEDBACK_MODE, MAX_FEEDBACK_TOKENS, ROLLOUT_TP, GPU_MEM_UTIL,
+#   CODECONTEST_EXEC_URL, CODECONTEST_ALLOW_INPROCESS, CODECONTEST_EXEC_CONCURRENCY.
 
 set -xeuo pipefail
 
@@ -59,13 +65,24 @@ TOP_K=${TOP_K:--1}
 SEED=${SEED:-0}
 MAX_ASSISTANT_TURNS=${MAX_ASSISTANT_TURNS:-4}
 MAX_NEW_TOKENS_PER_TURN=${MAX_NEW_TOKENS_PER_TURN:-4096}
-MAX_RESPONSE_LENGTH=${MAX_RESPONSE_LENGTH:-16384}
+# Defaults match the training launchers (run_{oracle,model_feedback}_codecontest_grpo.sh)
+# so a checkpoint is evaluated with the same budgets it trained under.
+MAX_RESPONSE_LENGTH=${MAX_RESPONSE_LENGTH:-8192}
 MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-4096}
 
 # Oracle/feedback knobs -- keep matched to training to reproduce its grading
+FEEDBACK_MODE=${FEEDBACK_MODE:-oracle}   # oracle | model_feedback (see header)
 MAX_GT_TEST=${MAX_GT_TEST:-20}
 MAX_FAILURES_SHOWN=${MAX_FAILURES_SHOWN:-3}
-MAX_FEEDBACK_CHARS=${MAX_FEEDBACK_CHARS:-0}
+# max_feedback_chars default tracks the matching training launcher: oracle auto-derives
+# from prompt_length (0), model pins 8000 (the user-model prompt budget in
+# run_model_feedback_codecontest_grpo.sh). Explicit MAX_FEEDBACK_CHARS overrides either.
+if [ "${FEEDBACK_MODE}" = "model_feedback" ]; then
+  MAX_FEEDBACK_CHARS=${MAX_FEEDBACK_CHARS:-8000}
+else
+  MAX_FEEDBACK_CHARS=${MAX_FEEDBACK_CHARS:-0}
+fi
+MAX_FEEDBACK_TOKENS=${MAX_FEEDBACK_TOKENS:-2048}   # model mode only: diagnosis length cap
 
 # SGLang engine
 ROLLOUT_TP=${ROLLOUT_TP:-2}
@@ -88,6 +105,8 @@ python3 codecontest/validate_codecontest.py \
     --max_gt_test ${MAX_GT_TEST} \
     --max_failures_shown ${MAX_FAILURES_SHOWN} \
     --max_feedback_chars ${MAX_FEEDBACK_CHARS} \
+    --feedback_mode ${FEEDBACK_MODE} \
+    --max_feedback_tokens ${MAX_FEEDBACK_TOKENS} \
     --tensor_parallel_size ${ROLLOUT_TP} \
     --gpu_memory_utilization ${GPU_MEM_UTIL} \
     "$@"

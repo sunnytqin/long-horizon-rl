@@ -13,12 +13,22 @@
 # limitations under the License.
 """Standalone multi-turn validation / inspection harness for the CodeContests solver.
 
-Runs the SAME oracle code-refinement conversation as training
-(``codecontest.code_refine_agent.CodeRefineAgentLoop``) on the validation/test set,
-but as an *offline* SGLang batch job with freely tunable inference hyper-parameters
+Runs the SAME multi-turn code-refinement conversation as training on the validation/test
+set, but as an *offline* SGLang batch job with freely tunable inference hyper-parameters
 (temperature, top_p, number of turns, per-turn token budget, etc.). The point is to
 manually examine what a trained checkpoint actually does, so every trajectory is dumped
 in human-readable "conversation" form to a JSON file.
+
+``--feedback_mode`` selects which training loop to mirror, so a checkpoint is always
+evaluated in the regime it was trained in (apples-to-apples):
+  oracle         -- raw failing cases injected as the next user turn
+                    (``code_refine_agent.CodeRefineAgentLoop``).
+  model_feedback -- a SECOND policy call (the SAME model, as a "user model") reads the
+                    failing cases and writes a diagnosis; only that diagnosis is injected
+                    and the raw cases are hidden (``model_feedback_agent.ModelFeedbackAgentLoop``).
+The between-turns feedback is the ONLY thing that differs; grading and reward are identical.
+Both modes share the number-affecting transforms with training by importing the same
+``codecontest.templates`` helpers (feedback formatting, ``normalize_diagnosis``).
 
 Uses SGLang's offline ``Engine`` (same inference backend as the training rollout), so
 it runs in the very same SGLang container as training -- no vLLM dependency.
@@ -89,7 +99,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # growing conversation, its GT oracle env, and the running token-budget bookkeeping.
 # ----------------------------------------------------------------------------- #
 class Trajectory:
-    def __init__(self, row_index, task_id, sample_idx, messages, env, response_budget):
+    def __init__(self, row_index, task_id, sample_idx, messages, env, response_budget, problem_text=""):
         self.row_index = row_index
         self.task_id = task_id
         self.sample_idx = sample_idx
@@ -97,6 +107,10 @@ class Trajectory:
         self.messages = list(messages)
         self.env = env
         self.response_budget = response_budget  # max cumulative response tokens (assistant+feedback)
+        # Initial problem-statement user turn, reused as the `problem` field of the
+        # user-model feedback prompt in --feedback_mode model_feedback (mirrors the agent loop,
+        # which grabs the last user turn from raw_prompt). Unused in oracle mode.
+        self.problem_text = problem_text
 
         self.response_tokens = 0   # cumulative response-side tokens used so far
         self.assistant_turns = 0
@@ -108,6 +122,10 @@ class Trajectory:
         self.final_code = None
         # Per-turn audit trail (mirrors the StepResult fields the env returns).
         self.turn_records = []
+        # Model-feedback bookkeeping (mirrors ModelFeedbackAgentLoop's extra_fields).
+        # Empty/unused in oracle mode.
+        self.feedback_turn_lengths = []   # user-model diagnosis lengths (tokens), per feedback turn
+        self.feedback_empty = 0           # diagnoses that came back empty (fell back to the fixed string)
 
     def to_dict(self):
         return {
@@ -123,6 +141,8 @@ class Trajectory:
             "reward": 1.0 if self.solved else 0.0,
             "final_code": self.final_code,
             "turn_records": self.turn_records,
+            "feedback_turn_lengths": self.feedback_turn_lengths,
+            "feedback_empty": self.feedback_empty,
             "messages": self.messages,
         }
 
@@ -138,6 +158,9 @@ def build_trajectories(val_df, n_samples, eval_args):
         task_id = extra_info.get("task_id", row_index)
         # parquet stores the chat prompt as a list/array of {role, content} dicts.
         messages = [dict(m) for m in row["prompt"]]
+        # Problem text for the user-model feedback prompt (model mode): the last user
+        # turn, which wraps the problem statement -- exactly what the agent loop uses.
+        problem_text = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         for s in range(n_samples):
             env = GTOracleEnv(
                 test_input=list(gt["test_input"]),
@@ -158,6 +181,7 @@ def build_trajectories(val_df, n_samples, eval_args):
                     messages=messages,
                     env=env,
                     response_budget=eval_args.max_response_length,
+                    problem_text=problem_text,
                 )
             )
     return trajs
@@ -213,17 +237,83 @@ def per_turn_pass_at_k(by_problem, max_turns):
     return per_turn
 
 
-def eval_tagged_path(base_out, turns, n_samples, temperature):
-    """Insert a '_turns<N>_n<K>_t<temp>' tag before the extension so each eval config
-    gets its own self-documenting file (and can never clobber a different config).
+_MODE_TAG = {"oracle": "oracle", "model_feedback": "modelfb"}
+
+
+def eval_tagged_path(base_out, turns, n_samples, temperature, feedback_mode):
+    """Insert a '_turns<N>_n<K>_t<temp>_<mode>' tag before the extension so each eval
+    config gets its own self-documenting file (and can never clobber a different config).
 
     ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced to 1),
-    so the tag faithfully records what was run.
+    so the tag faithfully records what was run. ``feedback_mode`` (oracle|model_feedback) is
+    tagged too (as oracle|modelfb) so an oracle eval and a model-feedback eval of the SAME
+    checkpoint never collide.
 
-    e.g. ("runs/eval_step120.json", 4, 8, 0.8) -> "runs/eval_step120_turns4_n8_t0.8.json"
+    e.g. ("runs/eval_step120.json", 4, 8, 0.8, "model_feedback")
+         -> "runs/eval_step120_turns4_n8_t0.8_modelfb.json"
     """
     root, ext = os.path.splitext(base_out)
-    return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}{ext or '.json'}"
+    mode_tag = _MODE_TAG[feedback_mode]
+    return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}_{mode_tag}{ext or '.json'}"
+
+
+def build_next_user_turns(pending, feedback_mode, llm, tokenizer, args, max_model_len, sampling_params):
+    """Resolve the next user-turn text for each failed-but-continuing trajectory.
+
+    ``pending`` is a list of ``(traj, StepResult)`` for trajectories that were graded this
+    turn, did not solve, and are not on the last turn. Returns a list of user-turn strings
+    aligned to ``pending``.
+
+    - oracle mode: the env already built the failing-case feedback -> inject ``step.feedback``.
+    - model mode : a SECOND policy call (the "user model") writes the diagnosis, exactly like
+      ``ModelFeedbackAgentLoop``. Trajectories that surfaced failing cases are batched into a
+      single ``llm.generate`` (throughput), their diagnoses normalized by the SHARED
+      ``templates.normalize_diagnosis`` (identical <think>-strip + empty fallback as training)
+      and wrapped by ``templates.build_model_feedback_user_message``. Trajectories with no
+      failing cases (no parseable code) fall back to the env's fixed instruction, matching the
+      agent loop's ``else`` branch. Per-trajectory feedback bookkeeping is mutated in place.
+    """
+    if feedback_mode == "oracle":
+        return [step.feedback for (_t, step) in pending]
+
+    # ---- model mode: build the user-model prompts, batch-generate, normalize, wrap. ----
+    contents = [None] * len(pending)
+    fb_prompts, fb_params, fb_slots = [], [], []
+    engine_ctx = max_model_len  # prompt_length + response_length, the SGLang context window
+    for i, (t, step) in enumerate(pending):
+        if not step.failures:
+            # No code / nothing to diagnose: use the env's fixed message (agent-loop parity).
+            contents[i] = step.feedback
+            continue
+        fb_messages = templates.build_feedback_model_messages(
+            step.failures,
+            problem=t.problem_text,
+            code=step.code,
+            max_total_chars=(args.max_feedback_chars or None),
+        )
+        # Throwaway feedback prompt: rendered UNCAPPED (no solver prompt_length truncation,
+        # which would drop the problem), bounded only by the engine context below.
+        fb_prompt_text = tokenizer.apply_chat_template(fb_messages, add_generation_prompt=True, tokenize=False)
+        fb_input_len = len(tokenizer.encode(fb_prompt_text, add_special_tokens=False))
+        # Cap the diagnosis (mirrors the agent loop): <= max_feedback_tokens, <= remaining
+        # response budget (it lands in the response tail), and never overflow the engine ctx.
+        fb_remaining = t.response_budget - t.response_tokens
+        fb_cap = min(args.max_feedback_tokens, fb_remaining, max(1, engine_ctx - fb_input_len))
+        sp = {**sampling_params, "max_new_tokens": max(1, fb_cap)}
+        fb_prompts.append(fb_prompt_text)
+        fb_params.append(sp)
+        fb_slots.append(i)
+
+    if fb_prompts:
+        fb_outputs = llm.generate(prompt=fb_prompts, sampling_params=fb_params)
+        for i, out in zip(fb_slots, fb_outputs):
+            t, _step = pending[i]
+            analysis, was_empty = templates.normalize_diagnosis(out["text"])
+            t.feedback_turn_lengths.append(int(out["meta_info"].get("completion_tokens", 0)))
+            if was_empty:
+                t.feedback_empty += 1
+            contents[i] = templates.build_model_feedback_user_message(analysis)
+    return contents
 
 
 def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len):
@@ -312,6 +402,9 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         results = list(grade_pool.map(grade, gen_batch))
 
         is_last_turn = turn == args.max_assistant_turns - 1
+        # First pass: record each grade and classify. Trajectories that failed but can
+        # still refine are collected for feedback (built in one batch below).
+        pending = []  # (traj, StepResult) needing an injected user turn this turn
         for t, step in results:
             t.turn_records.append({
                 "turn": turn,
@@ -327,14 +420,23 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
             if is_last_turn:
                 t.done = True
                 continue
-            # Inject oracle feedback as the next user turn (and charge its tokens to the
-            # response budget, matching the agent loop's accounting).
-            feedback_ids = tokenizer.encode(step.feedback, add_special_tokens=False)
+            pending.append((t, step))
+
+        # Resolve the next user turn per mode: oracle injects the env's failing-case
+        # feedback; model runs a batched "user model" diagnosis call (see the helper).
+        user_contents = build_next_user_turns(
+            pending, args.feedback_mode, llm, tokenizer, args, max_model_len, sampling_params
+        )
+
+        # Second pass: inject each user turn, charging its tokens to the response budget
+        # (matching the agent loop's accounting; overflow => stop unsolved).
+        for (t, step), user_content in zip(pending, user_contents):
+            feedback_ids = tokenizer.encode(user_content, add_special_tokens=False)
             if t.response_tokens + len(feedback_ids) >= t.response_budget:
                 t.overflow = True
                 t.done = True
                 continue
-            t.messages.append({"role": "user", "content": step.feedback})
+            t.messages.append({"role": "user", "content": user_content})
             t.user_turns += 1
             t.response_tokens += len(feedback_ids)
 
@@ -365,6 +467,7 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
     summary = {
         "model": args.model,
         "val_file": args.val_file,
+        "feedback_mode": args.feedback_mode,
         "n_problems": n_problems,
         "n_samples_per_problem": n_samples,
         "n_trajectories": n_traj,
@@ -389,6 +492,17 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
             "seed": args.seed,
         },
     }
+    # Model-feedback diagnostics (user-model diagnosis length + empty-diagnosis rate),
+    # mirroring ModelFeedbackAgentLoop's feedback_resp_len_mean / feedback_empty. Only
+    # meaningful in model mode; omitted in oracle mode where no diagnosis is generated.
+    if args.feedback_mode == "model_feedback":
+        summary["inference"]["max_feedback_tokens"] = args.max_feedback_tokens
+        fb_means = [
+            sum(t.feedback_turn_lengths) / len(t.feedback_turn_lengths)
+            for t in trajs if t.feedback_turn_lengths
+        ]
+        summary["feedback_resp_len_mean"] = (sum(fb_means) / len(fb_means)) if fb_means else 0.0
+        summary["feedback_empty_total"] = sum(t.feedback_empty for t in trajs)
     print(f"[validate] summary (t={temperature:g}):")
     print(json.dumps(summary, indent=2))
 
@@ -422,16 +536,30 @@ def main():
     ap.add_argument("--seed", type=int, default=0, help="SGLang engine random seed.")
     ap.add_argument("--max_assistant_turns", type=int, default=4, help="Total solver attempts (1 = single-turn).")
     ap.add_argument("--max_new_tokens_per_turn", type=int, default=4096)
-    ap.add_argument("--max_response_length", type=int, default=16384,
-                    help="Cumulative response-token budget (assistant + feedback) before overflow stop.")
+    ap.add_argument("--max_response_length", type=int, default=8192,
+                    help="Cumulative response-token budget (assistant + feedback) before overflow "
+                         "stop. Default 8192 matches MAX_RESPONSE_LENGTH in the training launchers.")
     ap.add_argument("--max_prompt_length", type=int, default=4096,
                     help="Initial-prompt cap; also derives the default feedback char budget.")
 
     # Oracle / feedback knobs (must match training to reproduce its grading).
+    ap.add_argument("--feedback_mode", choices=["oracle", "model_feedback"], default="oracle",
+                    help="Between-turns feedback. 'oracle' (default) injects the raw failing "
+                         "cases (matches run_oracle_codecontest_grpo.sh / CodeRefineAgentLoop). "
+                         "'model_feedback' runs the SAME policy as a 'user model' to write a "
+                         "diagnosis, hiding the raw cases (matches "
+                         "run_model_feedback_codecontest_grpo.sh / ModelFeedbackAgentLoop). Use "
+                         "'model_feedback' to eval a model-feedback-trained checkpoint apples-to-apples.")
     ap.add_argument("--max_failures_shown", type=int, default=3)
     ap.add_argument("--max_gt_test", type=int, default=20)
     ap.add_argument("--max_feedback_chars", type=int, default=0,
-                    help="0 => derive from --max_prompt_length (same rule as the agent loop).")
+                    help="Combined char budget for the failing-case fields. oracle mode: budget "
+                         "for the injected feedback turn. model mode: budget inside the user-model "
+                         "prompt. 0 => derive from --max_prompt_length (same rule as the agent loop).")
+    ap.add_argument("--max_feedback_tokens", type=int, default=2048,
+                    help="model mode only: hard cap on the user-model diagnosis length (tokens). "
+                         "Mirrors +codecontest.max_feedback_tokens. Shares --max_response_length "
+                         "with the solver turns, so keep it modest (see run_model_feedback_*.sh).")
 
     # SGLang engine
     ap.add_argument("--tensor_parallel_size", type=int, default=int(os.getenv("ROLLOUT_TP", "1")))
@@ -489,7 +617,7 @@ def main():
         n_samples = 1 if temperature == 0.0 else args.n_samples
         if temperature == 0.0 and args.n_samples > 1:
             print(f"[validate] temperature=0 is greedy; forcing n_samples 1 (was {args.n_samples}).")
-        out_path = eval_tagged_path(args.out, args.max_assistant_turns, n_samples, temperature)
+        out_path = eval_tagged_path(args.out, args.max_assistant_turns, n_samples, temperature, args.feedback_mode)
         summary = run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len)
         results_index.append({"temperature": temperature, "out": out_path,
                               "pass@1": summary["pass@1"], f"pass@{n_samples}": summary[f"pass@{n_samples}"]})

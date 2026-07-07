@@ -19,6 +19,7 @@ oracle environment runs it against ground-truth tests and, on failure, feeds bac
 a few failing cases formatted by ``format_oracle_feedback``.
 """
 
+import re
 from typing import Optional
 
 SOLVER_SYSTEM_PROMPT = (
@@ -120,6 +121,36 @@ def build_feedback_model_messages(failures, problem: str, code: str, max_total_c
         {"role": "system", "content": FEEDBACK_MODEL_SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
+
+
+# Strips the reasoning block a (future) reasoning model might emit before its diagnosis.
+# For a plain Instruct model this is a defensive no-op, but keeping it here means the
+# training loop and the offline validator normalize diagnoses identically.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+# Injected verbatim when the user model returns an empty diagnosis (after the <think>
+# strip). Lives here -- not inline in the agent loop -- so both pipelines agree on it.
+EMPTY_DIAGNOSIS_FALLBACK = (
+    "Your previous solution failed some test cases. Reconsider your "
+    "approach and edge cases, then write a corrected solution."
+)
+
+
+def normalize_diagnosis(raw_text: str) -> tuple[str, bool]:
+    """Clean a raw user-model diagnosis into the text injected to the solver.
+
+    Strips any ``<think>...</think>`` block and surrounding whitespace; when nothing
+    usable remains, substitutes ``EMPTY_DIAGNOSIS_FALLBACK``. Returns
+    ``(analysis, was_empty)`` so callers can count degenerate (empty) diagnoses.
+
+    Shared by ``ModelFeedbackAgentLoop`` (training rollout) and
+    ``validate_codecontest.py`` (offline eval) so the injected feedback is byte-identical
+    across the two pipelines -- the number-affecting transform lives in exactly one place.
+    """
+    analysis = _THINK_BLOCK.sub("", raw_text or "").strip()
+    if not analysis:
+        return EMPTY_DIAGNOSIS_FALLBACK, True
+    return analysis, False
 
 
 def build_model_feedback_user_message(analysis: str) -> str:
