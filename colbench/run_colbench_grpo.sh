@@ -37,9 +37,11 @@ AGENTLOOP_CONFIG_PATH=${AGENTLOOP_CONFIG_PATH:-colbench/config/agent_loop_config
 
 INFER_BACKEND=${INFER_BACKEND:-sglang}
 NNODES=${NNODES:-1}
-# Training uses the GPUs NOT reserved for the frozen sim server (entrypoint pins the sim to
-# the last GPU; training gets the rest). Default 7 = 8 H100s minus 1 sim GPU.
-NGPUS_PER_NODE=${NGPUS_PER_NODE:-7}
+# Training GPU count. The entrypoint reserves the LAST GPU for the frozen sim server and
+# exports NGPUS_PER_NODE (default 6 on an 8-GPU node: GPUs 0-5 train, GPU 7 = sim, GPU 6 idle).
+# MUST be divisible by rollout_tp below (6 % 2 == 0); 7 would crash (7 % 2 != 0). For a small
+# model you can run NGPUS_PER_NODE=7 with ROLLOUT_TP=1 to avoid the idle GPU.
+NGPUS_PER_NODE=${NGPUS_PER_NODE:-6}
 
 
 # Model and dataset
@@ -48,8 +50,11 @@ MODEL_PATH=${MODEL_PATH:-Qwen/Qwen2.5-14B-Instruct}
 
 
 # Data hparams
-train_batch_size=${TRAIN_BATCH_SIZE:-128}
-ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-128}
+# MUST be divisible by NGPUS_PER_NODE (6) and by the rollout dp size (NGPUS_PER_NODE/rollout_tp
+# = 3), else verl's data dispatch asserts. 120 = 6*20 satisfies both; if you change the GPU
+# count, keep train/mini divisible by it. (128 % 6 != 0 -- the old default would crash.)
+train_batch_size=${TRAIN_BATCH_SIZE:-120}
+ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-120}
 # Budgets from InfoPO colbench_trainer.yaml + our stability finding.
 max_prompt_length=${MAX_PROMPT_LENGTH:-2048}      # initial (public) problem prompt cap
 # Episode TAIL: all solver turns + injected <=400-char user replies. total seq = prompt+this.

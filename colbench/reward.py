@@ -106,7 +106,11 @@ def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
         ``per_case`` (list[bool]), and ``n`` (cases executed). A missing candidate / no test
         cases / an unreachable sidecar all yield ``pass_rate=0.0`` (never raises).
     """
-    calls = [str(c) for c in (test_calls or []) if c]
+    # Defensive: the parquet stores test_cases as list<string> and verl (HF datasets) hands
+    # us a plain list, but a pandas reader returns np.ndarray -- so avoid `test_calls or []`
+    # (bool() on a multi-element array raises "truth value is ambiguous") and use is-None.
+    _calls_iter = test_calls if test_calls is not None else []
+    calls = [str(c) for c in _calls_iter if c is not None and str(c) != ""]
     if not candidate_code or not calls:
         return {"pass_rate": 0.0, "all_pass": False, "per_case": [], "n": 0}
 

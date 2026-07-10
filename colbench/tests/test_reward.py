@@ -20,6 +20,8 @@ in-process fallback -- no GPU, no server. Run:
 
 import os
 
+import pytest
+
 # Grade via the in-process exec fallback (no sidecar). Set BEFORE reward/exec_client run.
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
@@ -74,6 +76,17 @@ def test_call_string_with_escaped_newline_not_corrupted():
     calls = ['g("a\\nb\\nc")']  # the literal 4-char sequences a \n b ...
     res = reward.grade(gt, gt, calls)
     assert res["pass_rate"] == 1.0
+
+
+def test_numpy_array_test_cases():
+    # Defensive: verl (HF datasets) gives a list, but a pandas reader returns an ndarray.
+    # grade() must NOT do `x or []` on it (bool() on a multi-element array raises). Assert it
+    # iterates cleanly either way.
+    np = pytest.importorskip("numpy")
+    calls = np.array(CALLS, dtype=object)
+    res = reward.grade(GT, GT, calls)
+    assert res["pass_rate"] == 1.0
+    assert res["n"] == 4
 
 
 def test_missing_candidate_or_no_cases_scores_zero():

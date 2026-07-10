@@ -100,10 +100,14 @@ class ColBenchAgentLoop(AgentLoopBase):
         gt = extra_info.get("ground_truth")
         if gt is None:
             gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
+        # verl (HF datasets) hands test_cases as a plain list; a pandas reader would give an
+        # np.ndarray. Convert via an explicit None check to stay safe under both (`x or []`
+        # would call bool() on an ndarray and raise).
+        _tc = gt.get("test_cases")
         env = ColBenchUserSimEnv(
             problem_description=gt.get("problem_description", problem_text),
             ground_truth=gt["ground_truth"],
-            test_cases=list(gt.get("test_cases", []) or []),
+            test_cases=list(_tc) if _tc is not None else [],
             max_steps=self.max_assistant_turns,
             reward_time_limit=self.reward_time_limit,
         )
