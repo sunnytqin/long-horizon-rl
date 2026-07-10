@@ -1,0 +1,6 @@
+# Registers the ColBench solver agent loop (solver vs. a frozen user simulator).
+# Wire in via: actor_rollout_ref.rollout.agent.agent_loop_config_path=colbench/config/agent_loop_config.yaml
+# and select it with actor_rollout_ref.rollout.agent.default_agent_loop=colbench_agent
+# (or per-sample via extra_info.agent_name=colbench_agent in the parquet).
+- name: colbench_agent
+  _target_: colbench.colbench_agent.ColBenchAgentLoop

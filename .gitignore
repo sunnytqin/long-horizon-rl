@@ -132,3 +132,5 @@ log
 outputs
 .historycodecontest/__pycache__/
 codecontest/launch.py
+*/entrypoint*.sh
+*/Dockerfile
