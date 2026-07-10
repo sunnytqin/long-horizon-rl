@@ -175,6 +175,23 @@ def test_debug_sim_dump_renders(monkeypatch, caplog):
     assert "[COLBENCH_SIM]" in joined
 
 
+# ── sim thinking-kwarg guard (SIM_ENABLE_THINKING) ────────────────────────────
+
+def test_sim_extra_body_default_sends_nothing(monkeypatch):
+    monkeypatch.delenv("SIM_ENABLE_THINKING", raising=False)
+    assert env_mod._sim_extra_body() is None  # safe default for all models
+
+
+def test_sim_extra_body_explicit_false(monkeypatch):
+    monkeypatch.setenv("SIM_ENABLE_THINKING", "false")
+    assert env_mod._sim_extra_body() == {"enable_thinking": False}
+
+
+def test_sim_extra_body_explicit_true(monkeypatch):
+    monkeypatch.setenv("SIM_ENABLE_THINKING", "true")
+    assert env_mod._sim_extra_body() == {"enable_thinking": True}
+
+
 if __name__ == "__main__":
     import pytest  # noqa: F401
     for name, fn in sorted(globals().items()):

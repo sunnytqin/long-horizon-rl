@@ -17,7 +17,11 @@
 #           --local_dir ~/data/colbench
 # Run from the repo root (so `colbench` and `codecontest` are importable).
 #
-# Env overrides: MODEL_PATH, INFER_BACKEND(sglang|vllm), NGPUS_PER_NODE, ROLLOUT_N,
+# In-training validation runs on a LIGHT subsample (test_small.parquet, ~2k, written by
+# preprocess_colbench.py) -- the full 10k test.parquet is reserved for the offline eval loop
+# (colbench/validate_colbench.py). Override the val set with VAL_FILE=.../test.parquet.
+#
+# Env overrides: MODEL_PATH, VAL_FILE, INFER_BACKEND(sglang|vllm), NGPUS_PER_NODE, ROLLOUT_N,
 #   MAX_ASSISTANT_TURNS, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH, MAX_RESPONSE_LENGTH,
 #   MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
@@ -122,7 +126,7 @@ python3 -m verl.trainer.main_ppo \
    algorithm.rollout_correction.rollout_is=${rollout_is} \
    algorithm.rollout_correction.rollout_is_threshold=${rollout_is_threshold} \
    data.train_files="['${DATA_DIR}/train.parquet']" \
-   data.val_files="['${DATA_DIR}/test.parquet']" \
+   data.val_files="['${VAL_FILE:-${DATA_DIR}/test_small.parquet}']" \
    data.train_batch_size=${train_batch_size} \
    data.max_prompt_length=${max_prompt_length} \
    data.max_response_length=${max_response_length} \

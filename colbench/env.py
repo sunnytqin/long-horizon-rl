@@ -48,6 +48,23 @@ _DEBUG_SIM = bool(int(os.getenv("COLBENCH_DEBUG_SIM", "0") or "0"))
 _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
 
+def _sim_extra_body():
+    """Resolve the OpenAI `extra_body` for the sim call from SIM_ENABLE_THINKING.
+
+    Default (unset) -> None: send NO thinking kwarg, which is safe for every model (Qwen2.5,
+    Qwen3-Instruct-2507, non-Qwen). Only a HYBRID Qwen3 sim that would otherwise emit <think>
+    needs SIM_ENABLE_THINKING=false; SIM_ENABLE_THINKING=true forces it on. This replaces the
+    old brittle `"qwen3" in served_name` guard (the served name is a fixed alias, not the model
+    family, so that check never fired).
+    """
+    v = os.environ.get("SIM_ENABLE_THINKING", "").strip().lower()
+    if v in ("true", "1"):
+        return {"enable_thinking": True}
+    if v in ("false", "0"):
+        return {"enable_thinking": False}
+    return None
+
+
 # A sim backend maps (system_content, user_content) -> raw reply text. Phase-1 default is an
 # OpenAI-compatible HTTP call to the frozen sim server; tests inject a stub (no server, no
 # openai import); Phase-2 co-training swaps in a same-engine backend.
@@ -75,8 +92,9 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
         {"role": "user", "content": user_content},
     ]
     params = {"model": model, "messages": messages, "max_tokens": 4096, "temperature": 0, "timeout": 60.0}
-    if "qwen3" in model.lower():
-        params["extra_body"] = {"enable_thinking": False}
+    extra_body = _sim_extra_body()
+    if extra_body is not None:
+        params["extra_body"] = extra_body
 
     for _ in range(3):
         try:

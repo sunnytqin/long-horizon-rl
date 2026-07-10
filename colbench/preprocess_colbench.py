@@ -99,6 +99,11 @@ def main():
     p.add_argument("--local_dir", default=os.path.expanduser("~/data/colbench"))
     p.add_argument("--max_train", type=int, default=None, help="limit train rows (debug)")
     p.add_argument("--max_val", type=int, default=None, help="limit val rows (debug)")
+    p.add_argument("--val_small", type=int, default=2000,
+                   help="also write test_small.parquet = first N val rows, for the LIGHT "
+                        "in-training validation (run_colbench_grpo.sh points data.val_files at "
+                        "it; the full test.parquet stays for the offline eval loop). <=0 or "
+                        ">= full val size skips it.")
     args = p.parse_args()
 
     src_dir = os.path.expanduser(args.src_dir)
@@ -116,6 +121,16 @@ def main():
     val.to_parquet(val_path)
     print(f"Wrote {len(train)} train rows -> {train_path}")
     print(f"Wrote {len(val)} val rows   -> {val_path}")
+
+    # Light in-training validation set: a deterministic first-N slice of the full val set.
+    # The full test.parquet is reserved for the offline eval loop (colbench/validate_colbench.py).
+    if 0 < args.val_small < len(val):
+        val_small = val.select(range(args.val_small))
+        val_small_path = os.path.join(local_dir, "test_small.parquet")
+        val_small.to_parquet(val_small_path)
+        print(f"Wrote {len(val_small)} val-small rows -> {val_small_path} (in-training val)")
+    else:
+        print(f"Skipped test_small.parquet (val_small={args.val_small}, full val={len(val)})")
     print("Example row:")
     ex = train[0]
     print("  prompt[0].role:", ex["prompt"][0]["role"])
