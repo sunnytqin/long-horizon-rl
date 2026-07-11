@@ -192,6 +192,24 @@ def test_sim_extra_body_explicit_true(monkeypatch):
     assert env_mod._sim_extra_body() == {"enable_thinking": True}
 
 
+# ── sim sampling (must NOT be greedy for Qwen3) ───────────────────────────────
+
+def test_sim_sampling_default_is_non_greedy(monkeypatch):
+    for k in ("SIM_TEMPERATURE", "SIM_TOP_P", "SIM_TOP_K", "SIM_MIN_P"):
+        monkeypatch.delenv(k, raising=False)
+    temperature, top_p, top_k, min_p = env_mod._sim_sampling()
+    assert temperature == 0.7 and top_p == 0.8 and top_k == 20 and min_p == 0.0
+    assert temperature > 0.0  # Qwen3 degrades under greedy decoding
+
+
+def test_sim_sampling_env_override(monkeypatch):
+    monkeypatch.setenv("SIM_TEMPERATURE", "0.6")
+    monkeypatch.setenv("SIM_TOP_P", "0.95")
+    monkeypatch.setenv("SIM_TOP_K", "40")
+    monkeypatch.setenv("SIM_MIN_P", "0.05")
+    assert env_mod._sim_sampling() == (0.6, 0.95, 40, 0.05)
+
+
 if __name__ == "__main__":
     import pytest  # noqa: F401
     for name, fn in sorted(globals().items()):

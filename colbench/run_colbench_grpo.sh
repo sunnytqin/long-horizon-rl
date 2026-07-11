@@ -82,9 +82,13 @@ reward_time_limit=${REWARD_TIME_LIMIT:-6}          # per-case GT exec timeout (s
 env_step_timeout=${ENV_STEP_TIMEOUT:-180}          # hard wall on one blocking env call (sim turn or grading)
 # SET 2 gradient-masking arm (shared with codecontest): all | final_only.
 train_turns=${TRAIN_TURNS:-all}
-# Solver sampling. Training temperature 0.6 (InfoPO); simulator uses temp 0 (env.py).
-rollout_temp=${ROLLOUT_TEMP:-0.6}
-rollout_top_p=${ROLLOUT_TOP_P:-0.95}
+# Solver sampling. Defaults = the SOLVER model's recommended generation settings; match these
+# to whatever --model you train. Qwen3-4B-Instruct-2507: temp 0.7, top_p 0.8, top_k 20, min_p 0
+# (min_p is verl's default 0, not a settable rollout field). Qwen3-32B (thinking): 0.6/0.95/20.
+# NB: Qwen3 degrades under greedy (temp 0) -- always sample.
+rollout_temp=${ROLLOUT_TEMP:-0.7}
+rollout_top_p=${ROLLOUT_TOP_P:-0.8}
+rollout_top_k=${ROLLOUT_TOP_K:-20}
 
 
 # Code-exec sandbox (reused from codecontest, UNCHANGED). The sidecar grades ColBench
@@ -151,6 +155,7 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.actor.entropy_coeff=0 \
    actor_rollout_ref.rollout.temperature=${rollout_temp} \
    actor_rollout_ref.rollout.top_p=${rollout_top_p} \
+   actor_rollout_ref.rollout.top_k=${rollout_top_k} \
    actor_rollout_ref.rollout.name=${INFER_BACKEND} \
    actor_rollout_ref.rollout.mode=async \
    actor_rollout_ref.rollout.tensor_model_parallel_size=${rollout_tp} \

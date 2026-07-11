@@ -71,13 +71,31 @@ def _sim_extra_body():
 SimBackend = Callable[[str, str], str]
 
 
+def _sim_sampling():
+    """Resolve the sim's sampling params from env, defaulting to Qwen3-Instruct's recommended.
+
+    IMPORTANT: default temperature is 0.7 (NOT greedy). The Qwen3 family is explicitly
+    documented to degrade / repeat under greedy (temp 0) decoding, so a Qwen3 sim MUST sample.
+    Defaults = Qwen3-*-Instruct-2507 recommendation (temp 0.7, top_p 0.8, top_k 20, min_p 0);
+    for a Qwen3-32B (thinking) sim set SIM_TEMPERATURE=0.6 SIM_TOP_P=0.95. Returns
+    (temperature, top_p, top_k, min_p).
+    """
+    return (
+        float(os.environ.get("SIM_TEMPERATURE", "0.7")),
+        float(os.environ.get("SIM_TOP_P", "0.8")),
+        int(os.environ.get("SIM_TOP_K", "20")),
+        float(os.environ.get("SIM_MIN_P", "0")),
+    )
+
+
 def openai_sim_backend(system_content: str, user_content: str) -> str:
     """Default Phase-1 sim backend: query the FROZEN sim server over the OpenAI API.
 
     Reads OPENAI_BASE_URL (e.g. http://localhost:<SIM_PORT>/v1), MULTITURN_MODEL_NAME, and
-    OPENAI_API_KEY (default "EMPTY"), matching the entrypoint's exported env. temp 0,
-    max_tokens 4096; Qwen3 gets enable_thinking=False. 3 retries then "No response." --
-    mirrors sweet_rl HumanInteractionEnv.invoke_model / InfoPO APIHumanSimulator.invoke_model.
+    OPENAI_API_KEY (default "EMPTY"), matching the entrypoint's exported env. Sampling comes
+    from SIM_TEMPERATURE/SIM_TOP_P/SIM_TOP_K/SIM_MIN_P (see _sim_sampling -- defaults to Qwen3's
+    recommended non-greedy sampling); max_tokens 4096; 3 retries then "No response." -- mirrors
+    sweet_rl HumanInteractionEnv.invoke_model / InfoPO APIHumanSimulator.invoke_model.
     ``openai`` is imported lazily so CPU tests (which inject a stub) never need it installed.
     """
     from openai import OpenAI  # lazy: only the real sim path needs the SDK
@@ -91,10 +109,16 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
     ]
-    params = {"model": model, "messages": messages, "max_tokens": 4096, "temperature": 0, "timeout": 60.0}
-    extra_body = _sim_extra_body()
-    if extra_body is not None:
-        params["extra_body"] = extra_body
+    temperature, top_p, top_k, min_p = _sim_sampling()
+    # top_k / min_p are SGLang extensions -> extra_body; enable_thinking (if set) merges in.
+    extra_body = {"top_k": top_k, "min_p": min_p}
+    thinking = _sim_extra_body()
+    if thinking is not None:
+        extra_body.update(thinking)
+    params = {
+        "model": model, "messages": messages, "max_tokens": 4096,
+        "temperature": temperature, "top_p": top_p, "extra_body": extra_body, "timeout": 60.0,
+    }
 
     for _ in range(3):
         try:
