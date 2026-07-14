@@ -175,6 +175,77 @@ def test_debug_sim_dump_renders(monkeypatch, caplog):
     assert "[COLBENCH_SIM]" in joined
 
 
+# ── code-leak detection (templates.detect_code_leak) ──────────────────────────
+
+def test_detect_def_signature():
+    assert templates.detect_code_leak("Here is it: def parse(x):", GT) == "def"
+
+
+def test_detect_python_fence():
+    assert templates.detect_code_leak("```python\nreturn 1\n```", GT) == "fenced"
+
+
+def test_detect_ngram_expression_leak():
+    # An inline formula copied from the GT (operator-dense) -> caught by (D).
+    gt = "def f(a, b, c):\n    return (a * b) + (c * b) - (a * c) + (b * b) - a\n"
+    reply = "The result is computed as (a * b) + (c * b) - (a * c) + (b * b) - a exactly."
+    assert templates.detect_code_leak(reply, gt) == "ngram"
+
+
+def test_detect_prose_spec_not_flagged():
+    # A legitimate natural-language behavior description: shares identifiers with the GT but
+    # NOT a run of operators -> must NOT be flagged (the Ex4-style false positive we avoid).
+    gt = "def check(platform, version):\n    if platform == 'Linux' and version in ['10.0', '10.1']:\n        return True\n"
+    reply = "For Linux with versions 10.0 or 10.1 the playback is paused, otherwise it is not."
+    assert templates.detect_code_leak(reply, gt) is None
+
+
+def test_detect_clean_reply_none():
+    assert templates.detect_code_leak("The threshold is 10; below it we subtract.", GT) is None
+
+
+# ── rejection sampling (env.generate_user_turn_checked) ───────────────────────
+
+def _scripted_backend(replies):
+    """A sim backend returning successive canned replies (one per call)."""
+    seq = list(replies)
+    state = {"i": 0}
+
+    def backend(system_content, user_content):
+        r = seq[min(state["i"], len(seq) - 1)]
+        state["i"] += 1
+        return r
+
+    return backend
+
+
+def test_rejection_accepts_after_retries():
+    # Two leaking samples, then a clean one -> accepted on the 3rd try.
+    backend = _scripted_backend([
+        "def f(x, y): return x + y",
+        "```python\nreturn x - y\n```",
+        "The cutoff is 10 and below it we subtract.",
+    ])
+    e = ColBenchUserSimEnv(problem_description=PROBLEM, ground_truth=GT, test_cases=CALLS, sim_backend=backend)
+    res = e.generate_user_turn_checked([{"role": "user", "content": PROBLEM}], max_tries=8)
+    assert res["accepted"] is True
+    assert res["tries"] == 3
+    assert res["reasons"] == ["def", "fenced"]
+    assert "def " not in res["reply"]
+    assert e.last_sim_reply == res["reply"]
+
+
+def test_rejection_exhausts_to_sim_failure():
+    # Every sample leaks a def -> not accepted (a "simulation failure").
+    backend = _scripted_backend(["def f(x, y): return x + y"])
+    e = ColBenchUserSimEnv(problem_description=PROBLEM, ground_truth=GT, test_cases=CALLS, sim_backend=backend)
+    res = e.generate_user_turn_checked([{"role": "user", "content": PROBLEM}], max_tries=5)
+    assert res["accepted"] is False
+    assert res["reply"] is None
+    assert res["tries"] == 5
+    assert res["reasons"] == ["def"] * 5
+
+
 # ── sim thinking-kwarg guard (SIM_ENABLE_THINKING) ────────────────────────────
 
 def test_sim_extra_body_default_sends_nothing(monkeypatch):

@@ -21,7 +21,8 @@
 #   TEMPERATURES, TOP_P, TOP_K, SEED, MAX_ASSISTANT_TURNS, MAX_NEW_TOKENS_PER_TURN,
 #   MAX_RESPONSE_LENGTH, MAX_PROMPT_LENGTH, REWARD_TIME_LIMIT, ROLLOUT_TP, GPU_MEM_UTIL,
 #   CODECONTEST_EXEC_URL, CODECONTEST_ALLOW_INPROCESS, CODECONTEST_EXEC_CONCURRENCY,
-#   OPENAI_BASE_URL, MULTITURN_MODEL_NAME.
+#   OPENAI_BASE_URL, MULTITURN_MODEL_NAME,
+#   SIM_REJECT_MAX_TRIES (0=off; 32 to enable), SIM_REJECT_NGRAM_N, SIM_REJECT_MIN_OPS.
 
 set -xeuo pipefail
 
@@ -43,7 +44,17 @@ OUT=${OUT:-runs/validate_$(date +%m%d_%H%M).json}
 # MAX_SAVED_CONVOS conversations are written (metrics still cover every trajectory).
 MAX_PROBLEMS=${MAX_PROBLEMS:-}
 N_SAMPLES=${N_SAMPLES:-1}
-MAX_SAVED_CONVOS=${MAX_SAVED_CONVOS:-100}
+MAX_SAVED_CONVOS=${MAX_SAVED_CONVOS:-1000}
+
+# User-simulator rejection sampling (prevents the frozen sim from leaking code). Off by
+# default (0 tries); set SIM_REJECT_MAX_TRIES=32 to enable. On exhaustion the conversation is
+# a "simulation failure" (a third outcome, excluded from the pass-rate denominator). Each saved
+# conversation records per-turn rejection stats (sim_reject_events). Detectors: (A) def-regex +
+# (B) ```python fence always; (D) operator-gated n-gram is OFF by default (SIM_REJECT_NGRAM_N=0,
+# a future consideration) -- set SIM_REJECT_NGRAM_N=10 to enable it.
+SIM_REJECT_MAX_TRIES=${SIM_REJECT_MAX_TRIES:-0}
+SIM_REJECT_NGRAM_N=${SIM_REJECT_NGRAM_N:-0}
+SIM_REJECT_MIN_OPS=${SIM_REJECT_MIN_OPS:-2}
 
 # Inference hparams. TEMPERATURES (space-separated, e.g. "0.0 0.6") sweeps several temps in
 # ONE run: the engine is loaded once and each temp writes its own tagged JSON. Defaults match
@@ -62,9 +73,10 @@ REWARD_TIME_LIMIT=${REWARD_TIME_LIMIT:-6}
 ROLLOUT_TP=${ROLLOUT_TP:-1}
 GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.85}   # SGLang mem_fraction_static
 
-# MAX_PROBLEMS is optional; pass the flag only when set (empty => all problems).
+# MAX_PROBLEMS is optional; pass the flag only for a positive integer (empty / 0 / non-numeric
+# => all problems). Guards against MAX_PROBLEMS=0 slicing the val set to empty.
 MAX_PROBLEMS_ARG=()
-if [ -n "${MAX_PROBLEMS}" ]; then
+if [[ "${MAX_PROBLEMS}" =~ ^[0-9]+$ && "${MAX_PROBLEMS}" -gt 0 ]]; then
   MAX_PROBLEMS_ARG=(--max_problems "${MAX_PROBLEMS}")
 fi
 
@@ -84,6 +96,9 @@ python3 colbench/validate_colbench.py \
     --max_response_length ${MAX_RESPONSE_LENGTH} \
     --max_prompt_length ${MAX_PROMPT_LENGTH} \
     --reward_time_limit ${REWARD_TIME_LIMIT} \
+    --sim_reject_max_tries ${SIM_REJECT_MAX_TRIES} \
+    --sim_reject_ngram_n ${SIM_REJECT_NGRAM_N} \
+    --sim_reject_min_ops ${SIM_REJECT_MIN_OPS} \
     --tensor_parallel_size ${ROLLOUT_TP} \
     --gpu_memory_utilization ${GPU_MEM_UTIL} \
     "$@"

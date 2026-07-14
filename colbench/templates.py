@@ -153,6 +153,70 @@ def extract_code_answer(answer_text: str) -> str:
     return text.strip()
 
 
+# ── Code-leak detection (for the eval user-simulator rejection sampling) ──────
+# The frozen sim is meant to answer in plain English from the hidden GT; at weak checkpoints
+# it often just PASTES the solution instead (see the qwen3_4b step-200 study: ~60% of user
+# turns leak a `def`). These detectors flag a candidate sim reply that gives out code so the
+# eval harness can reject and resample. Three signals, byte-identical to the offline study:
+#   (A) a python function signature `def name(`     -> "def"      (the dominant leak shape)
+#   (B) a ```python fenced block                    -> "fenced"
+#   (D) a >=ngram_n symbol-aware token run shared with the GT source whose matched span holds
+#       >= min_operators code operators             -> "ngram"    (inline formula / expression)
+# (C) whole-line overlap from the study is intentionally dropped (0 hits, redundant with A).
+# (D) is symbol-aware and operator-gated on PURPOSE: a word-only n-gram also fires on
+# legitimate natural-language behavior specs (e.g. matching platform names / version strings),
+# which are exactly the good sim turns we must NOT reject. Requiring operators in the matched
+# span keeps the real expression leaks and spares prose.
+_DEF_SIGNATURE_RE = re.compile(r"\bdef\s+\w+\s*\(")
+_PY_FENCE_RE = re.compile(r"```python", re.IGNORECASE)
+# Arithmetic / comparison / bracket operators. Deliberately excludes ',' '.' ':' (common in
+# prose) so the operator gate keys on expression structure, not punctuation.
+_CODE_OPERATORS = frozenset("+-*/%()[]=<>")
+
+
+def _code_tokens(text: str) -> list:
+    """Symbol-aware tokenizer: each word OR each individual operator/punctuation char.
+
+    Unlike a word-only (``\\w+``) split this preserves operators, so a matched n-gram can be
+    required to contain them -- the knob that separates a copied CODE expression from a prose
+    behavior description that merely shares identifiers with the GT.
+    """
+    return re.findall(r"\w+|[^\w\s]", text or "")
+
+
+def detect_code_leak(
+    text: str, ground_truth: str, ngram_n: int = 10, min_operators: int = 2
+) -> Optional[str]:
+    """Return a short reason string if ``text`` leaks code, else ``None``.
+
+    ``ground_truth`` is the hidden GT source the simulator sees (n-gram overlap is computed
+    against it, NOT the agent's own output -- that substitution was an offline-study
+    convenience only). Reasons: ``"def"`` / ``"fenced"`` / ``"ngram"`` (see the module comment
+    above). Checked in that order and short-circuits on the first hit.
+
+    ``ngram_n <= 0`` DISABLES detector (D) (the default in the eval harness for now): the
+    operator-gated n-gram check is a solid idea but held back as a FUTURE CONSIDERATION while
+    we validate on the A/B leaks that dominate. (A)/(B) always run.
+    """
+    if not text:
+        return None
+    if _DEF_SIGNATURE_RE.search(text):
+        return "def"
+    if _PY_FENCE_RE.search(text):
+        return "fenced"
+    if ngram_n <= 0:
+        return None
+    gt_toks = _code_tokens(ground_truth)
+    tx_toks = _code_tokens(text)
+    if len(gt_toks) >= ngram_n and len(tx_toks) >= ngram_n:
+        gt_ngrams = {tuple(gt_toks[i:i + ngram_n]) for i in range(len(gt_toks) - ngram_n + 1)}
+        for i in range(len(tx_toks) - ngram_n + 1):
+            ng = tuple(tx_toks[i:i + ngram_n])
+            if ng in gt_ngrams and sum(tk in _CODE_OPERATORS for tk in ng) >= min_operators:
+                return "ngram"
+    return None
+
+
 def final_answer(assistant_text: str, episode_done: bool) -> tuple[bool, str]:
     """Resolve the solver's final answer text from one assistant turn.
 

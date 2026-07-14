@@ -80,7 +80,7 @@ def _val_df(n_problems=2):
     return pd.DataFrame(rows)
 
 
-def _args(max_saved_convos=100):
+def _args(max_saved_convos=100, sim_reject_max_tries=0):
     return Namespace(
         model="fake-model",
         val_file="fake.parquet",
@@ -94,10 +94,15 @@ def _args(max_saved_convos=100):
         grade_concurrency=4,
         seed=0,
         max_saved_convos=max_saved_convos,
+        # Rejection sampling: 0 => single-shot sim turns (existing behavior).
+        sim_reject_max_tries=sim_reject_max_tries,
+        sim_reject_ngram_n=10,
+        sim_reject_min_ops=2,
     )
 
 
-def _run(tmp_path, n_samples=2, max_saved_convos=100, scripts=None):
+def _run(tmp_path, n_samples=2, max_saved_convos=100, scripts=None,
+         sim_reject_max_tries=0, sim_backend=None):
     if scripts is None:
         # turn 0: a clarification question (no answer -> a sim turn is injected);
         # turn 1: submit the exact GT (-> all cases pass, reward 1.0).
@@ -105,13 +110,13 @@ def _run(tmp_path, n_samples=2, max_saved_convos=100, scripts=None):
             "What is the cutoff for x?",
             "I WANT TO ANSWER:\n```python\n" + GT + "```",
         ]
-    args = _args(max_saved_convos=max_saved_convos)
+    args = _args(max_saved_convos=max_saved_convos, sim_reject_max_tries=sim_reject_max_tries)
     out_path = str(tmp_path / "eval.json")
     llm = FakeLLM(scripts)
     summary = vc.run_eval(
         llm, FakeTokenizer(), _val_df(2), temperature=0.6, n_samples=n_samples,
         args=args, out_path=out_path, max_model_len=args.max_prompt_length + args.max_response_length,
-        sim_backend=_sim_backend,
+        sim_backend=sim_backend or _sim_backend,
     )
     with open(out_path) as f:
         dump = json.load(f)
@@ -135,6 +140,49 @@ def test_saved_conversations_bounded_but_metrics_over_all(tmp_path):
     assert summary["n_trajectories"] == 6           # metrics cover all 6
     assert dump["num_saved_conversations"] == 2     # only 2 dumped
     assert len(dump["trajectories"]) == 2
+
+
+def _leaking_sim_backend(system_content, user_content):
+    """A frozen-sim stub that always hands over code (a `def`) -> always rejected."""
+    return "Sure, here it is: def f(x, y): return x + y if x >= 10 else x - y"
+
+
+def test_rejection_on_clean_backend_records_no_retry(tmp_path):
+    # Rejection sampling enabled but the sim is already clean -> accepted on the first try,
+    # every turn recorded, no simulation failures, no denominator change.
+    summary, dump = _run(tmp_path, n_samples=2, sim_reject_max_tries=8)
+    assert summary["n_sim_failures"] == 0
+    assert summary["mean_pass_rate"] == 1.0
+    rj = summary["rejection_sampling"]
+    assert rj["enabled"] is True and rj["max_tries"] == 8
+    assert rj["n_user_turns_accepted"] == 4        # 2 problems x 2 samples, one sim turn each
+    assert rj["n_user_turns_with_retry"] == 0
+    assert rj["reject_reason_counts"] == {}
+    # Every saved trajectory logs its (single, first-try) sim turn.
+    for traj in dump["trajectories"]:
+        assert traj["sim_failed"] is False
+        assert [ev["tries"] for ev in traj["sim_reject_events"]] == [1]
+
+
+def test_rejection_exhaustion_marks_simulation_failure(tmp_path):
+    # The sim only ever produces code -> every trajectory becomes a "simulation failure":
+    # terminated, excluded from the pass-rate denominator, and its own reported category.
+    summary, dump = _run(
+        tmp_path, n_samples=2, sim_reject_max_tries=4, sim_backend=_leaking_sim_backend,
+    )
+    assert summary["n_trajectories"] == 4
+    assert summary["n_sim_failures"] == 4
+    assert summary["n_scored_trajectories"] == 0
+    assert summary["mean_pass_rate"] == 0.0        # not scored as solver failures
+    rj = summary["rejection_sampling"]
+    assert rj["sim_failure_rate"] == 1.0
+    assert rj["reject_reason_counts"].get("def", 0) == 4 * 4   # 4 tries x 4 trajectories
+    for traj in dump["trajectories"]:
+        assert traj["sim_failed"] is True
+        assert traj["sim_reject_events"][-1]["accepted"] is False
+        # No GT ever reaches a solver-visible message, even on the failed path.
+        for m in traj["messages"]:
+            assert GT not in str(m["content"])
 
 
 def test_no_answer_scores_zero_and_no_gt_leak(tmp_path):

@@ -109,6 +109,16 @@ class Trajectory:
         self.num_test_cases = 0
         self.final_answer = None
         self.final_code = None
+        # Simulation-failure category: the sim could not produce a code-free reply within the
+        # rejection-sampling budget, so the conversation was terminated. This is a THIRD
+        # outcome on top of pass/fail -- excluded from the pass-rate denominator so a bad sim
+        # is never scored as a solver failure. (Stays False when rejection sampling is off.)
+        self.sim_failed = False
+        self.sim_failure_turn = -1
+        # Per-user-turn rejection audit: one entry per injected sim reply,
+        # {"turn": int, "tries": int, "reasons": [str, ...]}. tries==1 & empty reasons means
+        # the first sample was clean (no rejection needed).
+        self.sim_reject_events = []
         # Per-turn audit trail.
         self.turn_records = []
 
@@ -129,6 +139,9 @@ class Trajectory:
             "num_test_cases": self.num_test_cases,
             "final_answer": self.final_answer,
             "final_code": self.final_code,
+            "sim_failed": self.sim_failed,
+            "sim_failure_turn": self.sim_failure_turn,
+            "sim_reject_events": self.sim_reject_events,
             "turn_records": self.turn_records,
             "messages": self.messages,
         }
@@ -212,6 +225,9 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
     }
 
     trajs = build_trajectories(val_df, n_samples, args, sim_backend=sim_backend)
+    # Rejection-sample the sim reply this run? (>0 tries). Constant across turns; defined here
+    # so it is always bound for the aggregate section even if the turn loop breaks early.
+    reject = bool(args.sim_reject_max_tries and args.sim_reject_max_tries > 0)
     # One pool, reused for the two blocking env calls (grading + sim HTTP turns).
     pool = ThreadPoolExecutor(max_workers=max(1, args.grade_concurrency))
 
@@ -298,11 +314,31 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
             t.done = True
 
         # ---- Advance the frozen simulator for each still-open trajectory (blocking HTTP,
-        #      in parallel). Byte-identical sim prompt/reply to training via env.generate_user_turn.
+        #      in parallel). With --sim_reject_max_tries>0 we REJECTION-SAMPLE the sim reply
+        #      (resample until it contains no leaked code); otherwise it's the single-shot
+        #      turn byte-identical to training via env.generate_user_turn.
         def _sim(t):
-            return t, t.env.generate_user_turn(list(t.sim_dialogue))
+            if reject:
+                return t, t.env.generate_user_turn_checked(
+                    list(t.sim_dialogue), max_tries=args.sim_reject_max_tries,
+                    ngram_n=args.sim_reject_ngram_n, min_operators=args.sim_reject_min_ops,
+                )
+            reply = t.env.generate_user_turn(list(t.sim_dialogue))
+            return t, {"reply": reply, "tries": 1, "accepted": True, "reasons": []}
 
-        for t, user_content in pool.map(_sim, pending):
+        for t, res in pool.map(_sim, pending):
+            if not res["accepted"]:
+                # Simulation failure: the sim only ever produced code within the budget. End the
+                # conversation and mark it as its own outcome (NOT a solver failure / reward 0).
+                t.sim_failed = True
+                t.sim_failure_turn = turn
+                t.sim_reject_events.append({"turn": turn, "tries": res["tries"],
+                                            "reasons": res["reasons"], "accepted": False})
+                t.done = True
+                continue
+            user_content = res["reply"]
+            t.sim_reject_events.append({"turn": turn, "tries": res["tries"],
+                                        "reasons": res["reasons"], "accepted": True})
             feedback_ids = tokenizer.encode(user_content, add_special_tokens=False)
             # Need room for the user turn AND at least one response token next turn.
             if t.response_tokens + len(feedback_ids) >= t.response_budget:
@@ -317,28 +353,71 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
     pool.shutdown(wait=True)
     elapsed = time.time() - t0
 
-    # ---- aggregate metrics (over ALL trajectories) ----
+    # ---- aggregate metrics ----
+    # Simulation failures (sim never produced a code-free reply within the rejection budget)
+    # are a THIRD outcome: they are excluded from the pass-rate denominator so a bad frozen sim
+    # is never scored as a solver failure. With rejection off there are none, so `valid` ==
+    # `trajs` and every metric below is byte-identical to the pre-rejection behavior.
+    n_traj = len(trajs)
+    valid = [t for t in trajs if not t.sim_failed]
+    n_valid = len(valid)
+    n_sim_failures = n_traj - n_valid
+
     by_problem = {}
     for t in trajs:
         by_problem.setdefault(t.row_index, []).append(t)
     n_problems = len(by_problem)
-    n_traj = len(trajs)
-    answered_trajs = [t for t in trajs if t.answered]
+    valid_by_problem = {}
+    for t in valid:
+        valid_by_problem.setdefault(t.row_index, []).append(t)
 
-    mean_pass_rate = sum(t.reward for t in trajs) / max(1, n_traj)          # primary (val-core analog)
-    all_pass_rate = sum(1 for t in trajs if t.all_pass) / max(1, n_traj)     # fully correct
-    answered_rate = len(answered_trajs) / max(1, n_traj)
-    overflow_rate = sum(1 for t in trajs if t.overflow) / max(1, n_traj)
+    answered_trajs = [t for t in valid if t.answered]
+    mean_pass_rate = sum(t.reward for t in valid) / max(1, n_valid)          # primary (val-core analog)
+    all_pass_rate = sum(1 for t in valid if t.all_pass) / max(1, n_valid)     # fully correct
+    answered_rate = len(answered_trajs) / max(1, n_valid)
+    overflow_rate = sum(1 for t in valid if t.overflow) / max(1, n_valid)
     avg_turns_to_answer = (
         sum(t.answered_at_turn + 1 for t in answered_trajs) / len(answered_trajs)
         if answered_trajs else None
     )
-    # Per-problem best (max over samples) -> mean. The pass@n analog for a fractional reward.
+    # Per-problem best (max over VALID samples) -> mean. The pass@n analog for a fractional
+    # reward. Problems with no valid sample (all sim-failed) drop out of the denominator.
     mean_best_pass_rate = (
-        sum(max(t.reward for t in grp) for grp in by_problem.values()) / max(1, n_problems)
+        sum(max(t.reward for t in grp) for grp in valid_by_problem.values())
+        / max(1, len(valid_by_problem))
     )
-    # First-sample metric (comparable to a greedy / single-sample run).
-    pass_at_1 = sum(grp[0].reward for grp in by_problem.values()) / max(1, n_problems)
+    # First-(valid-)sample metric (comparable to a greedy / single-sample run).
+    pass_at_1 = (
+        sum(grp[0].reward for grp in valid_by_problem.values()) / max(1, len(valid_by_problem))
+    )
+
+    # ---- rejection-sampling audit (aggregated over every injected sim turn) ----
+    all_events = [ev for t in trajs for ev in t.sim_reject_events]
+    accepted_events = [ev for ev in all_events if ev.get("accepted")]
+    n_turns_retried = sum(1 for ev in accepted_events if ev["tries"] > 1)
+    total_samples = sum(ev["tries"] for ev in all_events)
+    reason_counts: dict = {}
+    for ev in all_events:
+        for r in ev["reasons"]:
+            reason_counts[r] = reason_counts.get(r, 0) + 1
+    tries_hist: dict = {}
+    for ev in accepted_events:
+        tries_hist[ev["tries"]] = tries_hist.get(ev["tries"], 0) + 1
+    rejection = {
+        "enabled": reject,
+        "max_tries": args.sim_reject_max_tries,
+        "ngram_n": args.sim_reject_ngram_n,
+        "min_operators": args.sim_reject_min_ops,
+        "n_sim_failures": n_sim_failures,
+        "sim_failure_rate": n_sim_failures / max(1, n_traj),
+        "n_user_turns_accepted": len(accepted_events),
+        "n_user_turns_with_retry": n_turns_retried,
+        "retry_rate": n_turns_retried / max(1, len(accepted_events)),
+        "mean_samples_per_turn": round(total_samples / max(1, len(all_events)), 3),
+        "max_tries_used": max((ev["tries"] for ev in all_events), default=0),
+        "tries_histogram": dict(sorted(tries_hist.items())),
+        "reject_reason_counts": reason_counts,
+    }
 
     summary = {
         "model": args.model,
@@ -346,6 +425,8 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         "n_problems": n_problems,
         "n_samples_per_problem": n_samples,
         "n_trajectories": n_traj,
+        "n_scored_trajectories": n_valid,        # excludes simulation failures
+        "n_sim_failures": n_sim_failures,        # third outcome (not pass, not fail)
         "mean_pass_rate": mean_pass_rate,
         "mean_best_pass_rate": mean_best_pass_rate,
         "pass@1_mean_pass_rate": pass_at_1,
@@ -354,6 +435,7 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         "avg_turns_to_answer": avg_turns_to_answer,
         "overflow_rate": overflow_rate,
         "elapsed_sec": round(elapsed, 1),
+        "rejection_sampling": rejection,
         "inference": {
             "temperature": temperature,
             "top_p": args.top_p,
@@ -418,9 +500,25 @@ def main():
     ap.add_argument("--out", required=True, help="Output JSON path stem for the conversation dump.")
     ap.add_argument("--max_problems", type=int, default=None, help="Limit #problems (debug). None = all.")
     ap.add_argument("--n_samples", type=int, default=1, help="Trajectories sampled per problem.")
-    ap.add_argument("--max_saved_convos", type=int, default=100,
+    ap.add_argument("--max_saved_convos", type=int, default=1000,
                     help="Cap on how many (randomly sampled) full conversations are written to "
-                         "JSON. Metrics are still computed over ALL trajectories. <0 = save all.")
+                         "JSON (each carries its per-turn sim_reject_events audit). Metrics are "
+                         "still computed over ALL trajectories. <0 = save all.")
+
+    # User-simulator rejection sampling (EVAL only). Resample the sim's reply until it contains
+    # no leaked code (templates.detect_code_leak), so the frozen sim can't just hand the solver
+    # the solution. Off by default (0 tries) => single-shot turns, byte-identical to training.
+    ap.add_argument("--sim_reject_max_tries", type=int, default=0,
+                    help="Max sim resamples per user turn (0 disables rejection sampling). On "
+                         "exhaustion the conversation is marked a 'simulation failure' (a third "
+                         "outcome, excluded from the pass-rate denominator).")
+    ap.add_argument("--sim_reject_ngram_n", type=int, default=0,
+                    help="Detector (D): reject if a symbol-aware n-gram of this length is shared "
+                         "with the hidden GT source (and contains >= --sim_reject_min_ops operators). "
+                         "0 (default) DISABLES (D) -- held as a future consideration; A/B still run.")
+    ap.add_argument("--sim_reject_min_ops", type=int, default=2,
+                    help="Detector (D): min code operators required within the matched n-gram, so "
+                         "it fires on copied EXPRESSIONS, not prose that shares identifiers.")
 
     # Inference hyper-parameters (defaults match run_colbench_grpo.sh so a checkpoint is
     # evaluated with the same budgets it trained under).

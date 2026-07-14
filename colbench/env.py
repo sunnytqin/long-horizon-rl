@@ -166,21 +166,18 @@ class ColBenchUserSimEnv:
         clean = templates.strip_think(assistant_text)
         return templates.final_answer(clean, episode_done)
 
-    def generate_user_turn(self, messages: list[dict]) -> str:
-        """Produce the next user (simulator) reply. THE Phase-1/Phase-2 seam.
+    def _sample_user_reply(self, messages: list[dict]) -> str:
+        """One raw sim sample: build the prompt (with hidden GT), call the backend, clean up.
 
-        ``messages`` is the running dialogue as ``[{role, content}, ...]`` (problem + solver
-        turns + prior user replies) -- it contains NO ground truth. The GT source is injected
-        as ``hidden_information`` into the sim prompt built here and passed only to the
-        backend; the returned reply is <think>-stripped and hard-capped at 400 chars, so the
-        solver's message list only ever receives that short reply.
+        The reply is <think>-stripped and hard-capped at 400 chars, so the solver's message
+        list only ever receives that short reply. Shared by the single-shot training path
+        (generate_user_turn) and the eval rejection loop (generate_user_turn_checked).
         """
         user_content = templates.build_sim_user_message(
             self.problem_description, self.ground_truth, messages
         )
         raw = self.sim_backend(templates.SIM_SYSTEM_PROMPT, user_content)
         reply = templates.strip_think(raw)[: templates.HUMAN_RESPONSE_CHARACTER_LIMIT]
-        self.last_sim_reply = reply
         if _DEBUG_SIM:
             n = _DEBUG_PREVIEW
             logger.warning(
@@ -189,6 +186,46 @@ class ColBenchUserSimEnv:
                 n, str(self.ground_truth)[:n], n, user_content[:n], n, str(raw)[:n], reply,
             )
         return reply
+
+    def generate_user_turn(self, messages: list[dict]) -> str:
+        """Produce the next user (simulator) reply. THE Phase-1/Phase-2 seam.
+
+        ``messages`` is the running dialogue as ``[{role, content}, ...]`` (problem + solver
+        turns + prior user replies) -- it contains NO ground truth. The GT source is injected
+        as ``hidden_information`` into the sim prompt built here and passed only to the
+        backend. Single-shot (no rejection sampling): this is the TRAINING path and is left
+        byte-identical. Eval opts into rejection via generate_user_turn_checked.
+        """
+        reply = self._sample_user_reply(messages)
+        self.last_sim_reply = reply
+        return reply
+
+    def generate_user_turn_checked(
+        self, messages: list[dict], max_tries: int = 32, ngram_n: int = 10, min_operators: int = 2
+    ) -> dict:
+        """Rejection-sampled user turn (EVAL only): resample until the reply has no code leak.
+
+        Keeps drawing sim replies (up to ``max_tries``) until one passes
+        ``templates.detect_code_leak`` (against the hidden GT this env holds), preventing the
+        frozen simulator from just handing the solver the solution. Returns a record::
+
+            {"reply": str|None, "tries": int, "accepted": bool, "reasons": [str, ...]}
+
+        On success ``reply`` is the accepted turn, ``tries`` the number of samples drawn, and
+        ``reasons`` the leak reason of each REJECTED sample (len == tries-1). On exhaustion
+        ``accepted`` is False, ``reply`` is None (a "simulation failure" -- the caller
+        terminates the trajectory), and ``reasons`` has one entry per try. Training does not
+        call this; generate_user_turn stays single-shot.
+        """
+        reasons: list[str] = []
+        for i in range(1, max_tries + 1):
+            reply = self._sample_user_reply(messages)
+            reason = templates.detect_code_leak(reply, self.ground_truth, ngram_n, min_operators)
+            if reason is None:
+                self.last_sim_reply = reply
+                return {"reply": reply, "tries": i, "accepted": True, "reasons": reasons}
+            reasons.append(reason)
+        return {"reply": None, "tries": max_tries, "accepted": False, "reasons": reasons}
 
     def score(self, answer_text: str) -> dict:
         """Grade the submitted answer against the GT. Returns reward.grade's dict.
