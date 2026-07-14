@@ -191,16 +191,20 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
     return trajs
 
 
-def eval_tagged_path(base_out, turns, n_samples, temperature):
-    """Insert a '_turns<N>_n<K>_t<temp>' tag before the extension so each eval config gets
-    its own self-documenting file (and can never clobber a different config).
+def eval_tagged_path(base_out, turns, n_samples, temperature, sim_reject_max_tries=0):
+    """Insert a '_turns<N>_n<K>_t<temp>[_reject<R>]' tag before the extension so each eval
+    config gets its own self-documenting file (and can never clobber a different config).
 
     ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced to 1), so
-    the tag faithfully records what was run. e.g.
-      ("runs/eval_step120.json", 10, 4, 0.6) -> "runs/eval_step120_turns10_n4_t0.6.json".
+    the tag faithfully records what was run. A '_reject<R>' suffix is added ONLY when
+    rejection sampling is on, so a rejection-sampled eval never overwrites the plain (single-
+    shot) file for the same step/temp -- and the plain-run filename is unchanged. e.g.
+      (..., 10, 4, 0.6)      -> "...step120_turns10_n4_t0.6.json"
+      (..., 10, 4, 0.6, 32)  -> "...step120_turns10_n4_t0.6_reject32.json".
     """
     root, ext = os.path.splitext(base_out)
-    return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}{ext or '.json'}"
+    reject_tag = f"_reject{sim_reject_max_tries}" if sim_reject_max_tries and sim_reject_max_tries > 0 else ""
+    return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}{reject_tag}{ext or '.json'}"
 
 
 def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len, sim_backend=None):
@@ -587,7 +591,8 @@ def main():
         n_samples = 1 if temperature == 0.0 else args.n_samples
         if temperature == 0.0 and args.n_samples > 1:
             print(f"[validate] temperature=0 is greedy; forcing n_samples 1 (was {args.n_samples}).")
-        out_path = eval_tagged_path(args.out, args.max_assistant_turns, n_samples, temperature)
+        out_path = eval_tagged_path(args.out, args.max_assistant_turns, n_samples, temperature,
+                                    sim_reject_max_tries=args.sim_reject_max_tries)
         summary = run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len)
         results_index.append({"temperature": temperature, "out": out_path,
                               "mean_pass_rate": summary["mean_pass_rate"],
