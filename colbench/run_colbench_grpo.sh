@@ -82,6 +82,13 @@ reward_time_limit=${REWARD_TIME_LIMIT:-6}          # per-case GT exec timeout (s
 env_step_timeout=${ENV_STEP_TIMEOUT:-180}          # hard wall on one blocking env call (sim turn or grading)
 # SET 2 gradient-masking arm (shared with codecontest): all | final_only.
 train_turns=${TRAIN_TURNS:-all}
+# User-sim rejection sampling: resample the sim turn up to N times until it leaks no code
+# (0 = off, rollout byte-identical to before; 8 to enable). Closes the exploit where the solver
+# just asks the sim to write the function. If all N samples leak, the conversation ends there
+# and the trajectory trains at reward 0 -- penalizing the turn that asked for code. Enable from
+# step 0 of a FRESH run: this is path-dependent, and retrofitting it onto a checkpoint that has
+# already learned the exploit collapses whole groups to 0.
+sim_reject_max_tries=${SIM_REJECT_MAX_TRIES:-0}
 # Solver sampling. Defaults = the SOLVER model's recommended generation settings; match these
 # to whatever --model you train. Qwen3-4B-Instruct-2507: temp 0.7, top_p 0.8, top_k 20, min_p 0
 # (min_p is verl's default 0, not a settable rollout field). Qwen3-32B (thinking): 0.6/0.95/20.
@@ -124,7 +131,21 @@ optimizer_offload=${OPT_OFFLOAD:-True}
 ulysses_sp=${ULYSSES_SP:-1}
 
 
+# Solver chat-template kwargs. entrypoint_colbench.sh sets SOLVER_ENABLE_THINKING=false for a
+# HYBRID Qwen3 solver (14B/32B, per the model registry's THINKING field) so every solver turn is
+# templated with enable_thinking=False -- otherwise the <think> block eats the 1024-token
+# max_new_tokens_per_turn budget and the real answer truncates. UNSET for non-hybrid models
+# (Qwen2.5-14B, Qwen3-4B-Instruct-2507), whose chat templates error on the kwarg -> pass NOTHING,
+# leaving those runs byte-identical to before. Reuses verl's existing
+# data.apply_chat_template_kwargs (default {}), which the agent loop applies at every turn.
+chat_template_args=()
+if [ -n "${SOLVER_ENABLE_THINKING:-}" ]; then
+    chat_template_args+=("+data.apply_chat_template_kwargs.enable_thinking=${SOLVER_ENABLE_THINKING}")
+fi
+
+
 python3 -m verl.trainer.main_ppo \
+   ${chat_template_args[@]+"${chat_template_args[@]}"} \
    algorithm.adv_estimator=grpo \
    algorithm.use_kl_in_reward=False \
    algorithm.rollout_correction.rollout_is=${rollout_is} \
@@ -172,6 +193,7 @@ python3 -m verl.trainer.main_ppo \
    reward_model.reward_manager=naive \
    +colbench.max_new_tokens_per_turn=${max_new_tokens_per_turn} \
    +colbench.train_turns=${train_turns} \
+   +colbench.sim_reject_max_tries=${sim_reject_max_tries} \
    +colbench.reward_time_limit=${reward_time_limit} \
    +colbench.env_step_timeout=${env_step_timeout} \
    trainer.balance_batch=True \

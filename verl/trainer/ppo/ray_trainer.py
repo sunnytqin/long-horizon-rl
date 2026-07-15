@@ -1786,6 +1786,17 @@ class RayPPOTrainer:
                 if "overflow" in batch.non_tensor_batch:
                     ovf = np.asarray(batch.non_tensor_batch["overflow"], dtype=np.float32)
                     metrics["solver/overflow_rate"] = float(np.mean(ovf))
+                # ColBench user-sim rejection sampling. sim_failure_rate is THE diagnostic for
+                # whether the "ask the simulator for the code" exploit is being suppressed: it
+                # should stay flat and low. If it climbs over training, reward-0 termination is
+                # not deterring the behavior. Both keys are absent unless rejection is enabled.
+                if "sim_failed" in batch.non_tensor_batch:
+                    simf = np.asarray(batch.non_tensor_batch["sim_failed"], dtype=np.float32)
+                    metrics["solver/sim_failure_rate"] = float(np.mean(simf))
+                if "sim_reject_tries" in batch.non_tensor_batch:
+                    tries = np.asarray(batch.non_tensor_batch["sim_reject_tries"], dtype=np.float32)
+                    metrics["solver/sim_reject_tries/mean"] = float(np.mean(tries))
+                    metrics["solver/sim_reject_tries/max"] = float(np.max(tries))
                 # GDPO per-component reward metrics
                 gdpo_reward_keys = self.config.algorithm.get("gdpo_reward_keys", None)
                 if gdpo_reward_keys and self.config.algorithm.adv_estimator in ("gdpo", AdvantageEstimator.GDPO):

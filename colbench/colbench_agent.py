@@ -25,6 +25,12 @@ The differences:
   * There is no mid-turn grading: the solver interacts to extract requirements and submits
     once (``I WANT TO ANSWER:``); the code is graded ONCE at the end and the trajectory
     reward is the fractional GT pass-rate.
+  * Optional user-sim rejection sampling (``+colbench.sim_reject_max_tries``, default 0=off)
+    resamples the sim turn until it leaks no code, closing the exploit where the solver just
+    asks the simulator to write the function. If every sample leaks, the solver's turn was one
+    the sim can only answer with the solution: the conversation ends there and the trajectory
+    keeps reward 0 (identical to running out of turns without submitting) but STAYS in the
+    batch, so the offending turn takes a group-relative negative advantage.
 
 Training is SOLVER-ONLY (Phase 1). The simulator is frozen and its turns are masked.
 """
@@ -32,6 +38,7 @@ Training is SOLVER-ONLY (Phase 1). The simulator is frozen and its turns are mas
 import asyncio
 import logging
 import os
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -83,6 +90,10 @@ class ColBenchAgentLoop(AgentLoopBase):
         self.train_turns = cc.get("train_turns", "all")
         if self.train_turns not in TRAIN_TURNS_MODES:
             raise ValueError(f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}")
+        # User-sim rejection sampling: resample the sim turn up to N times until it contains no
+        # code leak. 0 (default) = off, and the rollout is byte-identical to before. On
+        # exhaustion the trajectory terminates with reward 0 -- see the loop below.
+        self.sim_reject_max_tries = int(cc.get("sim_reject_max_tries", 0) or 0)
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -128,6 +139,9 @@ class ColBenchAgentLoop(AgentLoopBase):
         user_turns = 0
         answered = False
         overflow = False
+        sim_failed = False
+        sim_failure_turn = -1
+        sim_reject_tries = 0
         answered_at_turn = -1
         reward = 0.0
         result: dict[str, Any] = {}
@@ -213,14 +227,44 @@ class ColBenchAgentLoop(AgentLoopBase):
             # ── the executor with a hard timeout so a hung sim can't stall the rollout.
             with simple_timer("generate_user_turn", metrics):
                 try:
-                    user_content = await asyncio.wait_for(
-                        self.loop.run_in_executor(None, env.generate_user_turn, list(sim_dialogue)),
-                        timeout=self.env_step_timeout,
-                    )
+                    if self.sim_reject_max_tries > 0:
+                        # ngram_n=0 disables detector (D); (A) def-regex + (B) ```python fence
+                        # always run. Matches the eval default (SIM_REJECT_NGRAM_N=0).
+                        res = await asyncio.wait_for(
+                            self.loop.run_in_executor(
+                                None,
+                                partial(
+                                    env.generate_user_turn_checked,
+                                    list(sim_dialogue),
+                                    max_tries=self.sim_reject_max_tries,
+                                    ngram_n=0,
+                                ),
+                            ),
+                            timeout=self.env_step_timeout,
+                        )
+                    else:
+                        reply = await asyncio.wait_for(
+                            self.loop.run_in_executor(None, env.generate_user_turn, list(sim_dialogue)),
+                            timeout=self.env_step_timeout,
+                        )
+                        res = {"reply": reply, "tries": 1, "accepted": True}
                 except asyncio.TimeoutError:
                     logger.warning("generate_user_turn exceeded %.0fs; ending trajectory", self.env_step_timeout)
                     metrics["sim_turn_timeout"] = 1
                     break
+
+            sim_reject_tries += res["tries"]
+            if not res["accepted"]:
+                # Exhausted: every sample leaked code, i.e. the solver asked something the
+                # simulator can only answer WITH the solution ("just give me the final
+                # function"). End the conversation here. reward stays 0.0 -- the same outcome
+                # as running out of turns without submitting -- and the trajectory STAYS in the
+                # batch, so its solver turns take the group-relative negative advantage. That
+                # gradient is the point: it is what makes this differ from discarding.
+                sim_failed = True
+                sim_failure_turn = turn
+                break
+            user_content = res["reply"]
             sim_dialogue.append({"role": "user", "content": user_content})
 
             feedback_ids = await self.apply_chat_template(
@@ -263,6 +307,9 @@ class ColBenchAgentLoop(AgentLoopBase):
                 "answered_at_turn": answered_at_turn,
                 "num_assistant_turns": assistant_turns,
                 "overflow": overflow,
+                "sim_failed": sim_failed,
+                "sim_failure_turn": sim_failure_turn,
+                "sim_reject_tries": sim_reject_tries,
                 "pass_rate": reward,
                 "all_pass": bool(result.get("all_pass", False)),
                 "num_test_cases": int(result.get("n", 0)),

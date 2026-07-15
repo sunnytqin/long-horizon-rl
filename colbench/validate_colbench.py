@@ -207,6 +207,26 @@ def eval_tagged_path(base_out, turns, n_samples, temperature, sim_reject_max_tri
     return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}{reject_tag}{ext or '.json'}"
 
 
+def _solver_template_kwargs():
+    """Resolve apply_chat_template kwargs for the SOLVER from SOLVER_ENABLE_THINKING.
+
+    The solver-side mirror of env._sim_extra_body, and the eval counterpart of training's
+    data.apply_chat_template_kwargs (set from the same env by run_colbench_grpo.sh) -- eval MUST
+    template the solver the way training did, or a hybrid checkpoint is scored off-distribution.
+
+    Default (unset) -> {}: send NO thinking kwarg, safe for every model (Qwen2.5,
+    Qwen3-Instruct-2507, non-Qwen), whose chat templates error on the kwarg. Only a HYBRID Qwen3
+    solver (Qwen3-14B/32B) that would otherwise emit <think> needs SOLVER_ENABLE_THINKING=false;
+    the entrypoint sets it from the model registry's THINKING field.
+    """
+    v = os.environ.get("SOLVER_ENABLE_THINKING", "").strip().lower()
+    if v in ("true", "1"):
+        return {"enable_thinking": True}
+    if v in ("false", "0"):
+        return {"enable_thinking": False}
+    return {}
+
+
 def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len, sim_backend=None):
     """Run the full multi-turn eval at a single temperature and dump one JSON.
 
@@ -234,6 +254,7 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
     reject = bool(args.sim_reject_max_tries and args.sim_reject_max_tries > 0)
     # One pool, reused for the two blocking env calls (grading + sim HTTP turns).
     pool = ThreadPoolExecutor(max_workers=max(1, args.grade_concurrency))
+    solver_template_kwargs = _solver_template_kwargs()
 
     t0 = time.time()
     # ---- multi-turn loop: every turn generates for ALL still-active trajectories as one
@@ -260,7 +281,9 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         # SGLang raise, killing the run). Same guard as validate_codecontest.py.
         prompts, per_req_params, kept = [], [], []
         for t in gen_batch:
-            prompt_text = tokenizer.apply_chat_template(t.messages, add_generation_prompt=True, tokenize=False)
+            prompt_text = tokenizer.apply_chat_template(
+                t.messages, add_generation_prompt=True, tokenize=False, **solver_template_kwargs
+            )
             input_len = len(tokenizer.encode(prompt_text, add_special_tokens=False))
             room = max_model_len - input_len - CTX_MARGIN
             if room <= 0:

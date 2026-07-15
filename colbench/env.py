@@ -193,8 +193,8 @@ class ColBenchUserSimEnv:
         ``messages`` is the running dialogue as ``[{role, content}, ...]`` (problem + solver
         turns + prior user replies) -- it contains NO ground truth. The GT source is injected
         as ``hidden_information`` into the sim prompt built here and passed only to the
-        backend. Single-shot (no rejection sampling): this is the TRAINING path and is left
-        byte-identical. Eval opts into rejection via generate_user_turn_checked.
+        backend. Single-shot (no rejection sampling). Callers opt into rejection sampling via
+        generate_user_turn_checked; this stays the path when it is disabled.
         """
         reply = self._sample_user_reply(messages)
         self.last_sim_reply = reply
@@ -203,7 +203,7 @@ class ColBenchUserSimEnv:
     def generate_user_turn_checked(
         self, messages: list[dict], max_tries: int = 32, ngram_n: int = 10, min_operators: int = 2
     ) -> dict:
-        """Rejection-sampled user turn (EVAL only): resample until the reply has no code leak.
+        """Rejection-sampled user turn: resample until the reply has no code leak.
 
         Keeps drawing sim replies (up to ``max_tries``) until one passes
         ``templates.detect_code_leak`` (against the hidden GT this env holds), preventing the
@@ -214,8 +214,12 @@ class ColBenchUserSimEnv:
         On success ``reply`` is the accepted turn, ``tries`` the number of samples drawn, and
         ``reasons`` the leak reason of each REJECTED sample (len == tries-1). On exhaustion
         ``accepted`` is False, ``reply`` is None (a "simulation failure" -- the caller
-        terminates the trajectory), and ``reasons`` has one entry per try. Training does not
-        call this; generate_user_turn stays single-shot.
+        terminates the trajectory), and ``reasons`` has one entry per try.
+
+        Both callers terminate on exhaustion, but score it differently: eval treats it as a
+        THIRD outcome excluded from the pass-rate denominator, while training keeps the
+        trajectory in the batch at reward 0 so the offending solver turn takes a negative
+        advantage (see colbench_agent.py).
         """
         reasons: list[str] = []
         for i in range(1, max_tries + 1):
