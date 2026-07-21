@@ -105,6 +105,10 @@ sim_max_tries=${SIM_MAX_TRIES:-8}
 rollout_temp=${ROLLOUT_TEMP:-0.7}
 rollout_top_p=${ROLLOUT_TOP_P:-0.8}
 rollout_top_k=${ROLLOUT_TOP_K:-20}
+# In-training VAL uses the SAME solver sampling as training (val_kwargs below reuse these vars),
+# NOT verl's default greedy (temp 0). Two reasons: (1) val should reflect the sampling regime the
+# policy is optimized under, and (2) Qwen3 degrades under greedy. The frozen user-sim is unchanged
+# in val (separate server, its own _sim_sampling). val n=1 = one sampled trajectory per problem.
 
 
 # Code-exec sandbox (reused from codecontest, UNCHANGED). The sidecar grades ColBench
@@ -203,6 +207,11 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.rollout.multi_stage_wake_up=${multi_stage_wake_up} \
    actor_rollout_ref.rollout.calculate_log_probs=True \
    actor_rollout_ref.rollout.n=${rollout_n} \
+   actor_rollout_ref.rollout.val_kwargs.temperature=${rollout_temp} \
+   actor_rollout_ref.rollout.val_kwargs.top_p=${rollout_top_p} \
+   actor_rollout_ref.rollout.val_kwargs.top_k=${rollout_top_k} \
+   actor_rollout_ref.rollout.val_kwargs.do_sample=True \
+   actor_rollout_ref.rollout.val_kwargs.n=1 \
    actor_rollout_ref.rollout.multi_turn.enable=True \
    actor_rollout_ref.rollout.multi_turn.max_assistant_turns=${max_assistant_turns} \
    actor_rollout_ref.rollout.multi_turn.format=hermes \
