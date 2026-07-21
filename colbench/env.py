@@ -115,8 +115,12 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
     thinking = _sim_extra_body()
     if thinking is not None:
         extra_body.update(thinking)
+    # SIM_MAX_TOKENS bounds the user turn at GENERATION time (default 4096 = unchanged). The spec
+    # path sets it small so a brief human-like reply is not chopped post-hoc (it replaces the old
+    # HUMAN_RESPONSE_CHARACTER_LIMIT slice, which truncated mid-sentence).
+    sim_max_tokens = int(os.environ.get("SIM_MAX_TOKENS", "4096") or "4096")
     params = {
-        "model": model, "messages": messages, "max_tokens": 4096,
+        "model": model, "messages": messages, "max_tokens": sim_max_tokens,
         "temperature": temperature, "top_p": top_p, "extra_body": extra_body, "timeout": 60.0,
     }
 

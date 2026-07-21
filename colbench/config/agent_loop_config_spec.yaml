@@ -1,0 +1,7 @@
+# Registers the SPEC-path ColBench solver agent loop (solver vs. a SPEC-conditioned frozen sim).
+# Sibling of agent_loop_config.yaml (the GT path). Wire in via:
+#   actor_rollout_ref.rollout.agent.agent_loop_config_path=colbench/config/agent_loop_config_spec.yaml
+# and select it with actor_rollout_ref.rollout.agent.default_agent_loop=colbench_spec_agent
+# (or per-sample via extra_info.agent_name=colbench_spec_agent, which preprocess_colbench_spec.py sets).
+- name: colbench_spec_agent
+  _target_: colbench.colbench_spec_agent.ColBenchSpecAgentLoop

@@ -1,0 +1,1 @@
+0 sim_code_reject aborts / 60 trajectories (sim=colbench-sim, sim_max_tries=8)

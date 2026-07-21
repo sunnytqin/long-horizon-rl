@@ -270,3 +270,129 @@ def build_sim_user_message(problem_description: str, hidden_information: str, me
 # problem_description as the first user turn -- we pass it through unwrapped.
 def build_initial_user_message(problem_description: str) -> str:
     return str(problem_description)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SPEC PATH (Phase 1) -- additive, shared by env_spec / colbench_spec_agent /
+# validate_colbench_spec so training and offline eval apply byte-identical text
+# handling. NOTHING above is modified. The spec sim conditions on a natural-language
+# spec (persona/scenario/requirements/plot), NEVER on the GT code, so a code leak is
+# structurally impossible here (no detect_code_leak / rejection sampling in this path).
+# Termination is USER-DRIVEN: the sim ends the episode with [TERMINATE]; we grade the
+# last function the solver showed. See the plan/handoff for the locked design.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# The solver's system prompt for the spec path. Unlike COLBENCH_AGENT_SYSTEM_PROMPT there is NO
+# "I WANT TO ANSWER:" marker: the solver PROPOSES by putting the complete function in a ```python
+# block (that block IS the proposal), and the USER ends the conversation when satisfied.
+COLBENCH_SPEC_AGENT_SYSTEM_PROMPT = """You are a helpful LLM agent.
+Your task is to help a human user write a personalized python function.
+1) The problem is highly personalized, so you must gather the hidden requirements and implicit constraints by asking the user questions. YOU SHOULD TRY TO ASK CLARIFICATION QUESTIONS.
+2) The user answers only briefly, in about two sentences, and cannot run or test code.
+3) When you are ready to propose a solution, output the COMPLETE python function inside a ```python code block. The user will read it and either correct you or end the conversation when they are satisfied.
+4) You may revise and show an updated ```python block as many times as needed within 10 back-and-forth rounds. There is no special submit phrase -- the user ends the conversation once their needs are met.
+5) Be as concise as possible in your messages to the user.""".strip()
+
+# The user-simulator's SYSTEM prompt for the spec path. Conditioned on the authored spec
+# (persona/scenario/requirements/plot) -- the GT code is NEVER injected. The running dialogue is
+# passed as the sim's USER message (str_dialogue_history), mirroring the GT path's split. Wording
+# is intentionally natural prose (a person could act on it), with per-mechanism bullets for WHEN
+# to terminate; tune against real rollouts in eval.
+SPEC_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time.
+
+Who you are: {who}, in {domain}. Your comfort with Python: {python_skill}. You come across as: {communication_style}.
+
+Your situation: {scenario}
+
+What you actually want: Below is the full behavior you need -- you have all of it in your head, it's what you're trying to get built. Talk about it in your own words, never as code, the way this person naturally would. If the assistant asks you something, answer ONLY what they asked -- briefly and in character -- without volunteering additional information. Never tell the assistant, or hint, that you are working from a full list of requirements: to them, you are simply a person who knows what they want. Act like a real user, letting each requirement surface naturally as the assistant's questions draw it out, rather than laying everything out at once.
+{requirements}
+
+What your job is (and isn't): Your job is to TELL the assistant what you want and to react as this person would -- it is NOT to make the code correct, and NOT to review it line by line. You never write code yourself and you never paste a function back to them, not even to fix a mistake -- you only describe things in plain words. You are not the judge of whether the code is correct; the assistant's job is to get it right from what you tell them. How much you can even tell that something looks wrong depends entirely on your Python comfort ({python_skill}): if you are not very technical, your reactions stay vague ("that doesn't look like what I meant", "the totals seem off") and you would NOT spot or name a specific line, value, or edge case; only a genuinely technical person would point precisely at what's wrong. It's completely fine to be an imperfect, ordinary user who misses bugs.
+
+The plot of this conversation: {plot}
+This plot is the one thing that isn't clear from the start -- follow it naturally. If it's something you'd only mention when asked, don't bring it up unless the assistant asks. If it's something you'd only notice once you saw their code, react to their code the way a person would -- you READ it, you never run or test it. If it's something you'd just remember, bring it up when it feels natural.
+
+When you're done: Your ultimate goal is to walk away with the function you need, so the MINIMUM bar to end the conversation is that the assistant has actually written a COMPLETE python function inside a code block. Until you have seen such a code block, you MUST NOT end the conversation -- no matter how much you have already explained. If the assistant has only asked you questions and not yet shown any code, you simply answer and keep going; you do NOT say [TERMINATE] yet.
+
+Once code is on the table, whether you're finished ALSO depends on how the plot of the conversation was set up -- play out the plot as described above first:
+- If your plot was to clarify something only when asked -- you're done once you've answered it and they've shown a new function after your answer. After that, if you are satisfied with the function, you can end with [TERMINATE]. If the assistant just went ahead and wrote a function without ever asking, that's fine too -- you had nothing to add, so once a function is on the table you can end with [TERMINATE].
+- If your plot was to correct the code when it got a detail wrong -- this is ONLY about the one specific detail your plot is about, not every possible bug and not all the other requirements. You point out that one thing in plain words (never by writing code, and only as precisely as your Python comfort allows), and you're done once you've said it and they've shown a new function after it -- or their very first version already had that detail right (nothing to correct, so you're done). You do NOT keep hunting for other problems. After that, once a complete function is on the table, you can end with [TERMINATE].
+- If your plot was to remember something and bring it up yourself -- you're done once you've played out the plot of bringing up the forgotten part and they've shown a function after that. After that, once a complete function is on the table, you can end with [TERMINATE].
+
+So only reply with [TERMINATE] when BOTH are true: (1) your plot above has been fully played out, and (2) a complete python function is on the table. Whether that function is actually correct is NOT your call and NOT a condition -- you are an ordinary user, not its judge. If either condition is missing, keep talking instead.
+
+You're an ordinary user, not a code reviewer: you don't check every line, you can't test anything, and you don't keep hunting for new problems. Once both conditions above are satisfied you're done -- even if the code isn't perfect. You might casually mention something else that looks off, but you don't have to.
+
+Keep every reply very SHORT -- usually one or two sentences, the way a person fires off a quick message. Do not explain everything at once or recite all your requirements in one go. Only use [TERMINATE] once both conditions above are met."""
+
+# The sentinel the user-simulator emits to end the conversation (bare string match).
+TERMINATE_MARKER = "[TERMINATE]"
+
+
+def build_spec_sim_messages(spec: dict, messages: list[dict]) -> tuple[str, str]:
+    """Build the spec sim's (system, user) messages for one turn.
+
+    ``spec`` carries ``persona{who,domain,python_skill,communication_style}, scenario,
+    requirements, plot``. The system message conditions the sim on that spec (NEVER the GT
+    code); the user message is the running dialogue (``str_dialogue_history``) -- the same
+    seam split as the GT path's ``build_sim_user_message``.
+    """
+    persona = spec.get("persona", {}) or {}
+    system = SPEC_SIM_SYSTEM_PROMPT.format(
+        who=persona.get("who", "a person"),
+        domain=persona.get("domain", ""),
+        python_skill=persona.get("python_skill", ""),
+        communication_style=persona.get("communication_style", ""),
+        scenario=spec.get("scenario", ""),
+        requirements=spec.get("requirements", ""),
+        plot=spec.get("plot", ""),
+    )
+    return system, str_dialogue_history(messages)
+
+
+def sim_terminated(reply: str) -> bool:
+    """True iff the (``<think>``-stripped) sim reply contains the ``[TERMINATE]`` sentinel.
+
+    Case-insensitive so a stray lowercasing by the sim still ends the episode.
+    """
+    return TERMINATE_MARKER.lower() in strip_think(reply).lower()
+
+
+def contains_code(text: str) -> bool:
+    """True iff ``text`` looks like it proposes a function (a ```python fence or a ``def`` sig).
+
+    Reuses the same signals as the leak detector's (A)/(B); here they mark the solver's OWN
+    proposed code (the grading target), not a sim leak.
+    """
+    clean = strip_think(text)
+    return bool(_PY_FENCE_RE.search(clean) or _DEF_SIGNATURE_RE.search(clean))
+
+
+# Any triple-backtick fence -- an ordinary user speaking never wraps a reply in a code block, so
+# this is the signal that the SIM slipped out of character and wrote code (```python def ... or a
+# bare ``` block). Distinct from contains_code (which also fires on a lone "def" mention in prose).
+_ANY_FENCE_RE = re.compile(r"```")
+
+
+def sim_wrote_code(reply: str) -> bool:
+    """True iff the (``<think>``-stripped) sim reply contains a fenced code block.
+
+    The spec sim is an ordinary user: it must describe things in words, never paste code. A strong
+    coder model (e.g. GPT-5) will sometimes "correct" the solver by writing the function itself,
+    which spoon-feeds structure and breaks character. We reject-sample on this signal in the spec
+    env. Keyed on a triple-backtick fence (``` / ```python) -- normal prose never contains one.
+    """
+    return bool(_ANY_FENCE_RE.search(strip_think(reply)))
+
+
+def extract_last_code(messages: list[dict]) -> str:
+    """Return the code from the most recent assistant turn that proposed a function, else ``""``.
+
+    Scans ``messages`` newest-first for an assistant turn with ``contains_code`` and returns
+    ``extract_code_answer`` of it -- the "last function the solver showed", which the spec path
+    grades on termination.
+    """
+    for m in reversed(messages):
+        if m.get("role") == "assistant" and contains_code(m.get("content", "")):
+            return extract_code_answer(strip_think(m.get("content", "")))
+    return ""

@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
-# GRPO | Qwen2.5-14B-Instruct (or Qwen3-4B-Instruct) | FSDP | multi-turn ColBench
+# GRPO | Qwen3-4B-Instruct (or Qwen2.5-14B) | FSDP | multi-turn ColBench -- SPEC path.
 #
-# Trains a SOLVER with the custom `colbench_agent` loop: the solver asks a FROZEN user
-# simulator clarification questions to extract hidden requirements, then submits a Python
-# function ("I WANT TO ANSWER:"). The submission is graded ONCE at the end for functional
-# equivalence against a hidden ground-truth function; the trajectory reward is the FRACTIONAL
-# GT pass-rate in [0,1]. Reward is produced inside the agent loop
-# (AgentLoopOutput.reward_score), so the default `naive` reward manager passes it through.
+# Sibling of run_colbench_grpo.sh for the SPEC setting. The solver talks to a FROZEN user
+# simulator that is conditioned on an authored natural-language SPEC (persona/scenario/
+# requirements/plot) instead of the hidden GT source -- so the sim can never leak the answer.
+# The solver proposes a Python function inside a ```python block (no submit marker); the USER
+# ends the conversation with [TERMINATE]. The loop grades the LAST function shown for functional
+# equivalence against a hidden ground-truth function; the trajectory reward is the FRACTIONAL GT
+# pass-rate in [0,1]. Reward is produced inside the agent loop (AgentLoopOutput.reward_score), so
+# the default `naive` reward manager passes it through.
 #
-# The user simulator is a SEPARATE frozen SGLang OpenAI server (same base model); the agent
+# Differences vs run_colbench_grpo.sh (the GT path): (1) the spec agent loop + config, (2) the
+# spec dataset, (3) the spec-path guardrails max_code_proposals + sim_max_tries instead of the
+# GT-leak knob sim_reject_max_tries. Every GRPO/PPO knob (KL=0.01, TIS, clip, rollout.n, batch
+# sizes, offload) is kept IDENTICAL to the GT run for a clean A/B.
+#
+# The user simulator is a SEPARATE frozen SGLang OpenAI server (frozen base model); the agent
 # loop reaches it over OPENAI_BASE_URL / MULTITURN_MODEL_NAME (exported by
-# colbench/entrypoint_colbench.sh). The GT function is passed ONLY to the simulator prompt --
-# it never enters the solver's trajectory. Grading reuses the codecontest exec sidecar.
+# colbench/entrypoint_colbench.sh -- unchanged for the spec path). The GT function is NEVER
+# passed to the sim prompt (only the spec is). Grading reuses the codecontest exec sidecar.
 #
-# Prereq: python colbench/preprocess_colbench.py --src_dir InfoPO/data/colbench_code \
-#           --local_dir ~/data/colbench
+# Prereq: python colbench/preprocess_colbench_spec.py --raw_parquet ... --specs_jsonl ... \
+#           --out ~/data/colbench_spec/train.parquet    (+ a test-split test_small.parquet)
 # Run from the repo root (so `colbench` and `codecontest` are importable).
 #
-# In-training validation runs on a LIGHT subsample (test_small.parquet, ~2k, written by
-# preprocess_colbench.py) -- the full 10k test.parquet is reserved for the offline eval loop
-# (colbench/validate_colbench.py). Override the val set with VAL_FILE=.../test.parquet.
+# In-training validation runs on VAL_FILE (default test_small.parquet in the spec data dir), a
+# held-out spec set. Deeper offline eval: colbench/validate_colbench_spec.py.
 #
 # Env overrides: MODEL_PATH, VAL_FILE, INFER_BACKEND(sglang|vllm), NGPUS_PER_NODE, ROLLOUT_N,
-#   MAX_ASSISTANT_TURNS, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH, MAX_RESPONSE_LENGTH,
-#   MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
+#   MAX_ASSISTANT_TURNS, MAX_CODE_PROPOSALS, SIM_MAX_TRIES, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH,
+#   MAX_RESPONSE_LENGTH, MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
 #   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD.
 
@@ -37,7 +43,8 @@ set -xeuo pipefail
 PROJECT_NAME=${PROJECT_NAME:-colbench_mt}
 EXPERIMENT_NAME=${EXPERIMENT_NAME:-local_${EXP_NAME:-debug}_$(date +%m%d_%H%M)}
 
-AGENTLOOP_CONFIG_PATH=${AGENTLOOP_CONFIG_PATH:-colbench/config/agent_loop_config.yaml}
+# SPEC path: register + default to the spec agent loop.
+AGENTLOOP_CONFIG_PATH=${AGENTLOOP_CONFIG_PATH:-colbench/config/agent_loop_config_spec.yaml}
 
 INFER_BACKEND=${INFER_BACKEND:-sglang}
 NNODES=${NNODES:-1}
@@ -48,8 +55,8 @@ NNODES=${NNODES:-1}
 NGPUS_PER_NODE=${NGPUS_PER_NODE:-6}
 
 
-# Model and dataset
-DATA_DIR=${DATA_DIR:-$HOME/data/colbench}
+# Model and dataset. SPEC path: the spec parquet(s) live under colbench_spec.
+DATA_DIR=${DATA_DIR:-$HOME/data/colbench_spec}
 MODEL_PATH=${MODEL_PATH:-Qwen/Qwen2.5-14B-Instruct}
 
 
@@ -61,7 +68,7 @@ train_batch_size=${TRAIN_BATCH_SIZE:-120}
 ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-120}
 # Budgets from InfoPO colbench_trainer.yaml + our stability finding.
 max_prompt_length=${MAX_PROMPT_LENGTH:-2048}      # initial (public) problem prompt cap
-# Episode TAIL: all solver turns + injected <=400-char user replies. total seq = prompt+this.
+# Episode TAIL: all solver turns + injected user replies. total seq = prompt+this.
 # max_model_len (total context) ~= 16384 -> response = 16384 - 2048 = 14336.
 max_response_length=${MAX_RESPONSE_LENGTH:-14336}
 # Actor TRAINING dynamic-bsz token budget per GPU. HARD FLOOR = max_prompt+max_response.
@@ -75,20 +82,22 @@ rollout_gpu_mem_util=${ROLLOUT_GPU_MEM_UTIL:-0.4}
 multi_stage_wake_up=${MULTI_STAGE_WAKE_UP:-False}
 
 
-# Multi-turn / ColBench knobs.
-max_assistant_turns=${MAX_ASSISTANT_TURNS:-10}     # total solver turns (clarify + submit)
+# Multi-turn / ColBench SPEC knobs.
+max_assistant_turns=${MAX_ASSISTANT_TURNS:-10}     # total solver turns (clarify + propose)
 max_new_tokens_per_turn=${MAX_NEW_TOKENS_PER_TURN:-1024}  # per-turn solver generation cap
 reward_time_limit=${REWARD_TIME_LIMIT:-6}          # per-case GT exec timeout (sec)
 env_step_timeout=${ENV_STEP_TIMEOUT:-180}          # hard wall on one blocking env call (sim turn or grading)
-# SET 2 gradient-masking arm (shared with codecontest): all | final_only.
+# SET 2 gradient-masking arm: all | final_only. NOTE: the spec agent loop currently REJECTS
+# final_only (the sim can [TERMINATE] after a non-code turn, so the last solver turn may not be
+# the graded code turn); leave this at 'all' until spec last-code masking lands.
 train_turns=${TRAIN_TURNS:-all}
-# User-sim rejection sampling: resample the sim turn up to N times until it leaks no code
-# (0 = off, rollout byte-identical to before; 8 to enable). Closes the exploit where the solver
-# just asks the sim to write the function. If all N samples leak, the conversation ends there
-# and the trajectory trains at reward 0 -- penalizing the turn that asked for code. Enable from
-# step 0 of a FRESH run: this is path-dependent, and retrofitting it onto a checkpoint that has
-# already learned the exploit collapses whole groups to 0.
-sim_reject_max_tries=${SIM_REJECT_MAX_TRIES:-0}
+# Spec-path guardrail: max ```python proposals before the loop force-grades the last one (default
+# 2, reduced from 3 after eval). Replaces the GT path's sim_reject_max_tries.
+max_code_proposals=${MAX_CODE_PROPOSALS:-2}
+# Sim no-code rejection sampling: an ordinary user never pastes a function, so re-query the sim up
+# to N times if its reply contains a code fence; on exhaustion the conversation aborts
+# (terminated_by "sim_code_reject") and the last shown code is graded. Default 8 (matches eval).
+sim_max_tries=${SIM_MAX_TRIES:-8}
 # Solver sampling. Defaults = the SOLVER model's recommended generation settings; match these
 # to whatever --model you train. Qwen3-4B-Instruct-2507: temp 0.7, top_p 0.8, top_k 20, min_p 0
 # (min_p is verl's default 0, not a settable rollout field). Qwen3-32B (thinking): 0.6/0.95/20.
@@ -198,12 +207,13 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.rollout.multi_turn.max_assistant_turns=${max_assistant_turns} \
    actor_rollout_ref.rollout.multi_turn.format=hermes \
    actor_rollout_ref.rollout.agent.agent_loop_config_path=${AGENTLOOP_CONFIG_PATH} \
-   actor_rollout_ref.rollout.agent.default_agent_loop=colbench_agent \
+   actor_rollout_ref.rollout.agent.default_agent_loop=colbench_spec_agent \
    actor_rollout_ref.ref.fsdp_config.param_offload=True \
    reward_model.reward_manager=naive \
    +colbench.max_new_tokens_per_turn=${max_new_tokens_per_turn} \
    +colbench.train_turns=${train_turns} \
-   +colbench.sim_reject_max_tries=${sim_reject_max_tries} \
+   +colbench.max_code_proposals=${max_code_proposals} \
+   +colbench.sim_max_tries=${sim_max_tries} \
    +colbench.reward_time_limit=${reward_time_limit} \
    +colbench.env_step_timeout=${env_step_timeout} \
    trainer.balance_batch=True \

@@ -134,3 +134,9 @@ outputs
 codecontest/launch.py
 */entrypoint*.sh
 */Dockerfile
+
+# colbench: ignore transient slurm logs and the (outdated) full-1k eval dumps;
+# the small cond30 eval outputs stay TRACKED for reference.
+colbench/slurm_out/
+colbench/selfplay/slurm_out/
+colbench/runs/spec/spec_eval_selfplay_1k_*
