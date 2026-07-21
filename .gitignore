@@ -131,7 +131,11 @@ logs
 log
 outputs
 .historycodecontest/__pycache__/
-codecontest/launch.py
+# Deploy/staging files, synced to the internal build box's xcloud_setup/ by hand
+# (they carry gs:// buckets + resource-alloc names we keep out of the repo). launch.py +
+# all entrypoints now live in verl/xcloud_setup/ (mirrors the internal layout); Dockerfiles
+# stay in colbench/ & codecontest/.
+xcloud_setup/
 */entrypoint*.sh
 */Dockerfile
 

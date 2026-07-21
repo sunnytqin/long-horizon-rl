@@ -10,7 +10,7 @@
 #
 # The user simulator is a SEPARATE frozen SGLang OpenAI server (same base model); the agent
 # loop reaches it over OPENAI_BASE_URL / MULTITURN_MODEL_NAME (exported by
-# colbench/entrypoint_colbench.sh). The GT function is passed ONLY to the simulator prompt --
+# xcloud_setup/entrypoint_colbench.sh). The GT function is passed ONLY to the simulator prompt --
 # it never enters the solver's trajectory. Grading reuses the codecontest exec sidecar.
 #
 # Prereq: python colbench/preprocess_colbench.py --src_dir InfoPO/data/colbench_code \

@@ -17,7 +17,7 @@
 #
 # The user simulator is a SEPARATE frozen SGLang OpenAI server (frozen base model); the agent
 # loop reaches it over OPENAI_BASE_URL / MULTITURN_MODEL_NAME (exported by
-# colbench/entrypoint_colbench.sh -- unchanged for the spec path). The GT function is NEVER
+# xcloud_setup/entrypoint_colbench.sh -- unchanged for the spec path). The GT function is NEVER
 # passed to the sim prompt (only the spec is). Grading reuses the codecontest exec sidecar.
 #
 # Prereq: python colbench/preprocess_colbench_spec.py --raw_parquet ... --specs_jsonl ... \
