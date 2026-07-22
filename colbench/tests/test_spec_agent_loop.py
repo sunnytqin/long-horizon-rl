@@ -164,11 +164,11 @@ def test_correct_code_then_user_terminate():
         sim_replies=["It's 10.", "Perfect, thanks! [TERMINATE]"],
     )
     out = _run(obj)
-    ef = out.extra_fields
-    assert ef["terminated_by"] == "user"
+    rei = out.extra_fields["reward_extra_info"]
+    assert rei["term_user"] == 1.0
     assert out.reward_score == 1.0
-    assert ef["showed_code"] is True
-    assert ef["code_proposals"] == 1
+    assert rei["showed_code"] == 1.0
+    assert rei["code_proposals"] == 1.0
     # Mask: solver turns are 1, the injected sim turn is 0, and at least one of each exists.
     assert any(m == 1 for m in out.response_mask)
     assert any(m == 0 for m in out.response_mask)
@@ -182,8 +182,9 @@ def test_code_cap_forces_grade():
         max_code_proposals=2,
     )
     out = _run(obj)
-    assert out.extra_fields["terminated_by"] == "code_cap"
-    assert out.extra_fields["code_proposals"] == 2
+    rei = out.extra_fields["reward_extra_info"]
+    assert rei["term_code_cap"] == 1.0
+    assert rei["code_proposals"] == 2.0
     assert out.reward_score == 0.5
 
 
@@ -193,8 +194,9 @@ def test_user_terminate_without_code_is_no_code_zero():
         sim_replies=["I think you've got it. [TERMINATE]"],
     )
     out = _run(obj)
-    assert out.extra_fields["terminated_by"] == "no_code"
-    assert out.extra_fields["showed_code"] is False
+    rei = out.extra_fields["reward_extra_info"]
+    assert rei["term_no_code"] == 1.0
+    assert rei["showed_code"] == 0.0
     assert out.reward_score == 0.0
 
 
@@ -206,8 +208,9 @@ def test_sim_code_reject_exhaustion_aborts():
         sim_max_tries=3,
     )
     out = _run(obj)
-    assert out.extra_fields["terminated_by"] == "sim_code_reject"
-    assert out.extra_fields["sim_code_rejected"] == 3
+    rei = out.extra_fields["reward_extra_info"]
+    assert rei["term_sim_code_reject"] == 1.0
+    assert rei["sim_code_rejected"] == 3.0
     assert out.reward_score == 1.0  # GT was shown before the abort
 
 

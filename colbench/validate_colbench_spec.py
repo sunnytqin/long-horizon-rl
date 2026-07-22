@@ -127,6 +127,10 @@ class OpenAISolver:
     def __init__(self, base_url, model, temperature, top_p, top_k, max_new_tokens,
                  enable_thinking, concurrency):
         from colbench.selfplay.llm_client import ChatEndpoint
+        # NOTE: vendor="vllm" here is the ChatEndpoint SAMPLING DIALECT (pack top_k/min_p/
+        # enable_thinking into extra_body), NOT an engine choice -- SGLang accepts the same
+        # extra_body. It is unrelated to --sim_backend, and only used by the openai-SOLVER path
+        # (FASRC eyeball); the container solver is an offline sgl.Engine and never builds this.
         self._ep = ChatEndpoint(
             base_url=base_url, model=model, temperature=temperature, top_p=top_p, top_k=top_k,
             max_tokens=max_new_tokens, enable_thinking=enable_thinking, vendor="vllm",
@@ -523,12 +527,17 @@ def main():
     ap.add_argument("--dtype", default="bfloat16")
     ap.add_argument("--trust_remote_code", action="store_true")
     # ── Frozen user-simulator backend ────────────────────────────────────────
-    # 'vllm': the sim hits OPENAI_BASE_URL/MULTITURN_MODEL_NAME (the local Qwen server; in openai
-    #   solver mode that's the SAME server as the solver -- the default self-play setup).
-    # 'openai': the sim hits a REAL OpenAI endpoint (--sim_base_url/--sim_model, OPENAI_API_KEY),
-    #   DECOUPLED from the solver -> Qwen solver vs GPT sim comparison. No vLLM sampling extras sent.
-    ap.add_argument("--sim_backend", choices=["vllm", "openai"], default="vllm",
-                    help="Frozen user-simulator backend: 'vllm' (local server) or 'openai' (hosted GPT).")
+    # 'local': the sim hits OPENAI_BASE_URL/MULTITURN_MODEL_NAME -- a LOCALLY-served,
+    #   OpenAI-compatible endpoint. That server is SGLang inside the VERL container (the frozen sim
+    #   the entrypoint launches) and vLLM in the FASRC slurm harness; the transport is identical, so
+    #   the name describes the transport, NOT the engine. In openai-solver mode it is the SAME
+    #   server as the solver -- the self-play setup. ('vllm' is accepted as a legacy alias.)
+    # 'openai': the sim hits a REAL hosted OpenAI endpoint (--sim_base_url/--sim_model,
+    #   OPENAI_API_KEY), DECOUPLED from the solver -> Qwen solver vs GPT sim comparison.
+    ap.add_argument("--sim_backend", choices=["local", "vllm", "openai"], default="local",
+                    help="Frozen user-simulator backend: 'local' (a locally-served "
+                         "OpenAI-compatible server -- SGLang in the container, vLLM on FASRC) or "
+                         "'openai' (hosted GPT). 'vllm' is a legacy alias for 'local'.")
     ap.add_argument("--sim_model", default=os.environ.get("SIM_OPENAI_MODEL", "gpt-5.4-mini"),
                     help="Model name for --sim_backend openai (e.g. gpt-5.4-mini, gpt-4o-mini).")
     ap.add_argument("--sim_base_url", default=os.environ.get("SIM_OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -540,8 +549,11 @@ def main():
                          "conversation is aborted (terminated_by 'sim_code_reject') for inspection.")
     ap.add_argument("--sim_max_tokens", type=int, default=int(os.environ.get("SIM_MAX_TOKENS", "256")),
                     help="Generation-time token bound on each user (sim) turn. Replaces the old "
-                         "post-hoc character truncation; the vllm backend reads SIM_MAX_TOKENS too.")
+                         "post-hoc character truncation; the local backend reads SIM_MAX_TOKENS too.")
     args = ap.parse_args()
+    # Normalize the legacy 'vllm' alias so downstream checks + the summary report the clear name.
+    if args.sim_backend == "vllm":
+        args.sim_backend = "local"
 
     if not os.environ.get("CODECONTEST_EXEC_URL") and os.environ.get("CODECONTEST_ALLOW_INPROCESS") != "1":
         raise SystemExit("No code-exec backend: set CODECONTEST_EXEC_URL or CODECONTEST_ALLOW_INPROCESS=1.")
@@ -581,8 +593,8 @@ def main():
             base_url=args.sim_base_url, model=args.sim_model, api_key=api_key,
             temperature=args.sim_temperature, top_p=args.sim_top_p, max_tokens=args.sim_max_tokens,
         )
-    # The vllm sim backend (env.openai_sim_backend) reads SIM_MAX_TOKENS from the env; mirror the
-    # CLI value there so both backends honor the same bound.
+    # The 'local' sim backend (env.openai_sim_backend) reads SIM_MAX_TOKENS from the env; mirror
+    # the CLI value there so both backends honor the same bound.
     os.environ["SIM_MAX_TOKENS"] = str(args.sim_max_tokens)
 
     temps = args.temperatures if args.temperatures else [args.temperature]

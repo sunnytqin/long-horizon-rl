@@ -303,19 +303,28 @@ class ColBenchAgentLoop(AgentLoopBase):
                 "tool_rewards": [],
                 "min_global_steps": min_global_steps,
                 "max_global_steps": max_global_steps,
-                "answered": answered,
-                "answered_at_turn": answered_at_turn,
-                "num_assistant_turns": assistant_turns,
+                # `overflow` is consumed at top-level by verl core (-> val-aux/solve/overflow_rate).
                 "overflow": overflow,
-                "sim_failed": sim_failed,
-                "sim_failure_turn": sim_failure_turn,
-                "sim_reject_tries": sim_reject_tries,
-                "pass_rate": reward,
-                "all_pass": bool(result.get("all_pass", False)),
-                "num_test_cases": int(result.get("n", 0)),
-                "solver_resp_len_mean": (
-                    sum(solver_turn_lengths) / len(solver_turn_lengths) if solver_turn_lengths else 0.0
-                ),
+                # Outcome diagnostics. verl does NOT log arbitrary top-level extra_fields keys --
+                # compute_data_metrics only aggregates a hardcoded whitelist. The one supported
+                # channel is the nested `reward_extra_info` dict: verl means every key here into
+                # val-core/val-aux metrics (per test_freq) and per-step rollout_data_dir dumps.
+                # So every scalar we want on the dashboards MUST live here. Keys must be identical
+                # across all rollouts (verl reads the key set from the first sample).
+                "reward_extra_info": {
+                    "answered": float(answered),
+                    "answered_at_turn": float(answered_at_turn),
+                    "sim_failed": float(sim_failed),
+                    "sim_failure_turn": float(sim_failure_turn),
+                    "sim_reject_tries": float(sim_reject_tries),
+                    "pass_rate": float(reward),
+                    "all_pass": float(bool(result.get("all_pass", False))),
+                    "num_test_cases": float(result.get("n", 0)),
+                    "num_assistant_turns": float(assistant_turns),
+                    "solver_resp_len_mean": (
+                        sum(solver_turn_lengths) / len(solver_turn_lengths) if solver_turn_lengths else 0.0
+                    ),
+                },
             },
         )
         return output

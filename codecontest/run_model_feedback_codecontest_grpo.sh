@@ -52,6 +52,8 @@ ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-16384}
 rollout_n=${ROLLOUT_N:-16}
 rollout_tp=${ROLLOUT_TP:-2}                      # SGLang inference TP (helps ROLLOUT-phase GPU mem)
 rollout_gpu_mem_util=${ROLLOUT_GPU_MEM_UTIL:-0.4}
+# INERT in the vendored verl: rollout.multi_stage_wake_up is a config dataclass field that is read
+# NOWHERE, so neither value does anything. Not an OOM lever. (See run_oracle_codecontest_grpo.sh.)
 multi_stage_wake_up=${MULTI_STAGE_WAKE_UP:-False}  # SGLang: stage engine wake-up to cut rollout->train peak mem
 
 

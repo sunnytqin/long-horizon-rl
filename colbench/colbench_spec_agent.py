@@ -341,20 +341,33 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 "tool_rewards": [],
                 "min_global_steps": min_global_steps,
                 "max_global_steps": max_global_steps,
-                "num_assistant_turns": assistant_turns,
+                # `overflow` is consumed at top-level by verl core (-> val-aux/solve/overflow_rate).
                 "overflow": overflow,
-                # Spec-path outcome fields (drop the GT path's sim_failed/sim_reject_tries).
-                "terminated_by": terminated_by,
-                "code_proposals": code_proposals,
-                "showed_code": showed_code,
-                "sim_code_rejected": sim_code_rejected,
-                "first_code_pass_rate": first_code_pass_rate,
-                "pass_rate": reward,
-                "all_pass": bool(result.get("all_pass", False)),
-                "num_test_cases": int(result.get("n", 0)),
-                "solver_resp_len_mean": (
-                    sum(solver_turn_lengths) / len(solver_turn_lengths) if solver_turn_lengths else 0.0
-                ),
+                # Outcome diagnostics. verl does NOT log arbitrary top-level extra_fields keys --
+                # compute_data_metrics only aggregates a hardcoded whitelist. The one supported
+                # channel is the nested `reward_extra_info` dict: verl means every key here into
+                # val-core/val-aux metrics (per test_freq) and per-step rollout_data_dir dumps.
+                # So every scalar we want on the dashboards MUST live here. terminated_by is a
+                # string, so it is one-hot expanded into 0/1 scalars per category. Keys must be
+                # identical across all rollouts (verl reads the key set from the first sample).
+                "reward_extra_info": {
+                    "showed_code": float(showed_code),
+                    "code_proposals": float(code_proposals),
+                    "sim_code_rejected": float(sim_code_rejected),
+                    "first_code_pass_rate": float(first_code_pass_rate),
+                    "pass_rate": float(reward),
+                    "all_pass": float(bool(result.get("all_pass", False))),
+                    "num_test_cases": float(result.get("n", 0)),
+                    "num_assistant_turns": float(assistant_turns),
+                    "solver_resp_len_mean": (
+                        sum(solver_turn_lengths) / len(solver_turn_lengths) if solver_turn_lengths else 0.0
+                    ),
+                    "term_user": float(terminated_by == "user"),
+                    "term_no_code": float(terminated_by == "no_code"),
+                    "term_turn_cap": float(terminated_by == "turn_cap"),
+                    "term_code_cap": float(terminated_by == "code_cap"),
+                    "term_sim_code_reject": float(terminated_by == "sim_code_reject"),
+                },
             },
         )
         return output

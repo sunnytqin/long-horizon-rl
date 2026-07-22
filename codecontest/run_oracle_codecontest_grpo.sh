@@ -70,8 +70,11 @@ rollout_tp=${ROLLOUT_TP:-2}                      # SGLang inference TP (helps RO
 # "Connection closed by peer" -> raylet SYSTEM_ERROR. If you hit that again, drop
 # this further (0.45) and/or set PARAM_OFFLOAD=True (below).
 rollout_gpu_mem_util=${ROLLOUT_GPU_MEM_UTIL:-0.4}
-# NOTE: default OFF -- enabling this crashed SGLangHttpServer during launch_servers on this
-# container. Re-enable (MULTI_STAGE_WAKE_UP=True) only if your SGLang build supports it.
+# NOTE: default OFF -- enabling this crashed SGLangHttpServer during launch_servers on an EARLIER
+# container. It is now INERT: in the vendored verl, rollout.multi_stage_wake_up is only a config
+# dataclass field (workers/config/rollout.py) and is read NOWHERE, so neither value does anything.
+# Do NOT reach for it as an OOM lever. The staged weights-then-kv_cache resume it sounds like is
+# unconditional, inside engine_workers.py::update_weights, gated on rollout.free_cache_engine.
 multi_stage_wake_up=${MULTI_STAGE_WAKE_UP:-False}  # SGLang: stage engine wake-up to cut rollout->train peak mem
 
 
@@ -172,7 +175,8 @@ clip_ratio_high=${CLIP_RATIO_HIGH:-0.28}
 #   - ULYSSES_SP=2 : launched + trained FINE (it did NOT break the pipeline) but did NOT help the
 #       OOM -- it shards ATTENTION activations, not the logits tensor. Only useful if you ALSO
 #       lower the per-GPU token budget. Left at 1.
-#   - MULTI_STAGE_WAKE_UP=True : crashed SGLangHttpServer during launch_servers on this container.
+#   - MULTI_STAGE_WAKE_UP=True : crashed SGLangHttpServer during launch_servers on an EARLIER
+#       container; in the vendored verl it is now INERT (read nowhere) -- not a lever either way.
 #   - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True : crashes SGLang's CUDA-graph capture at
 #       launch (would need rollout.enforce_eager=True). UNSET by default for that reason.
 # ===================================================================================================

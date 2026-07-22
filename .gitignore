@@ -144,3 +144,9 @@ xcloud_setup/
 colbench/slurm_out/
 colbench/selfplay/slurm_out/
 colbench/runs/spec/spec_eval_selfplay_1k_*
+
+# Empty SQLite files dropped in the repo root by in-process grading of the ColBench SQL
+# problems (the GT/solver code does sqlite3.connect("<name>.db") relative to the CWD).
+# Pure execution side-effects, always 0 bytes -- never source.
+*.db
+*.sqlite
