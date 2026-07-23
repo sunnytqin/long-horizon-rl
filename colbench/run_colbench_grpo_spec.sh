@@ -124,6 +124,21 @@ actor_lr=${ACTOR_LR:-1e-6}
 # KL = 0.01: the proven stability fix for this multi-turn stack (entropy explosion, not a
 # rollout mismatch -- see project-codecontest-rl-stability-plan). Do NOT drop to 0.
 kl_loss_coef=${KL_LOSS_COEF:-0.01}
+# PPO loss aggregation. Default 'token-mean' (verl default) weights the loss by tokens, so a few
+# very long (degenerate/gibberish) responses dominate the gradient -- a suspected amplifier of the
+# ~step-300 length-explosion collapse. 'seq-mean-token-mean' averages tokens WITHIN a trajectory
+# then means OVER trajectories, so each trajectory contributes equally regardless of length
+# (Intervention 1). Valid: token-mean | seq-mean-token-sum | seq-mean-token-mean | seq-mean-token-sum-norm.
+loss_agg_mode=${LOSS_AGG_MODE:-token-mean}
+# Length penalty (Intervention 1.5; OFF by default so Int-1 = no reward change). When
+# length_penalty_coef>0 the agent loop subtracts coef*max(0,(solver_tokens-soft_cap)/soft_cap)
+# (clipped to [0,1]) from the trajectory reward -> discourages runaway-length degeneration.
+# solver_tokens = total tokens the SOLVER generated across turns. Set e.g. 0.1 / 4096 for Int 1.5.
+length_penalty_coef=${LENGTH_PENALTY_COEF:-0.0}
+# Soft cap in SOLVER tokens. Healthy trajectories are ~545 solver tokens (eval), so 2048 (~4x)
+# leaves normal runs untouched and only bites the multi-thousand-token gibberish walls. Tune per
+# the eval length distribution.
+length_soft_cap=${LENGTH_SOFT_CAP:-2048}
 total_epochs=${TOTAL_EPOCHS:-15}
 save_freq=${SAVE_FREQ:-20}
 test_freq=${TEST_FREQ:-5}
@@ -197,6 +212,7 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.actor.clip_ratio_high=${clip_ratio_high} \
    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
    actor_rollout_ref.actor.entropy_coeff=0 \
+   actor_rollout_ref.actor.loss_agg_mode=${loss_agg_mode} \
    actor_rollout_ref.rollout.temperature=${rollout_temp} \
    actor_rollout_ref.rollout.top_p=${rollout_top_p} \
    actor_rollout_ref.rollout.top_k=${rollout_top_k} \
@@ -225,6 +241,8 @@ python3 -m verl.trainer.main_ppo \
    +colbench.sim_max_tries=${sim_max_tries} \
    +colbench.reward_time_limit=${reward_time_limit} \
    +colbench.env_step_timeout=${env_step_timeout} \
+   +colbench.length_penalty_coef=${length_penalty_coef} \
+   +colbench.length_soft_cap=${length_soft_cap} \
    trainer.balance_batch=True \
    trainer.logger='["console","tensorboard"]' \
    trainer.project_name=${PROJECT_NAME} \

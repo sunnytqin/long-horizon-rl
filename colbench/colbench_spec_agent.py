@@ -108,6 +108,12 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 "sim can [TERMINATE] after a non-code turn, so the last solver turn may not be the "
                 "graded code turn. Use 'all', or add last-code-turn masking first."
             )
+        # Length penalty (Intervention 1.5; OFF by default -> Int-1 leaves reward untouched). When
+        # length_penalty_coef>0, subtract coef * clip((solver_tokens - soft_cap)/soft_cap, 0, 1)
+        # from the trajectory reward. solver_tokens = total tokens the SOLVER generated across turns
+        # (sum of the response-mask=1 spans). Targets the ~step-300 runaway-length degeneration.
+        self.length_penalty_coef = float(cc.get("length_penalty_coef", 0.0) or 0.0)
+        self.length_soft_cap = float(cc.get("length_soft_cap", 2048.0) or 2048.0)
         # Guardrail: max ```python proposals before the loop force-grades the last one (default 2,
         # reduced from 3 after eval). New spec-path knob.
         self.max_code_proposals = int(cc.get("max_code_proposals", 2) or 2)
@@ -317,6 +323,18 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
             else:
                 first_code_pass_rate = reward
 
+        # Intervention 1.5: length penalty on the TRAJECTORY reward (no-op when coef==0, i.e. Int-1).
+        # pass_rate keeps the raw graded quality (for the pass_rate metric); reward_score is the
+        # penalized training signal. solver_tokens = total SOLVER-generated tokens (response_mask=1
+        # spans, before the train_turns mask). Penalty = coef*clip((tok-cap)/cap, 0, 1).
+        pass_rate = reward
+        solver_tokens = sum(solver_turn_lengths)
+        length_penalty = 0.0
+        if self.length_penalty_coef > 0.0 and self.length_soft_cap > 0.0:
+            over = (solver_tokens - self.length_soft_cap) / self.length_soft_cap
+            length_penalty = self.length_penalty_coef * max(0.0, min(1.0, over))
+            reward = reward - length_penalty
+
         # SET 2: restrict the loss to the selected solver turns. Only "all" reaches here (the
         # __init__ guard rejects "final_only" on the spec path), so this is a no-op today; kept for
         # parity with the GT loop and to pick up spec-aware final_only masking when it lands.
@@ -355,7 +373,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                     "code_proposals": float(code_proposals),
                     "sim_code_rejected": float(sim_code_rejected),
                     "first_code_pass_rate": float(first_code_pass_rate),
-                    "pass_rate": float(reward),
+                    "pass_rate": float(pass_rate),
+                    "length_penalty": float(length_penalty),
+                    "solver_tokens": float(solver_tokens),
                     "all_pass": float(bool(result.get("all_pass", False))),
                     "num_test_cases": float(result.get("n", 0)),
                     "num_assistant_turns": float(assistant_turns),

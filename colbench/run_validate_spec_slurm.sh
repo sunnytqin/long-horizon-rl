@@ -60,11 +60,13 @@ export SIM_TOP_P=${SIM_TOP_P:-0.8}
 export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-256}
 
 # ── Frozen user-simulator backend (comparison study) ─────────────────────────
-# SIM_BACKEND=vllm  (default): sim is the SAME local Qwen server as the solver (self-play).
+# SIM_BACKEND=local (default): sim is the SAME local Qwen server as the solver (self-play). Here on
+#   FASRC that local server is vLLM; the container serves SGLang instead -- same transport, so the
+#   label names the transport, not the engine. ('vllm' still works as a legacy alias.)
 # SIM_BACKEND=openai        : sim is a hosted GPT (SIM_OPENAI_MODEL); SOLVER stays on local Qwen.
 #   Needs OPENAI_API_KEY -- read from GEN_API_KEY_FILE (~/.openai_key, same as spec gen).
 #   Example: SIM_BACKEND=openai SIM_OPENAI_MODEL=gpt-5.4-mini sbatch run_validate_spec_slurm.sh
-SIM_BACKEND=${SIM_BACKEND:-vllm}
+SIM_BACKEND=${SIM_BACKEND:-local}
 SIM_OPENAI_MODEL=${SIM_OPENAI_MODEL:-gpt-5.4-mini}
 SIM_OPENAI_BASE_URL=${SIM_OPENAI_BASE_URL:-https://api.openai.com/v1}
 GEN_API_KEY_FILE=${GEN_API_KEY_FILE:-$HOME/.openai_key}
