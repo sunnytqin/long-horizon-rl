@@ -93,12 +93,14 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         # Per-case exec timeout for the final GT grading.
         self.reward_time_limit = float(cc.get("reward_time_limit", 6.0))
         # SET 2 gradient-masking arm (shared with codecontest). Default "all" (train every solver
-        # turn) is the first-run setting and a no-op in apply_train_turns_mask. "final_only" is NOT
-        # yet supported on the spec path: unlike the GT path (where the loop breaks on submit so the
-        # last solver turn IS the graded one), the spec sim can [TERMINATE] after a NON-code
-        # clarification turn, so the last solver turn may not be the graded code turn -- masking to
-        # it would train the wrong tokens. Hard-error rather than silently mis-mask; add a
-        # last-code-turn keep_idx to codecontest.masking.apply_train_turns_mask before enabling it.
+        # turn) is the first-run setting and a no-op in apply_train_turns_mask. "upto_last_code"
+        # (Intervention 2) keeps turns [0 .. last-code-turn] and zeros the trailing post-code turns;
+        # it is the spec-aware mode that consumes the last-code-turn index the loop records.
+        # "final_only" (keep ONLY the last solver turn) is still NOT supported on the spec path:
+        # unlike the GT path (where the loop breaks on submit so the last solver turn IS the graded
+        # one), the spec sim can [TERMINATE] after a NON-code clarification turn, so the last solver
+        # turn may not be the graded code turn -- masking to it would train the wrong tokens. Hard-
+        # error rather than silently mis-mask; use "upto_last_code" instead.
         self.train_turns = cc.get("train_turns", "all")
         if self.train_turns not in TRAIN_TURNS_MODES:
             raise ValueError(f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}")
@@ -171,6 +173,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         code_proposals = 0
         showed_code = False
         last_code = ""
+        # Solver-turn ordinal of the last code proposal (index into solver_turn_spans). Stays
+        # None until the solver shows code; consumed by the "upto_last_code" gradient mask.
+        last_code_turn_idx = None
         first_code = ""
         sim_code_rejected = 0
         terminated_by = None
@@ -233,6 +238,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
             if templates.contains_code(assistant_text):
                 showed_code = True
                 last_code = templates.extract_last_code(sim_dialogue)
+                # This turn's span was just appended above, so its ordinal is len-1. The LAST
+                # time this fires is the turn extract_last_code grades -> kept span == graded code.
+                last_code_turn_idx = len(solver_turn_spans) - 1
                 code_proposals += 1
                 if not first_code:
                     first_code = last_code
@@ -335,10 +343,13 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
             length_penalty = self.length_penalty_coef * max(0.0, min(1.0, over))
             reward = reward - length_penalty
 
-        # SET 2: restrict the loss to the selected solver turns. Only "all" reaches here (the
-        # __init__ guard rejects "final_only" on the spec path), so this is a no-op today; kept for
-        # parity with the GT loop and to pick up spec-aware final_only masking when it lands.
-        apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
+        # SET 2 / Intervention 2: restrict the loss to the selected solver turns. "all" is a no-op;
+        # "upto_last_code" keeps [0 .. last_code_turn_idx] and zeros the trailing post-code turns
+        # (removes the reward-irrelevant post-code ramble free-ride). "final_only" is still rejected
+        # by the __init__ guard on the spec path.
+        apply_train_turns_mask(
+            response_mask, solver_turn_spans, self.train_turns, last_code_idx=last_code_turn_idx
+        )
 
         if _DEBUG_CONVO and index < _DEBUG_CONVO_N:
             self._dump_conversation(index, problem_text, spec, sim_dialogue, last_code, reward, terminated_by, result)

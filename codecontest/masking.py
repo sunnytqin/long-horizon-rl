@@ -30,6 +30,21 @@ Modes (see project-codecontest-rl-stability-plan, SET 2):
                actually did -- clean credit assignment, no reinforcement of failed
                intermediate attempts. Still teaches refinement (the final turn is
                conditioned on all prior feedback).
+  "upto_last_code" (ColBench spec path, Intervention 2) train turns [0 .. last_code_idx]
+               and ZERO every turn AFTER the last code proposal. `last_code_idx` is the
+               solver-turn ordinal that produced the graded code (passed by the caller).
+               Motivation: on the spec path the frozen sim can keep talking after the
+               solver's final code, and the solver learned to emit reward-irrelevant
+               trailing prose (capitulation / gibberish) that still soaked up the positive
+               trajectory advantage -- a "free ride" that drove the ~step-300 collapse.
+               Dropping post-code turns removes that pathway while KEEPING clarification
+               turns (the ColBench skill) in the gradient. If last_code_idx is None (no
+               code was ever shown) this falls back to "all" so the negative advantage on a
+               no-code ramble is preserved. NOTE: turns 0..last_code_idx still include any
+               EARLIER (failed) code attempt, which under the flat trajectory reward gets
+               the same advantage sign as the final code -- the inter-attempt credit
+               confound. That is deliberately OUT OF SCOPE here (Int 2 targets trailing
+               ramble only); see the FUTURE note below on shaped between-attempt credit.
 
 DROPPED -- "refinement_only" (mask turn 0, train turns 1..N): removed on purpose. Under
 the FLAT trajectory outcome reward the single advantage is broadcast to every trained
@@ -42,12 +57,19 @@ FUTURE -- a "final_refinement" hybrid could get BOTH clean credit and front-load
 suppression: train only the final turn, but zero-gradient the whole trajectory when
 solved_at_turn==0 (turn-0 solves stay in the batch for the GRPO group baseline but
 contribute no gradient). Consider once the final_only vs all comparison is in.
+
+FUTURE -- shaped between-attempt credit (the "upto_last_code" residual, deferred): under
+the flat trajectory reward, when a trajectory has multiple code attempts every kept
+attempt gets the same advantage sign, so a failed first attempt that the solver later
+FIXED still receives positive credit. A per-attempt shaped reward (e.g. credit a code
+turn only when it improves pass-rate over the previous attempt, wrong->right) would fix
+this. Requires a reward rewrite (per-turn signal), so it is out of scope for Int 2.
 """
 
-TRAIN_TURNS_MODES = ("all", "final_only")
+TRAIN_TURNS_MODES = ("all", "final_only", "upto_last_code")
 
 
-def apply_train_turns_mask(response_mask, solver_spans, mode):
+def apply_train_turns_mask(response_mask, solver_spans, mode, last_code_idx=None):
     """Zero out the solver-turn spans that `mode` excludes from training, IN PLACE.
 
     Args:
@@ -55,11 +77,24 @@ def apply_train_turns_mask(response_mask, solver_spans, mode):
             turns 0). Mutated in place.
         solver_spans: list of (start, end) half-open index ranges into
             `response_mask`, one per solver turn, in emission order.
-        mode: one of TRAIN_TURNS_MODES -- "all" (no-op) or "final_only".
+        mode: one of TRAIN_TURNS_MODES -- "all" (no-op), "final_only", or "upto_last_code".
+        last_code_idx: for "upto_last_code" only, the index into `solver_spans` of the
+            solver turn that produced the graded code. None => no code shown => fall back
+            to "all" (keep everything). Ignored by the other modes.
     """
     if mode not in TRAIN_TURNS_MODES:
         raise ValueError(f"train_turns must be one of {TRAIN_TURNS_MODES}, got {mode!r}")
     if mode == "all" or not solver_spans:
+        return
+    if mode == "upto_last_code":
+        # Keep [0 .. last_code_idx], zero every turn AFTER the last code proposal. No code
+        # shown (idx None) -> keep all, so a no-code ramble keeps its negative advantage.
+        if last_code_idx is None:
+            return
+        for i, (start, end) in enumerate(solver_spans):
+            if i > last_code_idx:
+                for j in range(start, end):
+                    response_mask[j] = 0
         return
     # final_only: keep only the last solver turn.
     keep = {len(solver_spans) - 1}

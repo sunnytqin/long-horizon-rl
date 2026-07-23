@@ -225,3 +225,32 @@ def test_all_turns_mask_keeps_every_solver_turn():
     # Two solver turns worth of 1s plus one sim turn of 0s.
     assert out.response_mask.count(1) == len(("What's the cutoff?" + _code_turn(GT)).encode("utf-8"))
     assert out.response_mask.count(0) == len("It's 10.".encode("utf-8"))
+
+
+def test_upto_last_code_zeros_trailing_post_code_turn():
+    # Solver: clarify -> code(GT) -> trailing ramble; sim keeps it going, then [TERMINATE].
+    # 'upto_last_code' must KEEP the clarify + code turns (mask=1) and ZERO the trailing ramble.
+    clarify, code, ramble = "What's the cutoff?", _code_turn(GT), "You're absolutely right, thanks!"
+    obj = _make_loop(
+        solver_turns=[clarify, code, ramble],
+        sim_replies=["It's 10.", "Looks good, anything else?", "Perfect. [TERMINATE]"],
+        train_turns="upto_last_code",
+    )
+    out = _run(obj)
+    # Kept solver 1s == clarify + code bytes; the trailing ramble turn is fully zeroed.
+    assert out.response_mask.count(1) == len((clarify + code).encode("utf-8"))
+    # Sanity: the graded reward is unaffected by masking (GT was the last code shown).
+    assert out.reward_score == 1.0
+
+
+def test_upto_last_code_no_code_keeps_all():
+    # Never shows code -> last_code_idx is None -> fall back to 'all' (keep the solver span),
+    # preserving the negative advantage on a no-code ramble.
+    obj = _make_loop(
+        solver_turns=["Tell me more?"],
+        sim_replies=["I think you've got it. [TERMINATE]"],
+        train_turns="upto_last_code",
+    )
+    out = _run(obj)
+    assert out.extra_fields["reward_extra_info"]["term_no_code"] == 1.0
+    assert out.response_mask.count(1) == len("Tell me more?".encode("utf-8"))
