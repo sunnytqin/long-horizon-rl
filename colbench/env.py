@@ -103,7 +103,11 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
     base_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:8000/v1")
     model = os.environ.get("MULTITURN_MODEL_NAME", "")
     api_key = os.environ.get("OPENAI_API_KEY", "EMPTY")
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # max_retries=0: the SDK otherwise adds its OWN exponentially-backed-off retries (default 2)
+    # on top of our manual loop below, so a slow/busy sim could fan a single call out to ~9 requests
+    # and stack timeouts into minutes. Keep our loop the SINGLE source of retry behavior.
+    client = OpenAI(api_key=api_key, base_url=base_url,
+                    max_retries=int(os.environ.get("SIM_MAX_RETRIES", "0") or "0"))
 
     messages = [
         {"role": "system", "content": system_content},
@@ -119,9 +123,15 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
     # path sets it small so a brief human-like reply is not chopped post-hoc (it replaces the old
     # HUMAN_RESPONSE_CHARACTER_LIMIT slice, which truncated mid-sentence).
     sim_max_tokens = int(os.environ.get("SIM_MAX_TOKENS", "4096") or "4096")
+    # Per-request timeout to the sim server. Default 180s (was a hardcoded 60s): a large or busy
+    # frozen sim -- especially a big REMOTE model under bursty rollout concurrency where the sim is
+    # slower than the assistant rollouts -- has long tail latency, and a timeout here does not just
+    # slow the step, it POISONS the turn with the "No response." fallback below. Prefer a slow turn
+    # over a poisoned one. SIM_TIMEOUT overrides (bump higher for a very large/saturated sim).
+    sim_timeout = float(os.environ.get("SIM_TIMEOUT", "180") or "180")
     params = {
         "model": model, "messages": messages, "max_tokens": sim_max_tokens,
-        "temperature": temperature, "top_p": top_p, "extra_body": extra_body, "timeout": 60.0,
+        "temperature": temperature, "top_p": top_p, "extra_body": extra_body, "timeout": sim_timeout,
     }
 
     for _ in range(3):
