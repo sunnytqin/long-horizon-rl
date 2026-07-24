@@ -183,6 +183,7 @@ fi
 python3 -m verl.trainer.main_ppo \
    ${chat_template_args[@]+"${chat_template_args[@]}"} \
    algorithm.adv_estimator=grpo \
+   algorithm.norm_adv_by_std_in_grpo=False \
    algorithm.use_kl_in_reward=False \
    algorithm.rollout_correction.rollout_is=${rollout_is} \
    algorithm.rollout_correction.rollout_is_threshold=${rollout_is_threshold} \

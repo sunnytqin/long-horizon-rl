@@ -166,6 +166,23 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         logger.warning("Response mask is all False, returning default return metrics")
         returns_mean = returns_max = returns_min = float("nan")
 
+    # ── Per-group (per-prompt) reward-variance metrics (GRPO saturation signal) ──
+    # Surfaces the within-group reward std that compute_grpo_outcome_advantage
+    # consumes then discards (id2std). As the policy saturates a prompt's group its
+    # std -> 0; a rising zero_frac / falling mean std is the upstream saturation
+    # trend to compare against actor/entropy + grad_norm at the collapse cliff.
+    # Uses ddof=1 to match torch.std in the advantage estimator.
+    group_reward_std_mean = float("nan")
+    group_reward_std_zero_frac = float("nan")
+    if "uid" in batch.non_tensor_batch:
+        id2rewards = defaultdict(list)
+        for r, u in zip(sequence_reward.tolist(), batch.non_tensor_batch["uid"]):
+            id2rewards[u].append(r)
+        group_stds = [float(np.std(v, ddof=1)) for v in id2rewards.values() if len(v) > 1]
+        if group_stds:
+            group_reward_std_mean = float(np.mean(group_stds))
+            group_reward_std_zero_frac = float(np.mean([s < 1e-6 for s in group_stds]))
+
     # Aborted samples and non-aborted response length statistics
     # response_length_non_aborted/*: statistics computed on non-aborted samples only
     aborted_ratio = torch.mean(aborted_mask.float()).detach().item()
@@ -224,6 +241,9 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "critic/advantages/mean": adv_mean,
         "critic/advantages/max": adv_max,
         "critic/advantages/min": adv_min,
+        # per-group reward variance (GRPO saturation signal)
+        "critic/group_reward_std/mean": group_reward_std_mean,
+        "critic/group_reward_std/zero_frac": group_reward_std_zero_frac,
         # returns
         "critic/returns/mean": returns_mean,
         "critic/returns/max": returns_max,
