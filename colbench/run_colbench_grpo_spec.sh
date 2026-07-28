@@ -91,6 +91,13 @@ env_step_timeout=${ENV_STEP_TIMEOUT:-180}          # hard wall on one blocking e
 # final_only (the sim can [TERMINATE] after a non-code turn, so the last solver turn may not be
 # the graded code turn); leave this at 'all' until spec last-code masking lands.
 train_turns=${TRAIN_TURNS:-all}
+# Terminate-on-all-pass (TRAINING-only): once the solver's code passes ALL GT tests, end the episode
+# immediately instead of letting the frozen sim press on (kills the post-code free-ride). OFF by
+# default -> baseline unchanged. Eval has its own loop and never honors this.
+terminate_on_allpass=${TERMINATE_ON_ALLPASS:-False}
+# Binary reward: reward = 1.0 iff all tests pass else 0.0 (vs fractional pass_rate). Raw pass_rate is
+# still logged as a metric. OFF by default. Independent knob from terminate_on_allpass.
+binary_reward=${BINARY_REWARD:-False}
 # Spec-path guardrail: max ```python proposals before the loop force-grades the last one (default
 # 2, reduced from 3 after eval). Replaces the GT path's sim_reject_max_tries.
 max_code_proposals=${MAX_CODE_PROPOSALS:-2}
@@ -124,6 +131,11 @@ actor_lr=${ACTOR_LR:-1e-6}
 # KL = 0.01: the proven stability fix for this multi-turn stack (entropy explosion, not a
 # rollout mismatch -- see project-codecontest-rl-stability-plan). Do NOT drop to 0.
 kl_loss_coef=${KL_LOSS_COEF:-0.01}
+# Dr.GRPO toggle. True = standard GRPO advantage ((r-mean)/std); False = Dr.GRPO (r-mean, no /std,
+# https://arxiv.org/abs/2503.20783). We TESTED Dr.GRPO=False for the ~step-300 entropy/KL collapse and
+# it did NOT fix it (Dr.GRPO + larger LR still collapsed -> /std was not the root cause; sim quality is).
+# Reverted to True. Kept as an EXPLICIT hydra arg (not default-by-omission) to record the deliberate choice.
+norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD_IN_GRPO:-True}
 # PPO loss aggregation. Default 'token-mean' (verl default) weights the loss by tokens, so a few
 # very long (degenerate/gibberish) responses dominate the gradient -- a suspected amplifier of the
 # ~step-300 length-explosion collapse. 'seq-mean-token-mean' averages tokens WITHIN a trajectory
@@ -183,7 +195,7 @@ fi
 python3 -m verl.trainer.main_ppo \
    ${chat_template_args[@]+"${chat_template_args[@]}"} \
    algorithm.adv_estimator=grpo \
-   algorithm.norm_adv_by_std_in_grpo=False \
+   algorithm.norm_adv_by_std_in_grpo=${norm_adv_by_std_in_grpo} \
    algorithm.use_kl_in_reward=False \
    algorithm.rollout_correction.rollout_is=${rollout_is} \
    algorithm.rollout_correction.rollout_is_threshold=${rollout_is_threshold} \
@@ -244,6 +256,8 @@ python3 -m verl.trainer.main_ppo \
    +colbench.env_step_timeout=${env_step_timeout} \
    +colbench.length_penalty_coef=${length_penalty_coef} \
    +colbench.length_soft_cap=${length_soft_cap} \
+   +colbench.terminate_on_allpass=${terminate_on_allpass} \
+   +colbench.binary_reward=${binary_reward} \
    trainer.balance_batch=True \
    trainer.logger='["console","tensorboard"]' \
    trainer.project_name=${PROJECT_NAME} \

@@ -122,6 +122,20 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         # Sim reject-sampling budget: re-query the sim up to N times if it writes code (an ordinary
         # user never pastes a function). On exhaustion the conversation is aborted. Default 8.
         self.sim_max_tries = int(cc.get("sim_max_tries", 8) or 8)
+        # Terminate-on-all-pass (TRAINING-only rollout cleanup; needs the GT oracle). Once the
+        # solver's latest code passes ALL tests, end the episode immediately (never consult the sim
+        # again) so the frozen sim cannot press on correct code and elicit a post-code capitulation
+        # ramble that the flat reward would reinforce (the free-ride). Purely additive early-exit;
+        # the shared sim env is untouched, and eval (validate_colbench_spec) runs its own loop and
+        # never sees this flag. OFF by default -> baseline byte-identical.
+        _tap = cc.get("terminate_on_allpass", False)
+        self.terminate_on_allpass = _tap if isinstance(_tap, bool) else str(_tap).strip().lower() in ("1", "true", "yes", "on")
+        # Binary reward: reward = 1.0 iff the graded code passes ALL tests, else 0.0 (vs the default
+        # fractional pass_rate). Cleaner objective proxy + suppresses partial-credit reinforcement of
+        # mediocre-code-plus-ramble. The raw fractional pass_rate is ALWAYS kept as a metric. OFF by
+        # default. Independent of terminate_on_allpass (they clean complementary contamination paths).
+        _br = cc.get("binary_reward", False)
+        self.binary_reward = _br if isinstance(_br, bool) else str(_br).strip().lower() in ("1", "true", "yes", "on")
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -181,6 +195,10 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         terminated_by = None
         reward = 0.0
         result: dict[str, Any] = {}
+        # Grade cached by the terminate-on-all-pass mid-loop check (for the current last_code), so
+        # the end-of-episode grading reuses it instead of re-scoring the same code. None when the
+        # flag is off or the mid-loop grade timed out.
+        graded_result: dict[str, Any] | None = None
         solver_turn_lengths: list[int] = []
         solver_turn_spans: list[tuple[int, int]] = []
 
@@ -245,6 +263,24 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 if not first_code:
                     first_code = last_code
 
+            # 1b. Terminate-on-all-pass (TRAINING-only; needs GT oracle). Grade the code just shown;
+            #     if it passes ALL tests, end the episode NOW -- before the sim replies -- so no
+            #     post-code free-ride ramble is generated. Additive early-exit; OFF by default. The
+            #     grade is cached in `graded_result` (for this last_code) and reused at final grading
+            #     to avoid a second exec call.
+            if self.terminate_on_allpass and showed_code and last_code:
+                with simple_timer("env_score", metrics):
+                    try:
+                        graded_result = await asyncio.wait_for(
+                            self.loop.run_in_executor(None, env.score, last_code),
+                            timeout=self.env_step_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        graded_result = None
+                if graded_result is not None and bool(graded_result.get("all_pass", False)):
+                    terminated_by = "oracle_solved"
+                    break
+
             # 2. Turn cap: last allowed solver turn -> stop, grade the last code shown.
             if turn == self.max_assistant_turns - 1:
                 terminated_by = "turn_cap" if showed_code else "no_code"
@@ -305,20 +341,28 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
 
         # Grade the last function shown, once, at whatever stop. Reward 0 iff no code was shown.
         first_code_pass_rate = 0.0
+        raw_pass_rate = 0.0  # raw fractional pass-rate; always kept as a metric (even under binary reward)
         if showed_code and last_code:
-            with simple_timer("env_score", metrics):
-                try:
-                    result = await asyncio.wait_for(
-                        self.loop.run_in_executor(None, env.score, last_code),
-                        timeout=self.env_step_timeout,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("env.score exceeded %.0fs; grading as 0", self.env_step_timeout)
-                    metrics["env_score_timeout"] = 1
-                    result = {"pass_rate": 0.0, "all_pass": False, "per_case": [], "n": 0}
-            reward = float(result.get("pass_rate", 0.0))
-            # Feedback-lift diagnostic: pass-rate of the FIRST proposal. Reuse `reward` when the
-            # solver only ever showed one function (the common case) to avoid a second exec call.
+            if graded_result is not None:
+                # Reuse the terminate-on-all-pass mid-loop grade of this same last_code.
+                result = graded_result
+            else:
+                with simple_timer("env_score", metrics):
+                    try:
+                        result = await asyncio.wait_for(
+                            self.loop.run_in_executor(None, env.score, last_code),
+                            timeout=self.env_step_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("env.score exceeded %.0fs; grading as 0", self.env_step_timeout)
+                        metrics["env_score_timeout"] = 1
+                        result = {"pass_rate": 0.0, "all_pass": False, "per_case": [], "n": 0}
+            raw_pass_rate = float(result.get("pass_rate", 0.0))
+            # Binary reward -> 1.0 iff all tests pass, else the fractional pass_rate. pass_rate metric
+            # stays raw either way (see below).
+            reward = float(bool(result.get("all_pass", False))) if self.binary_reward else raw_pass_rate
+            # Feedback-lift diagnostic: pass-rate of the FIRST proposal. Reuse the raw pass_rate when
+            # the solver only ever showed one function (the common case) to avoid a second exec call.
             if first_code and first_code != last_code:
                 try:
                     fres = await asyncio.wait_for(
@@ -329,13 +373,13 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 except asyncio.TimeoutError:
                     first_code_pass_rate = 0.0
             else:
-                first_code_pass_rate = reward
+                first_code_pass_rate = raw_pass_rate
 
         # Intervention 1.5: length penalty on the TRAJECTORY reward (no-op when coef==0, i.e. Int-1).
         # pass_rate keeps the raw graded quality (for the pass_rate metric); reward_score is the
         # penalized training signal. solver_tokens = total SOLVER-generated tokens (response_mask=1
         # spans, before the train_turns mask). Penalty = coef*clip((tok-cap)/cap, 0, 1).
-        pass_rate = reward
+        pass_rate = raw_pass_rate
         solver_tokens = sum(solver_turn_lengths)
         length_penalty = 0.0
         if self.length_penalty_coef > 0.0 and self.length_soft_cap > 0.0:
@@ -398,6 +442,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                     "term_turn_cap": float(terminated_by == "turn_cap"),
                     "term_code_cap": float(terminated_by == "code_cap"),
                     "term_sim_code_reject": float(terminated_by == "sim_code_reject"),
+                    "term_oracle_solved": float(terminated_by == "oracle_solved"),
                 },
             },
         )

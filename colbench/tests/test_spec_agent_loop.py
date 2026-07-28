@@ -99,7 +99,7 @@ class _FakeServerManager:
 
 
 def _make_loop(solver_turns, sim_replies, *, max_assistant_turns=10, max_code_proposals=2,
-               sim_max_tries=8, train_turns="all"):
+               sim_max_tries=8, train_turns="all", terminate_on_allpass=False, binary_reward=False):
     """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__, wired to fakes."""
     obj = object.__new__(ColBenchSpecAgentLoop)
     tok = _FakeTokenizer()
@@ -115,6 +115,11 @@ def _make_loop(solver_turns, sim_replies, *, max_assistant_turns=10, max_code_pr
     obj.train_turns = train_turns
     obj.max_code_proposals = max_code_proposals
     obj.sim_max_tries = sim_max_tries
+    # Reward-shaping / rollout-cleaning knobs run() reads (default off = baseline behavior).
+    obj.length_penalty_coef = 0.0
+    obj.length_soft_cap = 2048.0
+    obj.terminate_on_allpass = terminate_on_allpass
+    obj.binary_reward = binary_reward
 
     # apply_chat_template is normally an AgentLoopBase method; override on the instance with a
     # byte-encoding stub (only token COUNTS + mask placement matter to the loop under test).
@@ -254,3 +259,66 @@ def test_upto_last_code_no_code_keeps_all():
     out = _run(obj)
     assert out.extra_fields["reward_extra_info"]["term_no_code"] == 1.0
     assert out.response_mask.count(1) == len("Tell me more?".encode("utf-8"))
+
+
+def test_terminate_on_allpass_breaks_before_sim():
+    # GT code on turn 0. With terminate_on_allpass, the loop grades mid-loop, sees all_pass, and
+    # ends BEFORE the sim can press on -> terminated_by oracle_solved, reward 1.0, and NO sim turn
+    # is ever injected (response_mask has no zeros). The scripted sim reply is never consumed.
+    obj = _make_loop(
+        solver_turns=[_code_turn(GT)],
+        sim_replies=["Are you sure? that looks off. [TERMINATE]"],
+        terminate_on_allpass=True,
+    )
+    out = _run(obj)
+    rei = out.extra_fields["reward_extra_info"]
+    assert rei["term_oracle_solved"] == 1.0
+    assert out.reward_score == 1.0
+    assert rei["num_assistant_turns"] == 1.0
+    assert out.response_mask.count(0) == 0  # no sim feedback injected -> all solver tokens
+
+
+def test_terminate_on_allpass_partial_does_not_break():
+    # WRONG (partial=0.5) code never all-passes, so terminate_on_allpass must NOT fire; the loop
+    # runs to the code cap and grades normally, REUSING the cached mid-loop grade (reward 0.5).
+    obj = _make_loop(
+        solver_turns=[_code_turn(WRONG), _code_turn(WRONG)],
+        sim_replies=["Not quite, try again."],
+        max_code_proposals=2,
+        terminate_on_allpass=True,
+    )
+    out = _run(obj)
+    rei = out.extra_fields["reward_extra_info"]
+    assert rei["term_oracle_solved"] == 0.0
+    assert rei["term_code_cap"] == 1.0
+    assert out.reward_score == 0.5
+
+
+def test_binary_reward_zeros_partial_but_keeps_fractional_metric():
+    # binary_reward: a partial (0.5) pass becomes reward 0.0, but the raw pass_rate METRIC stays
+    # 0.5 -- the reward and the diagnostic are decoupled.
+    obj = _make_loop(
+        solver_turns=[_code_turn(WRONG), _code_turn(WRONG)],
+        sim_replies=["Not quite, try again."],
+        max_code_proposals=2,
+        binary_reward=True,
+    )
+    out = _run(obj)
+    rei = out.extra_fields["reward_extra_info"]
+    assert out.reward_score == 0.0     # binary: not all-pass -> 0
+    assert rei["pass_rate"] == 0.5     # metric keeps the raw fractional rate
+    assert rei["all_pass"] == 0.0
+
+
+def test_binary_reward_all_pass_is_one():
+    # binary_reward with GT -> all_pass -> reward 1.0 and pass_rate metric 1.0.
+    obj = _make_loop(
+        solver_turns=["What's the cutoff?", _code_turn(GT)],
+        sim_replies=["It's 10.", "Perfect. [TERMINATE]"],
+        binary_reward=True,
+    )
+    out = _run(obj)
+    rei = out.extra_fields["reward_extra_info"]
+    assert out.reward_score == 1.0
+    assert rei["pass_rate"] == 1.0
+    assert rei["all_pass"] == 1.0

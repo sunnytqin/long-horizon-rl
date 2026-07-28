@@ -175,8 +175,13 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     group_reward_std_mean = float("nan")
     group_reward_std_zero_frac = float("nan")
     if "uid" in batch.non_tensor_batch:
+        uids = np.asarray(batch.non_tensor_batch["uid"])
+        rew = sequence_reward.detach().float().cpu().numpy()
+        # Exclude aborted samples (their reward can be a NaN/sentinel) and any
+        # non-finite value; a single NaN would otherwise poison np.mean -> all NaN.
+        keep = np.isfinite(rew) & non_aborted_mask.detach().cpu().numpy()
         id2rewards = defaultdict(list)
-        for r, u in zip(sequence_reward.tolist(), batch.non_tensor_batch["uid"]):
+        for r, u in zip(rew[keep].tolist(), uids[keep].tolist()):
             id2rewards[u].append(r)
         group_stds = [float(np.std(v, ddof=1)) for v in id2rewards.values() if len(v) > 1]
         if group_stds:
