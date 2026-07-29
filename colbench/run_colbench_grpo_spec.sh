@@ -31,7 +31,8 @@
 #   MAX_ASSISTANT_TURNS, MAX_CODE_PROPOSALS, SIM_MAX_TRIES, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH,
 #   MAX_RESPONSE_LENGTH, MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
-#   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD.
+#   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD, SIM_MAX_TOKENS,
+#   GROUNDED_SIM, TERMINATE_ON_ALLPASS, BINARY_REWARD, LENGTH_PENALTY_COEF, LENGTH_SOFT_CAP.
 
 
 set -xeuo pipefail
@@ -98,6 +99,13 @@ terminate_on_allpass=${TERMINATE_ON_ALLPASS:-False}
 # Binary reward: reward = 1.0 iff all tests pass else 0.0 (vs fractional pass_rate). Raw pass_rate is
 # still logged as a metric. OFF by default. Independent knob from terminate_on_allpass.
 binary_reward=${BINARY_REWARD:-False}
+# GROUNDED sim (TRAINING-only): condition the frozen user-sim on the hidden GT function source +
+# spec.plot instead of persona/scenario/requirements. Tests whether the plot mechanism survives with
+# a sim that has a reliable artifact to read off (the spec-conditioned 4B sim collapses ~step 300;
+# the GT-conditioned one does not). Everything else -- user-driven [TERMINATE], max_code_proposals,
+# grade-last-shown-code, sim_wrote_code rejection, the solver prompt, the parquet -- is unchanged.
+# OFF by default; eval never honors it, so the golden eval stays spec-conditioned.
+grounded_sim=${GROUNDED_SIM:-False}
 # Spec-path guardrail: max ```python proposals before the loop force-grades the last one (default
 # 2, reduced from 3 after eval). Replaces the GT path's sim_reject_max_tries.
 max_code_proposals=${MAX_CODE_PROPOSALS:-2}
@@ -124,6 +132,14 @@ rollout_top_k=${ROLLOUT_TOP_K:-20}
 export CODECONTEST_EXEC_URL=${CODECONTEST_EXEC_URL:-}
 export CODECONTEST_EXEC_MEM_GB=${CODECONTEST_EXEC_MEM_GB:-2}
 export CODECONTEST_EXEC_CONCURRENCY=${CODECONTEST_EXEC_CONCURRENCY:-32}
+
+# Frozen user-sim generation cap (tokens), read by colbench/env.py's openai_sim_backend. BUG FIX
+# (2026-07-28), not part of any arm: this was exported only by the EVAL scripts
+# (run_validate_colbench_spec.sh), so spec TRAINING silently fell back to env.py's 4096 default --
+# and the spec path removed the GT path's 400-char post-hoc slice, so training-time user turns were
+# bounded only by a prompt instruction to a 4B model, while every eval dump we diagnosed ran at 256.
+# 256 matches eval; watch the sim_reply_chars metric.
+export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-256}
 
 
 # Training hparams
@@ -258,6 +274,7 @@ python3 -m verl.trainer.main_ppo \
    +colbench.length_soft_cap=${length_soft_cap} \
    +colbench.terminate_on_allpass=${terminate_on_allpass} \
    +colbench.binary_reward=${binary_reward} \
+   +colbench.grounded_sim=${grounded_sim} \
    trainer.balance_batch=True \
    trainer.logger='["console","tensorboard"]' \
    trainer.project_name=${PROJECT_NAME} \

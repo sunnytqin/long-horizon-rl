@@ -99,7 +99,8 @@ class _FakeServerManager:
 
 
 def _make_loop(solver_turns, sim_replies, *, max_assistant_turns=10, max_code_proposals=2,
-               sim_max_tries=8, train_turns="all", terminate_on_allpass=False, binary_reward=False):
+               sim_max_tries=8, train_turns="all", terminate_on_allpass=False, binary_reward=False,
+               grounded_sim=False):
     """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__, wired to fakes."""
     obj = object.__new__(ColBenchSpecAgentLoop)
     tok = _FakeTokenizer()
@@ -120,6 +121,9 @@ def _make_loop(solver_turns, sim_replies, *, max_assistant_turns=10, max_code_pr
     obj.length_soft_cap = 2048.0
     obj.terminate_on_allpass = terminate_on_allpass
     obj.binary_reward = binary_reward
+    # NB: run() reads every attribute set here -- this fake bypasses __init__, so a knob added to
+    # the loop and NOT mirrored here raises AttributeError mid-rollout.
+    obj.grounded_sim = grounded_sim
 
     # apply_chat_template is normally an AgentLoopBase method; override on the instance with a
     # byte-encoding stub (only token COUNTS + mask placement matter to the loop under test).
@@ -322,3 +326,62 @@ def test_binary_reward_all_pass_is_one():
     assert out.reward_score == 1.0
     assert rei["pass_rate"] == 1.0
     assert rei["all_pass"] == 1.0
+
+
+def _capturing_backend(replies):
+    """Scripted backend that also records the (system, user) pairs it was called with."""
+    inner = _scripted_backend(replies)
+    seen = []
+
+    def backend(system_content, user_content):
+        seen.append((system_content, user_content))
+        return inner(system_content, user_content)
+
+    return backend, seen
+
+
+def test_grounded_sim_flag_reaches_the_sim_prompt():
+    # The loop's grounded_sim knob must land on the env it builds, i.e. the sim's SYSTEM prompt
+    # carries the GT source + plot instead of the spec's requirements/persona. The solver's own
+    # messages are unaffected (asserted by the env-level leak test).
+    backend, seen = _capturing_backend(["It's 10.", "Perfect, thanks! [TERMINATE]"])
+    obj = _make_loop(
+        solver_turns=["What's the cutoff?", _code_turn(GT)],
+        sim_replies=[],
+        grounded_sim=True,
+    )
+    obj._test_sim_backend = backend
+    out = _run(obj)
+    assert seen, "the sim was never called"
+    sys_msg = seen[0][0]
+    assert GT.strip() in sys_msg and SPEC["plot"] in sys_msg
+    assert SPEC["requirements"] not in sys_msg and SPEC["scenario"] not in sys_msg
+    assert out.extra_fields["reward_extra_info"]["term_user"] == 1.0
+
+
+def test_grounded_sim_off_by_default_uses_spec_prompt():
+    backend, seen = _capturing_backend(["It's 10.", "Perfect, thanks! [TERMINATE]"])
+    obj = _make_loop(solver_turns=["What's the cutoff?", _code_turn(GT)], sim_replies=[])
+    obj._test_sim_backend = backend
+    _run(obj)
+    sys_msg = seen[0][0]
+    assert SPEC["requirements"] in sys_msg
+    assert GT not in sys_msg
+
+
+def test_new_reward_extra_info_scalars_present():
+    # user_term_and_allpass / sim_reply_chars must be emitted on EVERY rollout: verl reads the
+    # reward_extra_info key set from the first sample, so a key missing on some path breaks logging.
+    obj = _make_loop(
+        solver_turns=["What's the cutoff?", _code_turn(GT)],
+        sim_replies=["It's 10.", "Perfect, thanks! [TERMINATE]"],
+    )
+    rei = _run(obj).extra_fields["reward_extra_info"]
+    assert rei["user_term_and_allpass"] == 1.0          # user-terminated AND all tests pass
+    assert rei["sim_reply_chars"] == float(len("It's 10."))
+    # A no-sim-turn episode still carries both keys (0.0), not a missing key.
+    obj2 = _make_loop(solver_turns=[_code_turn(WRONG), _code_turn(WRONG)],
+                      sim_replies=["Not quite."], max_code_proposals=1)
+    rei2 = _run(obj2).extra_fields["reward_extra_info"]
+    assert rei2["user_term_and_allpass"] == 0.0
+    assert rei2["sim_reply_chars"] == 0.0

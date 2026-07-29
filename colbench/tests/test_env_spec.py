@@ -55,10 +55,10 @@ def _scripted_backend(replies):
     return backend
 
 
-def _env(sim_backend=None):
+def _env(sim_backend=None, grounded=False):
     return ColBenchSpecUserSimEnv(
         problem_description=PROBLEM, spec=SPEC, ground_truth=GT, test_cases=CALLS,
-        sim_backend=sim_backend,
+        sim_backend=sim_backend, grounded=grounded,
     )
 
 
@@ -262,6 +262,109 @@ def test_user_terminates_without_code_is_no_code_reward_zero():
     assert out["terminated_by"] == "no_code"
     assert out["reward"] == 0.0
     assert out["showed_code"] is False
+
+
+# ── GROUNDED sim mode (+colbench.grounded_sim) ────────────────────────────────
+# The sim conditions on the hidden GT source + spec["plot"] instead of persona/scenario/
+# requirements. Same env, same termination machinery -- only the sim's SYSTEM prompt changes.
+# The GT is now IN the sim's prompt, so "leak impossible by construction" no longer holds and the
+# episode-level invariant below (GT never reaches the SOLVER's message list) is what enforces it.
+
+def _capturing_backend(reply="Above 10 we add, below we subtract."):
+    """Sim backend that records every (system, user) pair it was called with."""
+    seen = []
+
+    def backend(system_content, user_content):
+        seen.append((system_content, user_content))
+        return reply
+
+    return backend, seen
+
+
+def test_grounded_prompt_has_gt_and_plot_not_requirements():
+    backend, seen = _capturing_backend()
+    e = _env(sim_backend=backend, grounded=True)
+    e.generate_user_turn([{"role": "user", "content": PROBLEM},
+                          {"role": "assistant", "content": "What's the cutoff?"}])
+    sys_msg, usr_msg = seen[-1]
+    # The GT source and the plot ARE injected...
+    assert GT.strip() in sys_msg
+    assert SPEC["plot"] in sys_msg
+    assert PROBLEM in sys_msg
+    # ...and the spec's persona / scenario / requirements are NOT (this arm drops them, so a
+    # result is attributable to grounding rather than to persona style).
+    assert SPEC["requirements"] not in sys_msg
+    assert SPEC["scenario"] not in sys_msg
+    assert "an analyst" not in sys_msg
+    # The dialogue still goes in the USER message, unchanged from the spec path.
+    assert "What's the cutoff?" in usr_msg
+
+
+def test_spec_mode_unchanged_when_not_grounded():
+    # Regression guard for the default path: grounded=False must still put NO GT in either message
+    # (pairs with test_spec_prompt_has_no_gt, which predates the flag).
+    backend, seen = _capturing_backend()
+    e = _env(sim_backend=backend, grounded=False)
+    e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+    sys_msg, usr_msg = seen[-1]
+    assert GT not in sys_msg and GT not in usr_msg
+    assert "x >= 10" not in sys_msg
+    assert SPEC["requirements"] in sys_msg          # the spec prompt is what it used
+
+
+def test_grounded_still_rejects_fenced_reply():
+    # Rejection sampling is the load-bearing leak defense in grounded mode (the sim can SEE the GT),
+    # so it must still fire there.
+    e = ColBenchSpecUserSimEnv(
+        problem_description=PROBLEM, spec=SPEC, ground_truth=GT, test_cases=CALLS,
+        grounded=True, sim_max_tries=3,
+        sim_backend=_scripted_backend(["Like this: ```python\n" + GT + "```"]),
+    )
+    e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+    assert e.last_sim_code_reject_exhausted is True
+    assert e.last_sim_code_rejected == 3
+    # And a clean reply on a retry is accepted normally.
+    e2 = _env(sim_backend=_scripted_backend([
+        "Here: ```python\ndef f(x, y): return x + y\n```",
+        "Below 10 it should subtract instead.",
+    ]), grounded=True)
+    reply = e2.generate_user_turn([{"role": "user", "content": PROBLEM}])
+    assert "```" not in reply and e2.last_sim_code_rejected == 1
+
+
+def test_grounded_leak_invariant_full_episode():
+    # THE test for this arm: over a whole episode the GT source (and any distinctive fragment of
+    # it) must never appear in a turn injected into the SOLVER's message list, even though the sim
+    # is reading it. Mirrors tests/test_env.py::test_leak_invariant_full_episode.
+    e = _env(sim_backend=_scripted_backend([
+        "Above a certain number we add them, otherwise we take the difference.",
+        "The cutoff is ten.",
+        "That's it, thanks! [TERMINATE]",
+    ]), grounded=True)
+    injected = []
+
+    def _drive_capturing():
+        sim_dialogue = [{"role": "user", "content": PROBLEM}]
+        for at in ["what cutoff?", "and below it?", _code_turn(GT)]:
+            sim_dialogue.append({"role": "assistant", "content": at})
+            reply = e.generate_user_turn(sim_dialogue)
+            injected.append(reply)
+            if templates.sim_terminated(e.last_sim_raw):
+                break
+            sim_dialogue.append({"role": "user", "content": reply})
+        return sim_dialogue
+
+    dialogue = _drive_capturing()
+    assert injected, "sim never spoke -- the test would be vacuous"
+    for reply in injected:
+        assert GT not in reply
+        assert "x >= 10" not in reply and "return x + y" not in reply
+        assert "def f" not in reply
+        assert "```" not in reply
+    # And nothing GT-shaped rode in on a USER turn of the solver-visible dialogue.
+    for m in dialogue:
+        if m["role"] == "user":
+            assert "x >= 10" not in m["content"]
 
 
 if __name__ == "__main__":

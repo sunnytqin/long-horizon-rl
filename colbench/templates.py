@@ -325,6 +325,45 @@ You're an ordinary user, not a code reviewer: you don't check every line, you ca
 
 Keep every reply very SHORT -- usually one or two sentences, the way a person fires off a quick message. Do not explain everything at once or recite all your requirements in one go. Only use [TERMINATE] once both conditions above are met."""
 
+# The GROUNDED user-simulator's SYSTEM prompt (opt-in via +colbench.grounded_sim). Same spec-path
+# machinery -- user-driven [TERMINATE], code cap, grade-last-shown-code -- but the sim conditions on
+# the hidden GT function source + the plot INSTEAD of persona/scenario/requirements. Motivation: the
+# spec-conditioned 4B sim is unreliable (arm (1) collapses ~step 300) while the GT-conditioned sim
+# works (arm (2)); this arm asks whether the PLOT mechanism survives once the sim has an artifact it
+# can read off. Blocks are drawn from HUMAN_SIMULATOR_PROMPT (the GT path) and SPEC_SIM_SYSTEM_PROMPT
+# (the spec path); the two NEW pieces are the "volunteering is limited to the plot" carve-out and the
+# soft-judge termination condition (2), which replaces SPEC's "correctness is NOT your call".
+# NOTE: unlike the spec path, the GT source IS in the sim's context here -- so the env's
+# sim_wrote_code rejection sampling is load-bearing, not belt-and-braces.
+GROUNDED_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time. You are not an AI assistant and you never break character.
+
+What you asked them for:
+{problem_description}
+
+What you actually want: below is the exact function you need. You know this behavior as your own intent -- it is what you are trying to get built. You have never seen it written down, you cannot write code, and you cannot run or test anything.
+
+{ground_truth}
+
+How you talk:
+- Answer ONLY what the assistant asks, briefly -- one or two sentences, the way a person fires off a quick message.
+- Use ONLY information determined by the function above. If they ask about something it does not determine, say you don't know or that you don't mind.
+- NEVER write code. Never paste or quote a function, a line, a variable name, or a literal value as code. Describe behavior in plain words only.
+- Do not lay everything out at once. Let details surface as their questions draw them out.
+- Never say or hint that you are reading from anything. To them, you are simply a person who knows what they want.
+
+The plot of this conversation: {plot}
+This is the one thing that isn't clear from the start -- follow it naturally. If it's something you'd only mention when asked, don't bring it up unless they ask. If it's something you'd only notice once you saw their code, react to their code the way a person would -- you READ it, you never run it. If it's something you'd just remember, bring it up when it feels natural. Volunteering is limited to what this plot directs; otherwise you only answer what you were asked. If the plot points at behavior the function above does not actually have, the FUNCTION wins: quietly drop that part and stay consistent with what you really want.
+
+When you're done: the MINIMUM bar to end the conversation is that the assistant has actually written a COMPLETE python function inside a code block. Until you have seen one you MUST NOT end the conversation, no matter how much you have already explained -- if they have only asked questions, you simply answer and keep going.
+
+Once a complete function is on the table, end the conversation by replying [TERMINATE] when BOTH are true:
+  1) the plot above has been fully played out, and
+  2) the function does what you asked for, as far as you can tell.
+
+On (2): you are an ordinary user, not a code reviewer. You do not check it line by line and you cannot run it. But you know what you want -- so if the function plainly does not do it (it ignores something you told them, or handles a case the wrong way), say so in plain words and let them try again, instead of ending. Point at the BEHAVIOR you wanted, never at the code. If it looks right to you, end with [TERMINATE].
+
+Keep every reply very SHORT -- usually one or two sentences. Only use [TERMINATE] once both conditions above are met."""
+
 # The sentinel the user-simulator emits to end the conversation (bare string match).
 TERMINATE_MARKER = "[TERMINATE]"
 
@@ -346,6 +385,27 @@ def build_spec_sim_messages(spec: dict, messages: list[dict]) -> tuple[str, str]
         scenario=spec.get("scenario", ""),
         requirements=spec.get("requirements", ""),
         plot=spec.get("plot", ""),
+    )
+    return system, str_dialogue_history(messages)
+
+
+def build_grounded_sim_messages(problem_description: str, ground_truth: str, plot: str,
+                                messages: list[dict]) -> tuple[str, str]:
+    """Build the GROUNDED sim's (system, user) messages for one turn.
+
+    Same seam split as ``build_spec_sim_messages`` (spec -> system, dialogue -> user), but the sim
+    is conditioned on the hidden GT function source + the plot instead of the authored spec's
+    persona/scenario/requirements. Kept as a SEPARATE function rather than a flag on
+    ``build_spec_sim_messages`` so the pure-spec path stays branch-free and byte-identical.
+
+    NB: this is the ONE place the GT source enters a sim prompt on the spec path -- the leak
+    invariant (GT never reaches the solver's message list) is enforced downstream by the env's
+    ``sim_wrote_code`` rejection sampling, not by construction as in the spec mode.
+    """
+    system = GROUNDED_SIM_SYSTEM_PROMPT.format(
+        problem_description=problem_description,
+        ground_truth=ground_truth,
+        plot=plot or "",
     )
     return system, str_dialogue_history(messages)
 

@@ -17,7 +17,14 @@ The sibling of ``colbench.env.ColBenchUserSimEnv`` for the SPEC setting. The one
 that matters: the frozen user-simulator is conditioned on a natural-language **spec**
 (``persona/scenario/requirements/plot``) instead of the hidden GT function source. Because the
 sim never sees code, a code leak is structurally impossible here -- so there is NO
-``detect_code_leak`` / rejection-sampling machinery in this path (it exists only on the GT env).
+``detect_code_leak`` machinery in this path (it exists only on the GT env); the rejection sampling
+that IS here (``sim_wrote_code``) only keeps the sim in character.
+
+EXCEPTION -- ``grounded=True`` (``+colbench.grounded_sim``, opt-in, default off): the sim is
+conditioned on the hidden GT source + ``spec["plot"]`` instead, to test whether the plot mechanism
+survives with a sim that has a reliable artifact to read off. In that mode the GT IS in the sim's
+prompt, so "leak impossible by construction" no longer holds and the ``sim_wrote_code`` rejection
+sampling becomes the actual leak defense. Every other seam is unchanged.
 
 Termination is USER-DRIVEN (see ``colbench.colbench_spec_agent`` / ``validate_colbench_spec``):
 the sim ends the conversation by emitting ``[TERMINATE]``; the loop grades the last function the
@@ -115,7 +122,8 @@ class ColBenchSpecUserSimEnv:
         spec: the authored spec ``{persona{who,domain,python_skill,communication_style},
             scenario, requirements, plot}`` the sim conditions on (NEVER the GT code).
         ground_truth: the HIDDEN GT function source -- used ONLY for grading (score), never shown
-            to the sim or the solver.
+            to the sim or the solver (except in ``grounded`` mode, where it conditions the sim --
+            still never the solver).
         test_cases: list of GT call-strings used for grading.
         max_steps: max solver turns before the episode is force-ended (loop guardrail).
         reward_time_limit: per-case exec timeout (seconds) for grading.
@@ -134,6 +142,11 @@ class ColBenchSpecUserSimEnv:
     # function). Re-query up to this many times; if ALL still contain a code fence, the loop aborts
     # the episode (see last_sim_code_reject_exhausted) rather than injecting/stripping a bad reply.
     sim_max_tries: int = 8
+    # GROUNDED mode (+colbench.grounded_sim): condition the sim on the hidden GT function source +
+    # spec["plot"] instead of persona/scenario/requirements. Everything else about this env is
+    # unchanged. When True the GT IS in the sim's prompt, so the sim_wrote_code rejection above
+    # becomes the load-bearing leak defense rather than a character guard.
+    grounded: bool = False
     # Populated on the last generate_user_turn call, for the loop's debug dump / audit.
     last_sim_reply: str = field(default="", repr=False)
     # The most recent RAW (uncapped, but <think>-stripped) sim reply, so the loop can string-match
@@ -153,13 +166,20 @@ class ColBenchSpecUserSimEnv:
         """Produce the next spec-conditioned user (simulator) reply.
 
         ``messages`` is the running dialogue as ``[{role, content}, ...]`` (problem + solver
-        turns + prior user replies) -- it carries NO ground truth. The spec is injected as the
-        sim's SYSTEM message here and passed only to the backend; the returned reply is
+        turns + prior user replies) -- it carries NO ground truth. The spec (or, in ``grounded``
+        mode, the GT source + plot) is injected as the sim's SYSTEM message here and passed only
+        to the backend -- it never enters ``messages``; the returned reply is
         ``<think>``-stripped and char-capped so the solver's message list only receives the short
         human-like turn. ``last_sim_raw`` keeps the stripped-but-uncapped reply so the loop can
         detect ``[TERMINATE]`` (the sentinel could otherwise fall past the char cap).
         """
-        system_content, user_content = templates.build_spec_sim_messages(self.spec, messages)
+        if self.grounded:
+            system_content, user_content = templates.build_grounded_sim_messages(
+                self.problem_description, self.ground_truth,
+                (self.spec or {}).get("plot", ""), messages,
+            )
+        else:
+            system_content, user_content = templates.build_spec_sim_messages(self.spec, messages)
         # Rejection sampling: an ordinary user never pastes code. If the sim writes a code fence,
         # re-query (sampling temperature makes retries differ). If EVERY try still contains code,
         # we do NOT strip or inject it (stripping yields weird half-sentences) -- we flag

@@ -136,6 +136,15 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         # default. Independent of terminate_on_allpass (they clean complementary contamination paths).
         _br = cc.get("binary_reward", False)
         self.binary_reward = _br if isinstance(_br, bool) else str(_br).strip().lower() in ("1", "true", "yes", "on")
+        # GROUNDED sim (TRAINING-only): condition the frozen sim on the hidden GT function source +
+        # spec["plot"] instead of persona/scenario/requirements. Tests whether the plot mechanism
+        # survives when the 4B sim has a reliable artifact to read off (the spec-conditioned sim
+        # collapses ~step 300; the GT-conditioned one does not). All other spec machinery --
+        # user-driven [TERMINATE], max_code_proposals, grade-last-shown-code, sim_wrote_code
+        # rejection, the solver prompt, the parquet -- is unchanged. OFF by default, and eval
+        # (validate_colbench_spec) never reads it, so the golden eval stays spec-conditioned.
+        _gs = cc.get("grounded_sim", False)
+        self.grounded_sim = _gs if isinstance(_gs, bool) else str(_gs).strip().lower() in ("1", "true", "yes", "on")
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -166,6 +175,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
             max_steps=self.max_assistant_turns,
             reward_time_limit=self.reward_time_limit,
             sim_max_tries=self.sim_max_tries,
+            grounded=self.grounded_sim,
         )
 
         request_id = uuid4().hex
@@ -192,6 +202,10 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         last_code_turn_idx = None
         first_code = ""
         sim_code_rejected = 0
+        # Total characters of the sim replies actually injected into the solver's context (paired
+        # with user_turns to give a mean). Watches whether the SIM_MAX_TOKENS bound + the prompt's
+        # brevity instruction are holding -- the spec path has no post-hoc char cap.
+        sim_reply_chars_total = 0
         terminated_by = None
         reward = 0.0
         result: dict[str, Any] = {}
@@ -335,6 +349,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
             if track_logprobs:
                 response_logprobs += [0.0] * len(feedback_ids)
             user_turns += 1
+            sim_reply_chars_total += len(reply)
 
         if terminated_by is None:  # defensive: the turn-cap branch always sets it
             terminated_by = "turn_cap" if showed_code else "no_code"
@@ -443,6 +458,14 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                     "term_code_cap": float(terminated_by == "code_cap"),
                     "term_sim_code_reject": float(terminated_by == "sim_code_reject"),
                     "term_oracle_solved": float(terminated_by == "oracle_solved"),
+                    # Did the SIM end the episode on code that actually passes? Divided by term_user
+                    # this is P(all_pass | user-terminated) -- the load-bearing assumption of
+                    # user-driven termination, and the thing grounding the sim is meant to buy.
+                    "user_term_and_allpass": float(
+                        terminated_by == "user" and bool(result.get("all_pass", False))
+                    ),
+                    # Mean chars per injected sim reply (0 if the sim never got to speak).
+                    "sim_reply_chars": float(sim_reply_chars_total / user_turns) if user_turns else 0.0,
                 },
             },
         )
