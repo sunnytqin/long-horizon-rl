@@ -20,10 +20,13 @@ loop drives:
 
   * ``is_answer(assistant_text, episode_done)`` -> ``(has_answer, answer_text)`` -- did the
     solver submit (marker, or a code-like final turn)?  (templates.final_answer)
-  * ``generate_user_turn(messages)`` -> a <=400-char human-like reply. THE Phase-1/Phase-2
-    seam: Phase-1 backend = an HTTP call to the FROZEN sim server (same base model); Phase-2
-    co-training swaps in a same-engine backend and unmasks these turns. The GT source is
-    passed ONLY inside this call's prompt -- it never enters the solver's message list.
+  * ``generate_user_turn(messages)`` -> a <=400-char human-like reply. THE sim seam. Two
+    backends exist: ``sim_backend`` (sync) = an HTTP call to a SEPARATE FROZEN sim server, and
+    ``asim_backend`` (async, driven by ``agenerate_user_turn``) = generation on the TRAINING
+    rollout engine itself, i.e. the LIVE policy weights, no frozen copy anywhere (the
+    "same copy throughout training" arm -- see colbench_agent.py's ``sim_live``). Either way
+    the GT source is passed ONLY inside this call's prompt -- it never enters the solver's
+    message list, and the sim's own generated TOKENS never enter the solver trajectory.
   * ``score(answer_text)`` -> fractional pass-rate against the GT (reward.grade).
 
 Reward convention: the trajectory reward is the final submission's fractional pass-rate in
@@ -33,7 +36,7 @@ Reward convention: the trajectory reward is the final submission's fractional pa
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from colbench import reward, templates
 
@@ -65,10 +68,14 @@ def _sim_extra_body():
     return None
 
 
-# A sim backend maps (system_content, user_content) -> raw reply text. Phase-1 default is an
-# OpenAI-compatible HTTP call to the frozen sim server; tests inject a stub (no server, no
-# openai import); Phase-2 co-training swaps in a same-engine backend.
+# A sim backend maps (system_content, user_content) -> raw reply text. The default is an
+# OpenAI-compatible HTTP call to a separate FROZEN sim server; tests inject a stub (no server,
+# no openai import).
 SimBackend = Callable[[str, str], str]
+# The async variant, used by the LIVE-weights arm: the agent loop injects a coroutine that
+# generates on the TRAINING rollout engine (current policy), so there is no frozen copy and no
+# second server. Set via ``asim_backend``; consumed by ``agenerate_user_turn(_checked)``.
+AsyncSimBackend = Callable[[str, str], Awaitable[str]]
 
 
 def _sim_sampling():
@@ -154,7 +161,12 @@ class ColBenchUserSimEnv:
         max_steps: max solver turns before the episode is force-ended (sweet_rl default 10).
         reward_time_limit: per-case exec timeout (seconds) for grading.
         sim_backend: (system, user) -> raw reply. Defaults to the frozen-server HTTP call;
-            tests / Phase-2 inject their own. This is the ONE seam that sees the GT.
+            tests inject their own. This is the ONE seam that sees the GT.
+        asim_backend: async (system, user) -> raw reply. When set, the LIVE-weights path
+            (``agenerate_user_turn``) uses it instead of ``sim_backend``: the agent loop
+            generates the user turn on the training rollout engine, so the simulator IS the
+            current policy (no frozen copy). ``sim_backend`` is left untouched, so the sync
+            path (offline eval, tests) keeps working.
     """
 
     problem_description: str
@@ -163,6 +175,7 @@ class ColBenchUserSimEnv:
     max_steps: int = 10
     reward_time_limit: float = 6.0
     sim_backend: Optional[SimBackend] = None
+    asim_backend: Optional[AsyncSimBackend] = None
     # Populated on the last generate_user_turn call, for the agent loop's debug dump.
     last_sim_reply: str = field(default="", repr=False)
 
@@ -180,17 +193,19 @@ class ColBenchUserSimEnv:
         clean = templates.strip_think(assistant_text)
         return templates.final_answer(clean, episode_done)
 
-    def _sample_user_reply(self, messages: list[dict]) -> str:
-        """One raw sim sample: build the prompt (with hidden GT), call the backend, clean up.
+    def _build_sim_prompt(self, messages: list[dict]) -> tuple[str, str]:
+        """(system_content, user_content) for one sim call. The ONE place the GT is injected.
 
-        The reply is <think>-stripped and hard-capped at 400 chars, so the solver's message
-        list only ever receives that short reply. Shared by the single-shot training path
-        (generate_user_turn) and the eval rejection loop (generate_user_turn_checked).
+        Kept separate from the sampling so the sync (frozen-server) and async (live-weights)
+        paths build a BYTE-IDENTICAL prompt -- the two arms must differ only in which weights
+        answer it.
         """
-        user_content = templates.build_sim_user_message(
+        return templates.SIM_SYSTEM_PROMPT, templates.build_sim_user_message(
             self.problem_description, self.ground_truth, messages
         )
-        raw = self.sim_backend(templates.SIM_SYSTEM_PROMPT, user_content)
+
+    def _finalize_reply(self, raw: str, user_content: str) -> str:
+        """<think>-strip + 400-char cap the raw sim output (and debug-dump it)."""
         reply = templates.strip_think(raw)[: templates.HUMAN_RESPONSE_CHARACTER_LIMIT]
         if _DEBUG_SIM:
             n = _DEBUG_PREVIEW
@@ -200,6 +215,28 @@ class ColBenchUserSimEnv:
                 n, str(self.ground_truth)[:n], n, user_content[:n], n, str(raw)[:n], reply,
             )
         return reply
+
+    def _sample_user_reply(self, messages: list[dict]) -> str:
+        """One raw sim sample: build the prompt (with hidden GT), call the backend, clean up.
+
+        The reply is <think>-stripped and hard-capped at 400 chars, so the solver's message
+        list only ever receives that short reply. Shared by the single-shot training path
+        (generate_user_turn) and the eval rejection loop (generate_user_turn_checked).
+        """
+        system_content, user_content = self._build_sim_prompt(messages)
+        raw = self.sim_backend(system_content, user_content)
+        return self._finalize_reply(raw, user_content)
+
+    async def _asample_user_reply(self, messages: list[dict]) -> str:
+        """Async twin of ``_sample_user_reply``, going through ``asim_backend``."""
+        if self.asim_backend is None:
+            raise RuntimeError(
+                "asim_backend is not set: the live-weights sim path requires the agent loop to "
+                "inject a same-engine backend (see colbench_agent.py sim_live)."
+            )
+        system_content, user_content = self._build_sim_prompt(messages)
+        raw = await self.asim_backend(system_content, user_content)
+        return self._finalize_reply(raw, user_content)
 
     def generate_user_turn(self, messages: list[dict]) -> str:
         """Produce the next user (simulator) reply. THE Phase-1/Phase-2 seam.
@@ -238,6 +275,31 @@ class ColBenchUserSimEnv:
         reasons: list[str] = []
         for i in range(1, max_tries + 1):
             reply = self._sample_user_reply(messages)
+            reason = templates.detect_code_leak(reply, self.ground_truth, ngram_n, min_operators)
+            if reason is None:
+                self.last_sim_reply = reply
+                return {"reply": reply, "tries": i, "accepted": True, "reasons": reasons}
+            reasons.append(reason)
+        return {"reply": None, "tries": max_tries, "accepted": False, "reasons": reasons}
+
+    async def agenerate_user_turn(self, messages: list[dict]) -> str:
+        """LIVE-weights twin of ``generate_user_turn`` (same prompt, current policy answers)."""
+        reply = await self._asample_user_reply(messages)
+        self.last_sim_reply = reply
+        return reply
+
+    async def agenerate_user_turn_checked(
+        self, messages: list[dict], max_tries: int = 32, ngram_n: int = 10, min_operators: int = 2
+    ) -> dict:
+        """LIVE-weights twin of ``generate_user_turn_checked`` (identical record contract).
+
+        Rejection sampling matters MORE here than on the frozen path: a live simulator shares the
+        solver's weights and its incentive-free view of the GT, so if the policy drifts toward
+        dumping code the "user" drifts with it. Same accept/exhaust semantics as the sync method.
+        """
+        reasons: list[str] = []
+        for i in range(1, max_tries + 1):
+            reply = await self._asample_user_reply(messages)
             reason = templates.detect_code_leak(reply, self.ground_truth, ngram_n, min_operators)
             if reason is None:
                 self.last_sim_reply = reply

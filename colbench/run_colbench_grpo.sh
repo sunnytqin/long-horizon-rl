@@ -23,7 +23,7 @@
 #
 # Env overrides: MODEL_PATH, VAL_FILE, INFER_BACKEND(sglang|vllm), NGPUS_PER_NODE, ROLLOUT_N,
 #   MAX_ASSISTANT_TURNS, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH, MAX_RESPONSE_LENGTH,
-#   MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
+#   MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT, SIM_LIVE,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
 #   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD.
 
@@ -89,6 +89,23 @@ train_turns=${TRAIN_TURNS:-all}
 # step 0 of a FRESH run: this is path-dependent, and retrofitting it onto a checkpoint that has
 # already learned the exploit collapses whole groups to 0.
 sim_reject_max_tries=${SIM_REJECT_MAX_TRIES:-0}
+# LIVE-weights user simulator (SIM_LIVE=True, set by launch.py --sim_live): the user turn is
+# generated on the TRAINING rollout engine, so the sim IS the current policy -- ONE copy of the
+# weights for the whole run, no frozen base model and no second server. Default False keeps the
+# frozen-server baseline. The entrypoint gives training ALL GPUs in this mode (SIM_TP=0), so
+# NGPUS_PER_NODE comes back as 8 rather than 6.
+sim_live=${SIM_LIVE:-False}
+# Sim GENERATION cap (tokens), read by colbench/env.py (frozen backend) AND the live backend.
+# 512, not env.py's 4096 default: this path ALSO slices the reply to 400 chars post-hoc
+# (HUMAN_RESPONSE_CHARACTER_LIMIT), and 400 chars cannot tokenize past 400 tokens, so 512 keeps
+# every character the slice would have kept -- the injected user turn is byte-identical to a
+# 4096-token run -- while clamping the pathological no-EOS tail 8x. That tail is what breaks
+# ENV_STEP_TIMEOUT, and under sim_live it is decoded on the TRAINING engine, competing with solver
+# rollouts. Exported (not just passed to hydra) because env.py reads it from os.environ, and set
+# HERE so the GCS-archived run script records the value. Same in both arms => the frozen-vs-live
+# A/B moves only one variable. (The spec path's 256 is NOT the same knob: it removed the char
+# slice, so there 256 is the only cap and it changes what the sim can say.)
+export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-512}
 # Solver sampling. Defaults = the SOLVER model's recommended generation settings; match these
 # to whatever --model you train. Qwen3-4B-Instruct-2507: temp 0.7, top_p 0.8, top_k 20, min_p 0
 # (min_p is verl's default 0, not a settable rollout field). Qwen3-32B (thinking): 0.6/0.95/20.
@@ -204,6 +221,7 @@ python3 -m verl.trainer.main_ppo \
    +colbench.max_new_tokens_per_turn=${max_new_tokens_per_turn} \
    +colbench.train_turns=${train_turns} \
    +colbench.sim_reject_max_tries=${sim_reject_max_tries} \
+   +colbench.sim_live=${sim_live} \
    +colbench.reward_time_limit=${reward_time_limit} \
    +colbench.env_step_timeout=${env_step_timeout} \
    trainer.balance_batch=True \
