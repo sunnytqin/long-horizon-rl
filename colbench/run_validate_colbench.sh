@@ -56,6 +56,15 @@ SIM_REJECT_MAX_TRIES=${SIM_REJECT_MAX_TRIES:-0}
 SIM_REJECT_NGRAM_N=${SIM_REJECT_NGRAM_N:-0}
 SIM_REJECT_MIN_OPS=${SIM_REJECT_MIN_OPS:-2}
 
+# USER-TURN BUDGET -- must MATCH run_colbench_grpo.sh or a checkpoint is scored in a different
+# environment than it trained in. This script previously set NEITHER, so eval silently used
+# env.py's 4096-token default plus the 400-char slice while training used 512+400. Now both files
+# pin the same aligned pair (slice OFF, 256-token generation bound); see the long note in
+# run_colbench_grpo.sh. To evaluate a STOCK-ColBench checkpoint, pass SIM_CHAR_LIMIT=400
+# SIM_MAX_TOKENS=512 here exactly as you would to the train script.
+export SIM_CHAR_LIMIT=${SIM_CHAR_LIMIT:-0}
+export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-256}
+
 # Inference hparams. TEMPERATURES (space-separated, e.g. "0.0 0.6") sweeps several temps in
 # ONE run: the engine is loaded once and each temp writes its own tagged JSON. Defaults match
 # run_colbench_grpo.sh so a checkpoint is evaluated with the budgets it trained under.

@@ -211,8 +211,21 @@ class ColBenchUserSimEnv:
         )
 
     def _finalize_reply(self, raw: str, user_content: str) -> str:
-        """<think>-strip + 400-char cap the raw sim output (and debug-dump it)."""
-        reply = templates.strip_think(raw)[: templates.HUMAN_RESPONSE_CHARACTER_LIMIT]
+        """<think>-strip, then apply the post-hoc character cap (and debug-dump it).
+
+        The cap is sweet_rl's ``HUMAN_RESPONSE_CHARACTER_LIMIT`` (400) by default, so anything that
+        does not set ``SIM_CHAR_LIMIT`` is byte-identical to stock ColBench. ``SIM_CHAR_LIMIT=0``
+        DISABLES the slice, which is what the GT-vs-SPEC study needs: the spec path removed this
+        slice entirely and bounds the user turn only at generation time (SIM_MAX_TOKENS), so with
+        the slice live the GT arm's user could deliver ~400 chars/turn against the spec arm's
+        ~700-1000 -- a 2.5x information asymmetry masquerading as an environment-quality result.
+        With it off, both arms are bounded by the SAME knob (SIM_MAX_TOKENS) and the sim prompt's
+        "IN TWO SENTENCES" instruction does the shaping. See run_colbench_grpo.sh.
+        """
+        limit = int(os.environ.get("SIM_CHAR_LIMIT", templates.HUMAN_RESPONSE_CHARACTER_LIMIT))
+        reply = templates.strip_think(raw)
+        if limit > 0:
+            reply = reply[:limit]
         if _DEBUG_SIM:
             n = _DEBUG_PREVIEW
             logger.warning(

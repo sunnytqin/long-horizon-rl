@@ -21,6 +21,8 @@ dump. Grading uses the in-process exec fallback.
 import logging
 import os
 
+import pytest
+
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
@@ -104,6 +106,119 @@ def test_user_turn_capped_and_gt_only_in_sim_prompt():
     # The GT source WAS passed into the sim prompt (the hidden_information seam).
     assert GT in captured["user"]
     assert e.last_sim_reply == reply
+
+
+def test_sim_char_limit_env_overrides_the_slice(monkeypatch):
+    """SIM_CHAR_LIMIT=0 disables the post-hoc slice, aligning the GT arm's user-turn budget
+    with the SPEC arm's (which has no slice at all and is bounded only by SIM_MAX_TOKENS).
+
+    Without this the GT user delivers <=400 chars/turn while the spec user delivers ~700-1000,
+    so a GT-vs-spec result would confound environment quality with how much the user may say.
+    Default (unset) stays 400, so every run that does not opt in is byte-identical.
+    """
+    long_reply = "x" * 999
+    messages = [{"role": "user", "content": PROBLEM}]
+
+    monkeypatch.setenv("SIM_CHAR_LIMIT", "0")
+    e, _ = _env(reply=long_reply)
+    assert len(e.generate_user_turn(messages)) == 999, "0 must disable the slice entirely"
+
+    monkeypatch.setenv("SIM_CHAR_LIMIT", "120")
+    e, _ = _env(reply=long_reply)
+    assert len(e.generate_user_turn(messages)) == 120
+
+    monkeypatch.delenv("SIM_CHAR_LIMIT", raising=False)
+    e, _ = _env(reply=long_reply)
+    assert len(e.generate_user_turn(messages)) == templates.HUMAN_RESPONSE_CHARACTER_LIMIT
+
+
+def test_marker_answer_is_graded_as_code_by_the_spec_extractor():
+    """A GT-protocol turn must yield VALID code when the SPEC path grades it.
+
+    Arm (1)'s policy is RL'd to emit "I WANT TO ANSWER:" + code, but the golden spec eval has no
+    marker convention and grades templates.extract_last_code. If the marker survived into the
+    graded string the sandbox would see a SyntaxError and the checkpoint would score ~0 for a
+    protocol reason -- indistinguishable from a genuine capability result in the cross-arm
+    comparison.
+    """
+    code = "def f(x):\n    return x + 1"
+    for turn in (f"I WANT TO ANSWER:\n{code}",
+                 f"I WANT TO ANSWER:\n```python\n{code}\n```",
+                 f"i want to answer:\n{code}"):
+        extracted = templates.extract_last_code([{"role": "assistant", "content": turn}])
+        assert extracted == code, f"marker leaked into the graded code for: {turn!r}"
+        compile(extracted, "<graded>", "exec")  # would raise SyntaxError before the fix
+    # Spec-protocol turns (no marker) are untouched.
+    assert templates.extract_last_code(
+        [{"role": "assistant", "content": f"Here you go:\n```python\n{code}\n```"}]
+    ) == code
+
+
+def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
+    """Only bullet 3 + the trailing paragraph may diverge from the sweet_rl original.
+
+    COLBENCH_AGENT_SYSTEM_PROMPT is no longer derived from _AGENT_PROMPT_RAW by string surgery, so
+    nothing else stops the two drifting apart. The unchanged bullets are what make arm (1) still
+    recognisably ColBench rather than a prompt we invented.
+    """
+    raw, live = templates._AGENT_PROMPT_RAW, templates.COLBENCH_AGENT_SYSTEM_PROMPT
+    for bullet in ("1) Note that the problem is highly personalized",
+                   "2) Note that you should not ask human users complicated questions",
+                   "4) Note that you can only interact with the human users WITHIN 10",
+                   "5) You should be as concise as possible"):
+        assert bullet in raw and bullet in live, f"bullet drifted: {bullet!r}"
+    # The marker is gone from the live prompt; the fence instruction replaces it.
+    assert templates.ANSWER_MARKER in raw
+    assert templates.ANSWER_MARKER not in live
+    assert "```python" in live
+    assert "{dialogue_history}" not in live
+
+
+# ── GT-path submission: a fenced function, with the marker still accepted ─────
+
+@pytest.mark.parametrize("turn,expected_def", [
+    ("Here is the function:\n```python\ndef f(x):\n    return x + 1\n```", True),
+    # Unterminated fence: the 1024-token per-turn cap cut the closing ``` off.
+    ("```python\ndef f(x):\n    return x + 1", True),
+    # Legacy marker protocol must still submit (old parquets / old checkpoints).
+    ("I WANT TO ANSWER:\ndef f(x):\n    return x + 1", True),
+])
+def test_final_answer_accepts_both_submit_protocols(turn, expected_def):
+    has_answer, ans = templates.final_answer(turn, episode_done=False)
+    assert has_answer is True
+    assert ("def f" in ans) is expected_def
+
+
+@pytest.mark.parametrize("turn", [
+    # A bare `def` in PROSE must not force-submit -- this is the one-shot arm.
+    "Sure -- something like def parse(rows), is that right?",
+    # A fenced block with no function definition is not a submission either.
+    "Like this:\n```python\nprint(total)\n```\nDoes that match?",
+    # Plain clarification.
+    "What should happen when the file is empty?",
+])
+def test_final_answer_does_not_submit_mid_clarification(turn):
+    assert templates.final_answer(turn, episode_done=False) == (False, "")
+
+
+def test_last_turn_fallback_still_submits():
+    """Ran out of turns without a fence or a marker -> the last attempt is still graded."""
+    has_answer, ans = templates.final_answer("def f(x):\n    return x", episode_done=True)
+    assert has_answer is True and "def f" in ans
+
+
+def test_fence_wins_over_a_trailing_marker():
+    """A FENCE, when present, beats the marker -- stripping unconditionally would regress.
+
+    "```python...``` I WANT TO ANSWER: that's it" splits at the marker to the trailing prose and
+    discards the function. The marker strip is therefore gated on there being no fence at all.
+    """
+    code = "def f(x):\n    return x + 1"
+    assert templates.extract_code_answer(
+        f"```python\n{code}\n```\nI WANT TO ANSWER: that's my final answer"
+    ) == code
+    # Marker BEFORE a fence still works (the fence is what gets extracted either way).
+    assert templates.extract_code_answer(f"I WANT TO ANSWER:\n```python\n{code}\n```") == code
 
 
 # ── leak invariant: GT never appears in the solver's message list ─────────────

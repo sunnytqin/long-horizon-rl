@@ -168,8 +168,13 @@ length_penalty_coef=${LENGTH_PENALTY_COEF:-0.0}
 # the eval length distribution.
 length_soft_cap=${LENGTH_SOFT_CAP:-2048}
 total_epochs=${TOTAL_EPOCHS:-15}
-save_freq=${SAVE_FREQ:-20}
-test_freq=${TEST_FREQ:-5}
+# 60/20 (was 20/5) -- kept IDENTICAL to run_colbench_grpo.sh so all three arms of the gold-sim
+# study checkpoint and validate on the same schedule. In-training val is the expensive one here:
+# ~2k problems, each a full multi-turn episode against the sim, so test_freq=5 spent a large
+# fraction of wall-clock validating. Cost of save_freq=60: a preempted job resumes from up to 60
+# steps back instead of 20.
+save_freq=${SAVE_FREQ:-60}
+test_freq=${TEST_FREQ:-20}
 
 
 # Rollout<->training mismatch correction (TIS) + clip-higher. Proven INERT for this stack
@@ -191,6 +196,16 @@ ulysses_sp=${ULYSSES_SP:-1}
 # the weight sync, which is the only way the 32B sync fits on one 8xH100 node. NB with fsdp2 +
 # offload_policy the param_offload/optimizer_offload above become NO-OPS -- CPUOffloadPolicy owns
 # CPU<->GPU placement instead. See the FSDP_PROFILE block in entrypoint_colbench.sh.
+#
+# ⚠ The knob is actor.strategy, NOT actor.fsdp_config.strategy. FSDPActorConfig.__post_init__
+# does `object.__setattr__(self.engine, "strategy", self.strategy)` where self.engine IS
+# fsdp_config -- so setting ONLY fsdp_config.strategy is silently CLOBBERED back to
+# actor.strategy's default ('fsdp'), the engine builds FSDP1, and offload_policy is then dead
+# config (only the fsdp2 branch of _build_fsdp_module reads it) while param/optimizer_offload
+# stay LIVE -> train_mode() pulls params+grads+Adam onto the GPU. That is what OOMed 32B at the
+# first optimizer.step() (16.4 GiB params + 16.4 grads + 32.8 Adam per GPU at 8 ranks, on top of
+# SGLang's resident 0.70*79 = 55 GiB). 14B survived it by being ~half the size. ref.strategy
+# interpolates ${actor_rollout_ref.actor.strategy}, so setting actor.strategy covers the ref too.
 actor_fsdp_strategy=${ACTOR_FSDP_STRATEGY:-fsdp}
 actor_offload_policy=${ACTOR_OFFLOAD_POLICY:-False}
 
@@ -215,7 +230,7 @@ python3 -m verl.trainer.main_ppo \
    algorithm.use_kl_in_reward=False \
    algorithm.rollout_correction.rollout_is=${rollout_is} \
    algorithm.rollout_correction.rollout_is_threshold=${rollout_is_threshold} \
-   data.train_files="['${DATA_DIR}/train.parquet']" \
+   data.train_files="['${TRAIN_FILE:-${DATA_DIR}/train.parquet}']" \
    data.val_files="['${VAL_FILE:-${DATA_DIR}/test_small.parquet}']" \
    data.train_batch_size=${train_batch_size} \
    data.max_prompt_length=${max_prompt_length} \
@@ -233,6 +248,7 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.actor.ulysses_sequence_parallel_size=${ulysses_sp} \
    actor_rollout_ref.actor.fsdp_config.param_offload=${param_offload} \
    actor_rollout_ref.actor.fsdp_config.optimizer_offload=${optimizer_offload} \
+   actor_rollout_ref.actor.strategy=${actor_fsdp_strategy} \
    actor_rollout_ref.actor.fsdp_config.strategy=${actor_fsdp_strategy} \
    actor_rollout_ref.actor.fsdp_config.offload_policy=${actor_offload_policy} \
    actor_rollout_ref.actor.use_kl_loss=True \

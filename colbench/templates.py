@@ -24,12 +24,9 @@ import re
 from typing import Optional
 
 # ── Solver (agent) system prompt ──────────────────────────────────────────────
-# Byte-identical to sweet_rl/prompts/llm_agent_code_prompt.txt EXCEPT the trailing
-# "{dialogue_history}" placeholder: sweet_rl string-formats the whole dialogue into it and
-# calls a completion endpoint, whereas we use a CHAT template (system + real message turns).
-# So, exactly like InfoPO's run_simulate_api.py, we drop the placeholder and let the actual
-# conversation turns carry the history. Kept as the raw file text below; the placeholder is
-# stripped in COLBENCH_AGENT_SYSTEM_PROMPT.
+# Byte-identical to sweet_rl/prompts/llm_agent_code_prompt.txt. Kept as the PROVENANCE record
+# only -- the live prompt is COLBENCH_AGENT_SYSTEM_PROMPT below, which diverges from this in
+# exactly two documented places.
 _AGENT_PROMPT_RAW = """You are a helpful LLM agent.
 Your task is to help a human user to resolve their problem, in particular python programming.
 1) Note that the problem is highly personalized so you need to explicitly gather information
@@ -47,8 +44,49 @@ Directly output the raw python code after "I WANT TO ANSWER:".
 Complete only the immediate agent response in this dialogue:
 {dialogue_history}"""
 
-# System prompt used by the solver agent loop + preprocess. Placeholder removed (see above).
-COLBENCH_AGENT_SYSTEM_PROMPT = _AGENT_PROMPT_RAW.replace("{dialogue_history}", "").strip()
+# The solver's LIVE system prompt (used by the agent loop + preprocess_colbench). Bullets 1, 2, 4
+# and 5 are verbatim from the sweet_rl original above; two things deliberately differ:
+#
+#  (a) The trailing "{dialogue_history}" placeholder is gone. sweet_rl formatted the whole
+#      conversation into it and called a COMPLETION endpoint; we use a real CHAT template and let
+#      the actual message turns carry the history (same as InfoPO's run_simulate_api.py).
+#
+#  (b) 2026-07-31: bullet 3's "I WANT TO ANSWER:" submit marker is replaced by a ```python code
+#      block, matching the SPEC path's submission syntax. The golden spec eval is the shared
+#      yardstick for the GT-vs-spec-vs-grounded study and it grades whatever `extract_last_code`
+#      finds on the raw turn -- so a GT arm RL'd onto a marker protocol would be scored partly on
+#      protocol conformance rather than capability. Aligning the syntax kills that confound at the
+#      source instead of teaching the extractor to be bilingual.
+#
+#      What is NOT changed is the TERMINATION CONTROL FLOW, which stays intentionally different
+#      between the arms: here the solver's own submission ends the episode (one shot, no reaction
+#      to its code), while the spec path lets the user react and terminate.
+#
+#      The trailing paragraph mirrors sweet_rl's own two sentences almost word-for-word with the
+#      mechanism swapped, plus one clause: "Showing this code block indicates you are submitting
+#      your final answer." That clause restores SEMANTICS the marker had for free -- "I WANT TO
+#      ANSWER:" announces itself as an act of submission, whereas a ```python block is something
+#      models emit constantly while explaining, so nothing about it says "this is my submission".
+#      It is deliberately phrased as what the act MEANS, not as an instruction about what to do.
+#
+#      Note the coupling this introduces: under the marker, showing code and submitting were
+#      separate acts, so the solver could sketch a snippet mid-clarification for free. Now it
+#      cannot. Whether that costs anything is UNMEASURED. Watch `num_assistant_turns` /
+#      `answered_at_turn` in the first ~20 steps: a collapse to 1-turn episodes means the rule is
+#      not landing, and the fix would be in the prompt, not the detector.
+COLBENCH_AGENT_SYSTEM_PROMPT = """You are a helpful LLM agent.
+Your task is to help a human user to resolve their problem, in particular python programming.
+1) Note that the problem is highly personalized so you need to explicitly gather information
+by asking questions to the human user about some hidden information and implicit constraints.
+YOU SHOULD TRY TO ASK CLARIFICATION QUESTIONS.
+2) Note that you should not ask human users complicated questions as they will only answer questions briefly in two sentences.
+3) When you have gathered enough information to answer, output the COMPLETE python function inside a ```python code block.
+4) Note that you can only interact with the human users WITHIN 10 back-and-forth rounds and you have to provide your final answer before the conversation ends.
+5) You should be as concise as possible in your response to human.
+
+
+The ```python code block should be included in your response to human if you think that you have gathered enough information for addressing this problem.
+Directly output the raw python code inside the ```python code block. Showing this code block indicates you are submitting your final answer."""
 
 # ── User-simulator prompt ─────────────────────────────────────────────────────
 # Byte-identical to sweet_rl/prompts/human_simulator_code_prompt.txt. Formatted per-turn
@@ -148,12 +186,30 @@ def check_and_extract_answer(response: str) -> tuple[bool, str]:
 # poor-man's substitute for a sandbox because sweet_rl exec'd in-process; our container
 # sidecar supersedes it.
 def extract_code_answer(answer_text: str) -> str:
-    """Strip a ```python / ``` code fence from the submitted answer, if present.
+    """Strip an answer MARKER and/or a ```python / ``` code fence, returning the code to grade.
 
-    Mirrors sweet_rl's fence handling: prefer a ```python block, else the first ``` block,
-    else the raw text. Returns the code string to grade (stripped).
+    Mirrors sweet_rl's fence handling: prefer a ```python block, else the first ``` block, else
+    the raw text. Returns the code string to grade (stripped).
+
+    An ``I WANT TO ANSWER:`` marker is stripped ONLY IN THE UNFENCED CASE (no ``` anywhere). On
+    the GT path that is a NO-OP -- ``final_answer`` already split at the marker before calling
+    here. It matters when a policy TRAINED on the GT protocol is graded by the SPEC path, which
+    has no marker convention and grades whatever ``extract_last_code`` finds on the WHOLE
+    assistant turn. The GT solver prompt says "Directly output the raw python code after
+    'I WANT TO ANSWER:'", so such a turn arrives UNFENCED and would reach the sandbox as
+    ``"I WANT TO ANSWER:\\ndef f(...)"`` -- a SyntaxError, i.e. a zero scored for a protocol
+    reason and indistinguishable from a capability result in the cross-arm comparison.
+
+    The no-fence guard is load-bearing, not tidiness. Stripping unconditionally REGRESSES a turn
+    that shows a fenced function and mentions the marker AFTERWARDS ("```python...``` I WANT TO
+    ANSWER: that's it"): splitting at the marker discards the fence and grades the trailing prose.
+    A fence, when present, is always the more reliable signal, so it wins outright.
     """
     text = answer_text or ""
+    if "```" not in text:
+        has_marker, after_marker = check_and_extract_answer(text)
+        if has_marker:
+            text = after_marker
     if "```python" in text:
         text = text.split("```python", 1)[1].split("```", 1)[0]
     elif "```" in text:
@@ -228,18 +284,55 @@ def detect_code_leak(
     return None
 
 
+# A ```python block, closed or left UNTERMINATED by the per-turn token cap. The solver's
+# max_new_tokens_per_turn is 1024, so a long function can be cut off before its closing fence
+# arrives; requiring the close would make that turn "not a submission", and the sim would then
+# reply to half a function. Same failure shape as the truncated-<think> bug.
+_PY_FENCE_CLOSED_RE = re.compile(r"```python\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_PY_FENCE_UNCLOSED_RE = re.compile(r"```python\s*(.*)\Z", re.DOTALL | re.IGNORECASE)
+
+
+def fenced_function(text: str) -> Optional[str]:
+    """Return the body of the first ```python block that DEFINES a function, else ``None``.
+
+    The ``def`` requirement is the whole point: this is the GT path's SUBMIT signal, and a
+    submission ends the episode after a single shot. ``contains_code`` (used on the spec path to
+    pick a grading target) also fires on a bare ``def`` anywhere in prose -- harmless there, since
+    showing code just invites a user reply and there is a 2-proposal budget, but fatal here, where
+    "something like def parse(rows), is that right?" mid-clarification would force-submit the
+    trajectory. Requiring a fenced block that actually contains a definition restores the
+    deliberateness the "I WANT TO ANSWER:" marker used to provide.
+    """
+    for m in _PY_FENCE_CLOSED_RE.finditer(text or ""):
+        body = m.group(1)
+        if _DEF_SIGNATURE_RE.search(body):
+            return body.strip()
+    m = _PY_FENCE_UNCLOSED_RE.search(text or "")
+    if m and _DEF_SIGNATURE_RE.search(m.group(1)):
+        return m.group(1).strip()
+    return None
+
+
 def final_answer(assistant_text: str, episode_done: bool) -> tuple[bool, str]:
     """Resolve the solver's final answer text from one assistant turn.
 
-    Returns ``(has_marker, answer_text)``. Mirrors InfoPO's extraction (sweet_rl step +
-    ``extract_answer_from_env`` fallbacks):
-      1. If the answer marker is present, use the text after it.
-      2. Else, on the FINAL turn (``episode_done``), fall back to the whole response when it
-         looks like code (``def``/``import``/``return``/`=` ...) or is non-trivial, so an
-         episode that ran out of turns still submits the model's last attempt.
-      3. Else no answer yet (keep interacting).
+    Returns ``(has_answer, answer_text)``:
+      1. A ```python block defining a function -> that block IS the submission (the live protocol;
+         see COLBENCH_AGENT_SYSTEM_PROMPT bullet 3).
+      2. Else the legacy ``I WANT TO ANSWER:`` marker -> the text after it. Still accepted so that
+         checkpoints and parquets predating 2026-07-31 keep working against this code: the marker
+         prompt shipped in the GT dataset for months, and a fence-only detector would leave such a
+         run silently unable to submit, every episode grinding to the turn cap. Accepting BOTH is
+         also why no submit-protocol toggle is needed anywhere in the stack.
+      3. Else, on the FINAL turn (``episode_done``), fall back to the whole response when it looks
+         like code (``def``/``import``/``return``/`=` ...) or is non-trivial, so an episode that
+         ran out of turns still submits the model's last attempt.
+      4. Else no answer yet (keep interacting).
     ``assistant_text`` should already be ``strip_think``-ed by the caller.
     """
+    fenced = fenced_function(assistant_text)
+    if fenced is not None:
+        return True, fenced
     has_marker, answer_text = check_and_extract_answer(assistant_text)
     if has_marker:
         return True, answer_text

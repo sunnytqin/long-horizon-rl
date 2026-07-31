@@ -95,17 +95,26 @@ sim_reject_max_tries=${SIM_REJECT_MAX_TRIES:-0}
 # frozen-server baseline. The entrypoint gives training ALL GPUs in this mode (SIM_TP=0), so
 # NGPUS_PER_NODE comes back as 8 rather than 6.
 sim_live=${SIM_LIVE:-False}
-# Sim GENERATION cap (tokens), read by colbench/env.py (frozen backend) AND the live backend.
-# 512, not env.py's 4096 default: this path ALSO slices the reply to 400 chars post-hoc
-# (HUMAN_RESPONSE_CHARACTER_LIMIT), and 400 chars cannot tokenize past 400 tokens, so 512 keeps
-# every character the slice would have kept -- the injected user turn is byte-identical to a
-# 4096-token run -- while clamping the pathological no-EOS tail 8x. That tail is what breaks
-# ENV_STEP_TIMEOUT, and under sim_live it is decoded on the TRAINING engine, competing with solver
-# rollouts. Exported (not just passed to hydra) because env.py reads it from os.environ, and set
-# HERE so the GCS-archived run script records the value. Same in both arms => the frozen-vs-live
-# A/B moves only one variable. (The spec path's 256 is NOT the same knob: it removed the char
-# slice, so there 256 is the only cap and it changes what the sim can say.)
-export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-512}
+# ── USER-TURN BUDGET. Aligned with run_colbench_grpo_spec.sh so the GT-vs-SPEC comparison does
+# ── not confound "better environment" with "the user is allowed to say 2.5x more per turn".
+#
+# SIM_CHAR_LIMIT=0 DISABLES sweet_rl's 400-char post-hoc slice (env.py::_finalize_reply; the
+# default there is still 400, so nothing outside this script changes). The spec path deleted that
+# slice outright and bounds the user ONLY at generation time, so leaving it live here meant the GT
+# arm's user delivered <=400 chars against the spec arm's ~700-1000.
+#
+# With the slice gone, SIM_MAX_TOKENS is the SINGLE binding cap in both arms -- hence 256, matching
+# the spec script exactly (the old 512 existed only to make the 400-char slice lossless, and is
+# meaningless now that there is no slice). Brevity is enforced at the source instead, by the sim
+# prompt's "IN TWO SENTENCES" instruction, exactly as on the spec path.
+#
+# To restore STOCK ColBench (e.g. to reproduce a pre-2026-07-31 GT run):
+#     SIM_CHAR_LIMIT=400 SIM_MAX_TOKENS=512 bash colbench/run_colbench_grpo.sh
+# Both are exported (not just passed to hydra) because env.py reads them from os.environ, and set
+# HERE so the GCS-archived run script records the values. Watch the `sim_reply_chars` metric --
+# it is logged by BOTH agent loops, so it is the direct check that the budgets now match.
+export SIM_CHAR_LIMIT=${SIM_CHAR_LIMIT:-0}
+export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-256}
 # Solver sampling. Defaults = the SOLVER model's recommended generation settings; match these
 # to whatever --model you train. Qwen3-4B-Instruct-2507: temp 0.7, top_p 0.8, top_k 20, min_p 0
 # (min_p is verl's default 0, not a settable rollout field). Qwen3-32B (thinking): 0.6/0.95/20.
@@ -113,6 +122,15 @@ export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-512}
 rollout_temp=${ROLLOUT_TEMP:-0.7}
 rollout_top_p=${ROLLOUT_TOP_P:-0.8}
 rollout_top_k=${ROLLOUT_TOP_K:-20}
+# In-training VAL uses the SAME solver sampling as training (val_kwargs below reuse these vars),
+# NOT verl's default GREEDY (temperature 0 / top_p 1.0 / top_k -1 / do_sample False). Two reasons:
+# (1) val should reflect the sampling regime the policy is optimized under, and (2) Qwen3 is
+# documented to degrade/repeat under greedy. ALIGNMENT NOTE: run_colbench_grpo_spec.sh has always
+# set these; this script did not, so the GT arm's val curve was silently measured under a
+# DIFFERENT decoder than the spec arm's -- a cross-arm confound with nothing to do with the
+# environment. Set here so the GT-vs-spec comparison moves only the intended variable.
+# The frozen user-sim is unchanged in val (separate server, its own _sim_sampling); val n=1 =
+# one sampled trajectory per problem.
 
 
 # Code-exec sandbox (reused from codecontest, UNCHANGED). The sidecar grades ColBench
@@ -128,9 +146,21 @@ actor_lr=${ACTOR_LR:-1e-6}
 # KL = 0.01: the proven stability fix for this multi-turn stack (entropy explosion, not a
 # rollout mismatch -- see project-codecontest-rl-stability-plan). Do NOT drop to 0.
 kl_loss_coef=${KL_LOSS_COEF:-0.01}
+# Pinned for GT-vs-SPEC parity. Both values EQUAL verl's own defaults, so this changes nothing
+# about how the GT arm trains -- but run_colbench_grpo_spec.sh passes them explicitly, and
+# launch.py threads --loss_agg_mode to EVERY run. Without these two lines a `--loss_agg_mode`
+# passed to a GT launch was silently dropped while the same flag took effect on a spec launch:
+# the two arms would have diverged on an intervention the CLI said was applied to both.
+norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD_IN_GRPO:-True}
+loss_agg_mode=${LOSS_AGG_MODE:-token-mean}
 total_epochs=${TOTAL_EPOCHS:-15}
-save_freq=${SAVE_FREQ:-20}
-test_freq=${TEST_FREQ:-5}
+# 60/20 (was 20/5), applied identically to the spec script so all three arms of the gold-sim study
+# checkpoint and validate on the same schedule. In-training val is the expensive one here: ~2k
+# problems, each a full multi-turn episode against the sim, so test_freq=5 spent a large fraction
+# of wall-clock validating. Cost of save_freq=60: a preempted job resumes from up to 60 steps back
+# instead of 20.
+save_freq=${SAVE_FREQ:-60}
+test_freq=${TEST_FREQ:-20}
 
 
 # Rollout<->training mismatch correction (TIS) + clip-higher. Proven INERT for this stack
@@ -152,6 +182,12 @@ ulysses_sp=${ULYSSES_SP:-1}
 # the weight sync, which is the only way the 32B sync fits on one 8xH100 node. NB with fsdp2 +
 # offload_policy the param_offload/optimizer_offload above become NO-OPS -- CPUOffloadPolicy owns
 # CPU<->GPU placement instead. See the FSDP_PROFILE block in entrypoint_colbench.sh.
+#
+# ⚠ The knob is actor.strategy, NOT actor.fsdp_config.strategy: FSDPActorConfig.__post_init__
+# overwrites fsdp_config.strategy (== self.engine) with actor.strategy, so setting only the
+# fsdp_config key silently leaves the engine on FSDP1 with offload_policy dead and
+# param/optimizer_offload live -> params+grads+Adam land on the GPU. Same fix as
+# run_colbench_grpo_spec.sh (see the long note there).
 actor_fsdp_strategy=${ACTOR_FSDP_STRATEGY:-fsdp}
 actor_offload_policy=${ACTOR_OFFLOAD_POLICY:-False}
 
@@ -172,10 +208,11 @@ fi
 python3 -m verl.trainer.main_ppo \
    ${chat_template_args[@]+"${chat_template_args[@]}"} \
    algorithm.adv_estimator=grpo \
+   algorithm.norm_adv_by_std_in_grpo=${norm_adv_by_std_in_grpo} \
    algorithm.use_kl_in_reward=False \
    algorithm.rollout_correction.rollout_is=${rollout_is} \
    algorithm.rollout_correction.rollout_is_threshold=${rollout_is_threshold} \
-   data.train_files="['${DATA_DIR}/train.parquet']" \
+   data.train_files="['${TRAIN_FILE:-${DATA_DIR}/train.parquet}']" \
    data.val_files="['${VAL_FILE:-${DATA_DIR}/test_small.parquet}']" \
    data.train_batch_size=${train_batch_size} \
    data.max_prompt_length=${max_prompt_length} \
@@ -193,6 +230,7 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.actor.ulysses_sequence_parallel_size=${ulysses_sp} \
    actor_rollout_ref.actor.fsdp_config.param_offload=${param_offload} \
    actor_rollout_ref.actor.fsdp_config.optimizer_offload=${optimizer_offload} \
+   actor_rollout_ref.actor.strategy=${actor_fsdp_strategy} \
    actor_rollout_ref.actor.fsdp_config.strategy=${actor_fsdp_strategy} \
    actor_rollout_ref.actor.fsdp_config.offload_policy=${actor_offload_policy} \
    actor_rollout_ref.actor.use_kl_loss=True \
@@ -201,6 +239,7 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.actor.clip_ratio_high=${clip_ratio_high} \
    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
    actor_rollout_ref.actor.entropy_coeff=0 \
+   actor_rollout_ref.actor.loss_agg_mode=${loss_agg_mode} \
    actor_rollout_ref.rollout.temperature=${rollout_temp} \
    actor_rollout_ref.rollout.top_p=${rollout_top_p} \
    actor_rollout_ref.rollout.top_k=${rollout_top_k} \
@@ -211,6 +250,11 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.rollout.multi_stage_wake_up=${multi_stage_wake_up} \
    actor_rollout_ref.rollout.calculate_log_probs=True \
    actor_rollout_ref.rollout.n=${rollout_n} \
+   actor_rollout_ref.rollout.val_kwargs.temperature=${rollout_temp} \
+   actor_rollout_ref.rollout.val_kwargs.top_p=${rollout_top_p} \
+   actor_rollout_ref.rollout.val_kwargs.top_k=${rollout_top_k} \
+   actor_rollout_ref.rollout.val_kwargs.do_sample=True \
+   actor_rollout_ref.rollout.val_kwargs.n=1 \
    actor_rollout_ref.rollout.multi_turn.enable=True \
    actor_rollout_ref.rollout.multi_turn.max_assistant_turns=${max_assistant_turns} \
    actor_rollout_ref.rollout.multi_turn.format=hermes \
