@@ -121,11 +121,17 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
         {"role": "user", "content": user_content},
     ]
     temperature, top_p, top_k, min_p = _sim_sampling()
-    # top_k / min_p are SGLang extensions -> extra_body; enable_thinking (if set) merges in.
+    # top_k / min_p are SGLang extensions -> extra_body.
     extra_body = {"top_k": top_k, "min_p": min_p}
     thinking = _sim_extra_body()
     if thinking is not None:
-        extra_body.update(thinking)
+        # MUST be nested under `chat_template_kwargs`. A hybrid Qwen3 turns reasoning off in its
+        # JINJA TEMPLATE (which pre-fills an empty `<think></think>`), so the flag has to reach the
+        # template renderer. VERIFIED on the running SGLang sim 2026-07-30: a TOP-LEVEL
+        # `enable_thinking: false` is accepted and SILENTLY IGNORED (reply still opens `<think>`),
+        # while `chat_template_kwargs: {enable_thinking: false}` works. Same trap as vLLM, which
+        # declares no such field and sets extra="allow".
+        extra_body["chat_template_kwargs"] = thinking
     # SIM_MAX_TOKENS bounds the user turn at GENERATION time (default 4096 = unchanged). The spec
     # path sets it small so a brief human-like reply is not chopped post-hoc (it replaces the old
     # HUMAN_RESPONSE_CHARACTER_LIMIT slice, which truncated mid-sentence).

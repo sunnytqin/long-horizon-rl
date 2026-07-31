@@ -90,11 +90,22 @@ ANSWER_MARKER = "I WANT TO ANSWER:"
 # char cap) so reasoning never leaks into the extracted answer or the injected user turn. For
 # a plain Instruct model this is a defensive no-op.
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+# An UNTERMINATED block: the generation hit its token cap mid-reasoning, so `</think>` never
+# arrives. This is not a rare edge case -- the spec sim runs at SIM_MAX_TOKENS=256, far too few
+# for a hybrid Qwen3 to finish thinking, so EVERY reply is truncated this way if thinking is on.
+# Matching only the closed form let raw chain-of-thought through as the user's dialogue turn.
+_THINK_OPEN_UNCLOSED = re.compile(r"<think>(?!.*</think>).*\Z", re.DOTALL)
 
 
 def strip_think(text: str) -> str:
-    """Remove any ``<think>...</think>`` block and surrounding whitespace."""
-    return _THINK_BLOCK.sub("", text or "").strip()
+    """Remove ``<think>...</think>`` blocks, INCLUDING a trailing unterminated one.
+
+    Returns "" when the text is nothing but (truncated) reasoning -- callers treat an empty reply
+    as a failed turn rather than injecting reasoning fragments into the conversation.
+    """
+    out = _THINK_BLOCK.sub("", text or "")
+    out = _THINK_OPEN_UNCLOSED.sub("", out)
+    return out.strip()
 
 
 # ── Answer-marker extraction (ported from InfoPO run_simulate_api.check_and_extract_answer) ──
