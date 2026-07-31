@@ -37,7 +37,11 @@ export CODECONTEST_EXEC_MEM_GB=${CODECONTEST_EXEC_MEM_GB:-2}
 export CODECONTEST_EXEC_CONCURRENCY=${CODECONTEST_EXEC_CONCURRENCY:-32}
 
 MODEL_PATH=${MODEL_PATH:-Qwen/Qwen2.5-14B-Instruct}
-VAL_FILE=${VAL_FILE:-$HOME/data/colbench/test.parquet}
+# Defaults to the *.fence.* test set, matching run_colbench_grpo.sh's train/val default -- a
+# checkpoint must be evaluated under the same submit protocol it trained on. Pass
+# VAL_FILE=$HOME/data/colbench/test.parquet for the marker-protocol set (a pre-2026-07-31 run);
+# templates.final_answer accepts BOTH signals, so either dataset works against this code.
+VAL_FILE=${VAL_FILE:-$HOME/data/colbench/test.fence.parquet}
 OUT=${OUT:-runs/validate_$(date +%m%d_%H%M).json}
 
 # Eval scope. Default: the FULL test set (MAX_PROBLEMS unset -> all rows), but only

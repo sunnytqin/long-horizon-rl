@@ -48,7 +48,13 @@ NNODES=${NNODES:-1}
 NGPUS_PER_NODE=${NGPUS_PER_NODE:-6}
 
 
-# Model and dataset
+# Model and dataset. The GT parquets default to the *.fence.* variants: their solver system prompt
+# submits with a ```python code block instead of "I WANT TO ANSWER:", matching the spec path so the
+# shared golden eval does not score this arm partly on protocol conformance. The unsuffixed
+# marker-protocol parquets are still in the same GCS dir -- pass
+# TRAIN_FILE=${DATA_DIR}/train.parquet VAL_FILE=${DATA_DIR}/test_small.parquet to reproduce a
+# pre-2026-07-31 run. (templates.final_answer accepts BOTH submit signals, so either dataset works
+# against this code.)
 DATA_DIR=${DATA_DIR:-$HOME/data/colbench}
 MODEL_PATH=${MODEL_PATH:-Qwen/Qwen2.5-14B-Instruct}
 
@@ -212,8 +218,8 @@ python3 -m verl.trainer.main_ppo \
    algorithm.use_kl_in_reward=False \
    algorithm.rollout_correction.rollout_is=${rollout_is} \
    algorithm.rollout_correction.rollout_is_threshold=${rollout_is_threshold} \
-   data.train_files="['${TRAIN_FILE:-${DATA_DIR}/train.parquet}']" \
-   data.val_files="['${VAL_FILE:-${DATA_DIR}/test_small.parquet}']" \
+   data.train_files="['${TRAIN_FILE:-${DATA_DIR}/train.fence.parquet}']" \
+   data.val_files="['${VAL_FILE:-${DATA_DIR}/test_small.fence.parquet}']" \
    data.train_batch_size=${train_batch_size} \
    data.max_prompt_length=${max_prompt_length} \
    data.max_response_length=${max_response_length} \
