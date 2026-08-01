@@ -31,17 +31,18 @@ import os
 import sys
 from typing import Any
 
+# ``colbench`` only resolves once the repo root is on sys.path, so this has to
+# run before the imports below. It APPENDS, so the third-party packages below
+# still resolve from the same earlier sys.path entries as before.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# pylint: disable=g-import-not-at-top,wrong-import-position
 from absl import app
 from absl import flags
-import datasets
-import pandas as pd
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# The module-level setup above (env vars, sys.path) has to run
-# before these imports resolve, so they cannot sit at the top.
-# pylint: disable=g-import-not-at-top,wrong-import-position
 from colbench.templates import build_initial_user_message
 from colbench.templates import COLBENCH_AGENT_SYSTEM_PROMPT
+import datasets
+import pandas as pd
 
 DATA_SOURCE = (
     "colbench_code_local"  # routes nowhere special; reward comes from the loop

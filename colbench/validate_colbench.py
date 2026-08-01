@@ -66,10 +66,9 @@ import os
 import random
 import time
 
-import pandas as pd
-
 from colbench import templates
 from colbench.env import ColBenchUserSimEnv
+import pandas as pd
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 

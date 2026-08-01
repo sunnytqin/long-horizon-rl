@@ -58,10 +58,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The module-level setup above (env vars, sys.path) has to run
 # before these imports resolve, so they cannot sit at the top.
 # pylint: disable=g-import-not-at-top,wrong-import-position
-import pandas as pd
-
 from colbench import templates
 from colbench.env_spec import ColBenchSpecUserSimEnv
+import pandas as pd
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 

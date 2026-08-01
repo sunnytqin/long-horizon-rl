@@ -43,11 +43,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The module-level setup above (env vars, sys.path) has to run
 # before these imports resolve, so they cannot sit at the top.
 # pylint: disable=g-import-not-at-top,wrong-import-position
-import datasets
-
 from colbench.selfplay import dataio
 from colbench.templates import build_initial_user_message
 from colbench.templates import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT
+import datasets
 
 DATA_SOURCE = (
     "colbench_spec_local"  # routes nowhere special; reward comes from the loop
