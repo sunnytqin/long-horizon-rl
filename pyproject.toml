@@ -31,6 +31,15 @@ requires-python = ">=3.10"
 # it isn't a hard upper bound, and formatted lines may exceed the line-length.
 line-length = 120
 exclude = ["scripts/legacy_model_merger.py"]
+# colbench/ is first-party research code that is mirrored into google3 and therefore follows
+# Google style (2-space indent, 80 cols, gpylint) instead of verl's PEP 8 / ruff style. The two
+# are mutually exclusive -- e.g. ruff's UP006 rewrites List[X] -> list[X] while gpylint's
+# g-bare-generic wants the opposite -- so colbench is scoped out of ruff entirely.
+# Format it with: ./colbench/format.sh
+extend-exclude = ["colbench"]
+# Honour the excludes even when a path is passed explicitly on the command line. Without this,
+# `ruff check colbench/foo.py` (and pre-commit, which passes filenames) would still lint it.
+force-exclude = true
 
 [tool.ruff.lint]
 isort = {known-first-party = ["verl"]}

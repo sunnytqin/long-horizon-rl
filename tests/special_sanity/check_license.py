@@ -84,11 +84,21 @@ if __name__ == "__main__":
         nargs="+",
         help="List of directories to check for license headers",
     )
+    parser.add_argument(
+        "--exclude",
+        "-e",
+        default=[],
+        type=Path,
+        nargs="+",
+        help="Directories to skip (e.g. trees carrying a different license convention)",
+    )
     args = parser.parse_args()
 
     # Collect all Python files from specified directories (only git-tracked files)
     tracked = _git_tracked_py_files()
     pathlist = set(path for path_arg in args.directories for path in get_py_files(path_arg, tracked))
+    for excluded in args.exclude:
+        pathlist -= set(get_py_files(excluded, tracked))
 
     for path in pathlist:
         # because path is object not string
