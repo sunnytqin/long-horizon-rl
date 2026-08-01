@@ -99,9 +99,10 @@ def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
       time_limit: per-case wall-clock timeout (seconds), passed to the sidecar.
 
   Returns:
-      dict with ``pass_rate`` (float in [0,1] -- the reward), ``all_pass`` (bool),
-      ``per_case`` (list[bool]), and ``n`` (cases executed). A missing candidate / no test
-      cases / an unreachable sidecar all yield ``pass_rate=0.0`` (never raises).
+      dict with ``pass_rate`` (float in [0,1] -- the reward), ``all_pass``
+      (bool), ``per_case`` (list[bool]), and ``n`` (cases executed). A missing
+      candidate / no test cases / an unreachable sidecar all yield
+      ``pass_rate=0.0`` (never raises).
   """
   # Defensive: the parquet stores test_cases as list<string> and verl (HF
   #            datasets) hands us a plain list, but a pandas reader returns

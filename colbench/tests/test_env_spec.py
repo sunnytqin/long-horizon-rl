@@ -4,8 +4,8 @@ Covers colbench.env_spec and the spec templates helpers, against a mocked sim.
 
 Covers the leak invariant (GT source NEVER enters the spec sim prompt -- only
 the spec does), grading parity with the GT env, the spec-specific templates
-helpers
-(``sim_terminated``/``contains_code``/``extract_last_code``/``build_spec_sim_messages``),
+helpers (``sim_terminated``, ``contains_code``, ``extract_last_code``,
+``build_spec_sim_messages``),
 and the USER-DRIVEN termination state machine via an inline driver that mirrors
 the plan's loop -- so the contract is pinned before ``colbench_spec_agent`` /
 ``validate_colbench_spec`` implement it. Grading uses the in-process exec
@@ -27,7 +27,8 @@ GT = (
     "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
     "       return x - y\n"
 )
-WRONG = "def f(x, y):\n    return x + y\n"  # ignores the x<10 branch -> 0.5 pass-rate
+# Ignores the x<10 branch -> 0.5 pass-rate.
+WRONG = "def f(x, y):\n    return x + y\n"
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Write a function f(x, y) with some personalized behavior."
 SPEC = {
@@ -224,7 +225,7 @@ def test_score_full_and_partial():
   assert e.score("```python\n" + WRONG + "```")["pass_rate"] == 0.5
 
 
-# ── USER-DRIVEN termination state machine (inline driver mirrors the plan loop) ──
+# ── USER-DRIVEN termination: state machine (driver mirrors the loop) ─────────
 
 
 def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
@@ -346,10 +347,11 @@ def test_user_terminates_without_code_is_no_code_reward_zero():
 
 
 # ── GROUNDED sim mode (+colbench.grounded_sim) ────────────────────────────────
-# The sim conditions on the hidden GT source + spec["plot"] instead of persona/scenario/
-# requirements. Same env, same termination machinery -- only the sim's SYSTEM prompt changes.
-# The GT is now IN the sim's prompt, so "leak impossible by construction" no longer holds and the
-# episode-level invariant below (GT never reaches the SOLVER's message list) is what enforces it.
+# The sim conditions on the hidden GT source + spec["plot"] instead of
+# persona/scenario/requirements. Same env, same termination machinery -- only
+# the sim's SYSTEM prompt changes. The GT is now IN the sim's prompt, so "leak
+# impossible by construction" no longer holds and the episode-level invariant
+# below (GT never reaches the SOLVER's message list) is what enforces it.
 
 
 def _capturing_backend(reply="Above 10 we add, below we subtract."):
@@ -437,7 +439,8 @@ def test_grounded_leak_invariant_full_episode():
   e = _env(
       sim_backend=_scripted_backend(
           [
-              "Above a certain number we add them, otherwise we take the difference.",
+              "Above a certain number we add them, otherwise we take the"
+              " difference.",
               "The cutoff is ten.",
               "That's it, thanks! [TERMINATE]",
           ]

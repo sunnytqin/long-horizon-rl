@@ -42,10 +42,11 @@ from colbench import templates
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# ── Conversation debug (mirrors codecontest.env's CODECONTEST_DEBUG_FEEDBACK gate) ──
-# Env-var gated so the user can eyeball dialogues. Logged at WARNING because plain print()
-# is swallowed by the Ray rollout workers. See colbench_agent.py for the per-turn / answer /
-# reward dumps; here we dump the SIM side (prompt incl. the hidden GT, + raw reply).
+# ── Conversation debug (mirrors codecontest.env's DEBUG_FEEDBACK gate) ───────
+# Env-var gated so the user can eyeball dialogues. Logged at WARNING because
+# plain print() is swallowed by the Ray rollout workers. See colbench_agent.py
+# for the per-turn / answer / reward dumps; here we dump the SIM side (prompt
+# incl. the hidden GT, + raw reply).
 _DEBUG_SIM = bool(int(os.getenv("COLBENCH_DEBUG_SIM", "0") or "0"))
 _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
@@ -85,12 +86,11 @@ def _sim_sampling():
   Defaults to Qwen3-Instruct's recommended values.
 
   IMPORTANT: default temperature is 0.7 (NOT greedy). The Qwen3 family is
-             explicitly documented to degrade / repeat under greedy (temp 0)
-             decoding, so a Qwen3 sim MUST sample. Defaults =
-             Qwen3-*-Instruct-2507 recommendation (temp 0.7, top_p 0.8, top_k
-             20, min_p 0); for a Qwen3-32B (thinking) sim set
-             SIM_TEMPERATURE=0.6 SIM_TOP_P=0.95. Returns (temperature, top_p,
-             top_k, min_p).
+  explicitly documented to degrade / repeat under greedy (temp 0) decoding, so a
+  Qwen3 sim MUST sample. Defaults = Qwen3-*-Instruct-2507 recommendation (temp
+  0.7, top_p 0.8, top_k 20, min_p 0); for a Qwen3-32B (thinking) sim set
+  SIM_TEMPERATURE=0.6 SIM_TOP_P=0.95. Returns (temperature, top_p, top_k,
+  min_p).
   """
   return (
       float(os.environ.get("SIM_TEMPERATURE", "0.7")),
@@ -105,12 +105,14 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
 
   The server speaks the OpenAI API.
 
-  Reads OPENAI_BASE_URL (e.g. http://localhost:<SIM_PORT>/v1), MULTITURN_MODEL_NAME, and
-  OPENAI_API_KEY (default "EMPTY"), matching the entrypoint's exported env. Sampling comes
-  from SIM_TEMPERATURE/SIM_TOP_P/SIM_TOP_K/SIM_MIN_P (see _sim_sampling -- defaults to Qwen3's
-  recommended non-greedy sampling); max_tokens 4096; 3 retries then "No response." -- mirrors
-  sweet_rl HumanInteractionEnv.invoke_model / InfoPO APIHumanSimulator.invoke_model.
-  ``openai`` is imported lazily so CPU tests (which inject a stub) never need it installed.
+  Reads OPENAI_BASE_URL (e.g. http://localhost:<SIM_PORT>/v1),
+  MULTITURN_MODEL_NAME, and OPENAI_API_KEY (default "EMPTY"), matching the
+  entrypoint's exported env. Sampling comes from
+  SIM_TEMPERATURE/SIM_TOP_P/SIM_TOP_K/SIM_MIN_P (see _sim_sampling -- defaults
+  to Qwen3's recommended non-greedy sampling); max_tokens 4096; 3 retries then
+  "No response." -- mirrors sweet_rl HumanInteractionEnv.invoke_model / InfoPO
+  APIHumanSimulator.invoke_model. ``openai`` is imported lazily so CPU tests
+  (which inject a stub) never need it installed.
   """
   # pylint: disable=g-import-not-at-top
   from openai import OpenAI  # lazy: only the real sim path needs the SDK
@@ -271,7 +273,8 @@ class ColBenchUserSimEnv:
     if _DEBUG_SIM:
       n = _DEBUG_PREVIEW
       logger.warning(
-          "[COLBENCH_SIM] hidden_gt[:%d]=%r\n[COLBENCH_SIM] sim_user_prompt[:%d]=%r\n"
+          "[COLBENCH_SIM] hidden_gt[:%d]=%r\n"
+          "[COLBENCH_SIM] sim_user_prompt[:%d]=%r\n"
           "[COLBENCH_SIM] raw_reply[:%d]=%r\n[COLBENCH_SIM] capped_reply=%r",
           n,
           str(self.ground_truth)[:n],

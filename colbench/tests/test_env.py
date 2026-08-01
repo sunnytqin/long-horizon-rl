@@ -229,10 +229,12 @@ def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
     "turn,expected_def",
     [
         (
-            "Here is the function:\n```python\ndef f(x):\n    return x + 1\n```",
+            "Here is the function:\n"
+            "```python\ndef f(x):\n    return x + 1\n```",
             True,
         ),
-        # Unterminated fence: the 1024-token per-turn cap cut the closing ``` off.
+        # Unterminated fence: the 1024-token per-turn cap cut the closing ```
+        # off.
         ("```python\ndef f(x):\n    return x + 1", True),
         # Legacy marker protocol must still submit (old parquets / old
         # checkpoints).
@@ -277,8 +279,9 @@ def test_fence_wins_over_a_trailing_marker():
 
   Stripping unconditionally would regress.
 
-  "```python...``` I WANT TO ANSWER: that's it" splits at the marker to the trailing prose and
-  discards the function. The marker strip is therefore gated on there being no fence at all.
+  "```python...``` I WANT TO ANSWER: that's it" splits at the marker to the
+  trailing prose and discards the function. The marker strip is therefore gated
+  on there being no fence at all.
   """
   code = "def f(x):\n    return x + 1"
   assert (

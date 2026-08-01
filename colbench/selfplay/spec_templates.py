@@ -21,12 +21,12 @@ Parsing (``parse_spec``) is tolerant of models that wrap the JSON in prose or
 fences.
 """
 
-# The long lines in this file are prompt text inside string literals. Re-wrapping
-# them would change the exact bytes sent to the model and break comparability with
-# completed runs, so the line-length limit is disabled file-wide rather than
-# reflowed. A per-line disable is not an option here: the comment would land inside
-# the prompt and be sent to the model.
 # pylint: disable=line-too-long
+# The long lines in this file are prompt text inside string literals.
+# Re-wrapping them would change the exact bytes sent to the model and break
+# comparability with completed runs, so the line-length limit is disabled
+# file-wide rather than reflowed. A per-line disable is not an option here: the
+# comment would land inside the prompt and be sent to the model.
 
 import json
 import re
@@ -247,10 +247,10 @@ def parse_spec(raw: str) -> dict[str, Any]:
   """Parse an author model's reply into ``{persona, scenario, requirements, raw, ok}``.
 
   Tolerant: strips prose/fences around the JSON object. If no JSON parses, we
-            fall back to treating the whole reply as free-text requirements
-            (``ok=False``) so a malformed generation is still usable/inspectable
-            rather than lost. ``persona`` is kept as-authored (dict or str); use
-            ``_persona_to_text`` when composing prompt text.
+  fall back to treating the whole reply as free-text requirements (``ok=False``)
+  so a malformed generation is still usable/inspectable rather than lost.
+  ``persona`` is kept as-authored (dict or str); use ``_persona_to_text`` when
+  composing prompt text.
   """
   text = (raw or "").strip()
   obj = None

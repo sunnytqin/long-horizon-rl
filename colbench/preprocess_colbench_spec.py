@@ -1,4 +1,4 @@
-"""Preprocess the SPEC-path ColBench dataset into our VERL RL schema (Phase 1).
+r"""Preprocess the SPEC-path ColBench dataset into our VERL RL schema (Phase 1).
 
 Sibling of ``colbench.preprocess_colbench`` for the spec setting. Joins the
 Phase-0 authored specs (``.../colbench_specs/specs/train.selfplay.plot.jsonl``;
@@ -22,13 +22,15 @@ Phase 1 up (train/val split for RL is deferred). Reuses ``selfplay.dataio`` for
 the raw-parquet load + GT resolution + jsonl reader.
 
 Usage:
+    SPECS=/n/netscratch/dam_lab/Lab/sqin/colbench_specs
     python colbench/preprocess_colbench_spec.py \
         --raw_parquet InfoPO/data/colbench_code/train.parquet \
-        --specs_jsonl /n/netscratch/dam_lab/Lab/sqin/colbench_specs/specs/train.selfplay.plot.jsonl \
+        --specs_jsonl $SPECS/specs/train.selfplay.plot.jsonl \
         --out ~/data/colbench_spec/train.parquet
     # quick 30-row subset:
     python colbench/preprocess_colbench_spec.py --raw_parquet ... \
-        --specs_jsonl .../train.selfplay.plot.cond30.jsonl --out /tmp/colbench_spec/cond30.parquet
+        --specs_jsonl .../train.selfplay.plot.cond30.jsonl \
+        --out /tmp/colbench_spec/cond30.parquet
 """
 
 import argparse
@@ -167,7 +169,8 @@ def main():
   )
   if not rows:
     raise SystemExit(
-        "[preprocess_spec] no usable rows -- check --specs_jsonl / --raw_parquet."
+        "[preprocess_spec] no usable rows -- check --specs_jsonl /"
+        " --raw_parquet."
     )
 
   out = os.path.expanduser(args.out)

@@ -1,4 +1,4 @@
-"""Phase-0, Deliverable 2: the full-spec solve-rate diagnostic.
+r"""Phase-0, Deliverable 2: the full-spec solve-rate diagnostic.
 
 Hand a solver the ENTIRE authored spec in a SINGLE turn (no clarification
 dialogue), extract the code, and grade it against the UNCHANGED GT
@@ -7,16 +7,17 @@ on one or more spec files (e.g. strong-gen and self-gen) and it prints a solve
 rate per file -- the ceiling the Phase-1 dialogue rollout could reach.
 
 Interpretation: a low self-gen number that TRACKS a low strong-gen number => the
-                solver/task is the bottleneck (the spec is fine); a self-gen
-                number well BELOW strong-gen => self-authored spec quality is
-                the bottleneck. This is a diagnostic, not a filter: nothing is
-                dropped.
+solver/task is the bottleneck (the spec is fine); a self-gen number well BELOW
+strong-gen => self-authored spec quality is the bottleneck. This is a
+diagnostic, not a filter: nothing is dropped.
 
 Example:
     python -m colbench.selfplay.diagnose_specs \
         --data_file ~/data/colbench/train.parquet --max_rows 100 \
-        --specs ~/data/colbench/specs/train.strong.jsonl ~/data/colbench/specs/train.selfplay.jsonl \
-        --solver_base_url http://127.0.0.1:30000/v1 --solver_model colbench-base \
+        --specs ~/data/colbench/specs/train.strong.jsonl \
+                ~/data/colbench/specs/train.selfplay.jsonl \
+        --solver_base_url http://127.0.0.1:30000/v1 \
+        --solver_model colbench-base \
         --n_samples 1 --out ~/data/colbench/specs/diagnostic.json
 """
 
@@ -120,7 +121,8 @@ def diagnose_specs_file(
   """Run the requirements full-spec diagnostic for one spec file.
 
   Returns {label, metrics, rows}. Specs with no ``requirements`` text are
-  skipped (counted)."""
+  skipped (counted).
+  """
   specs = read_jsonl(specs_path)
   backend = (
       specs[0].get("backend")
@@ -163,7 +165,8 @@ def main():
   ap.add_argument(
       "--data_file",
       default=os.path.expanduser("~/data/colbench/train.parquet"),
-      help="The SAME parquet the specs were authored from (for GT + test_cases).",
+      help="The SAME parquet the specs were authored from (for GT +"
+      " test_cases).",
   )
   ap.add_argument(
       "--max_rows",
@@ -247,10 +250,11 @@ def main():
     results.append(r)
     m = r["metrics"]
     print(
-        f"[diagnose] {r['label']:<20} tasks={m['n_tasks']:<5} "
-        f"solve_rate={m['solve_rate']:.3f}  pass@{args.n_samples}={m['pass_at_n']:.3f} "
-        f" "
-        f"mean_pass_rate={m['mean_pass_rate']:.3f}  (missing_field={r['n_missing_field']})"
+        f"[diagnose] {r['label']:<20} tasks={m['n_tasks']:<5}"
+        f" solve_rate={m['solve_rate']:.3f} "
+        f" pass@{args.n_samples}={m['pass_at_n']:.3f} "
+        f" mean_pass_rate={m['mean_pass_rate']:.3f} "
+        f" (missing_field={r['n_missing_field']})"
     )
 
   print(f"[diagnose] done in {time.time() - t0:.0f}s")

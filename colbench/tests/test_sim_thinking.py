@@ -2,9 +2,9 @@
 
 Confirmed against the running SGLang sim on 2026-07-30:
 
-    no kwarg                                    -> reply opens `<think>`   (model default)
-    top-level    enable_thinking: false         -> reply opens `<think>`   ACCEPTED + IGNORED
-    chat_template_kwargs: {enable_thinking:...} -> "Four."                 works
+    no kwarg                                    -> `<think>`  (model default)
+    top-level    enable_thinking: false         -> `<think>`  accepted, IGNORED
+    chat_template_kwargs: {enable_thinking:...} -> "Four."    works
 
 The nesting is required because a hybrid Qwen3 disables reasoning in its JINJA
 TEMPLATE (which pre-fills an empty `<think></think>`), so the flag must reach
@@ -122,7 +122,7 @@ def test_real_backend_payload_nests_it(monkeypatch):
   assert "enable_thinking" not in eb
 
 
-# ── 2. TOKENIZER path: the flag must stay FLAT (guard against the wrong "fix") ────────────────
+# ── 2. TOKENIZER path: the flag must stay FLAT (guard the wrong "fix") ───────
 @pytest.mark.parametrize(
     "mod_name,fn_name",
     [

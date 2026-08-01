@@ -23,12 +23,14 @@ only owns the two seams the loop drives:
   * ``generate_user_turn(messages)`` -> the spec-conditioned sim's next reply
     (the GT never enters the solver's message list -- only the spec does, inside
     this call's prompt).
-  * ``score(answer_text)``           -> fractional GT pass-rate (reward.grade) -- IDENTICAL to
-    the GT env; grading is unchanged, still objective GT code + test_cases.
+  * ``score(answer_text)`` -> fractional GT pass-rate (reward.grade) --
+    IDENTICAL to the GT env; grading is unchanged, still objective GT code +
+    test_cases.
 
-Note there is no ``is_answer`` seam: in the spec path the solver does not "submit" with a marker
-(it proposes via a ```python block and the USER terminates), so answer detection / grading-target
-selection lives in the loop via ``templates.contains_code`` / ``templates.extract_last_code``.
+Note there is no ``is_answer`` seam: in the spec path the solver does not
+"submit" with a marker (it proposes via a ```python block and the USER
+terminates), so answer detection / grading-target selection lives in the loop
+via ``templates.contains_code`` / ``templates.extract_last_code``.
 """
 
 import logging
@@ -249,9 +251,10 @@ class ColBenchSpecUserSimEnv:
     if _DEBUG_SIM:
       n = _DEBUG_PREVIEW
       logger.warning(
-          "[COLBENCH_SPEC_SIM] spec_requirements[:%d]=%r\n[COLBENCH_SPEC_SIM] "
-          "plot[:%d]=%r\n"
-          "[COLBENCH_SPEC_SIM] sim_system[:%d]=%r\n[COLBENCH_SPEC_SIM] raw_reply[:%d]=%r\n"
+          "[COLBENCH_SPEC_SIM] spec_requirements[:%d]=%r\n"
+          "[COLBENCH_SPEC_SIM] plot[:%d]=%r\n"
+          "[COLBENCH_SPEC_SIM] sim_system[:%d]=%r\n"
+          "[COLBENCH_SPEC_SIM] raw_reply[:%d]=%r\n"
           "[COLBENCH_SPEC_SIM] capped_reply=%r",
           n,
           str(self.spec.get("requirements"))[:n],

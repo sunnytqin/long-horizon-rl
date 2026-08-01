@@ -4,22 +4,28 @@
 Offline and JSON-only -- nothing is re-graded.
 
 Report 1 -- WITHIN-conversation degeneration, by code-submission segment:
-    A = start .. 1st code turn (inclusive)                          [always]
-    B = after 1st code .. 2nd code turn (inclusive)                 [only when the sim pressed on]
-  per segment: avg agent response length/turn (raw + prose-only), capitulation rate.
-  Claim "agent degrades after showing code" == B > A.
+    A = start .. 1st code turn (inclusive)          [always]
+    B = after 1st code .. 2nd code turn (inclusive) [sim pressed on only]
+  per segment: avg agent response length/turn (raw + prose-only), capitulation
+  rate. Claim "agent degrades after showing code" == B > A.
 
-Report 2 -- the sim's terminate/press decision vs first-code correctness, and the value of round 2:
-    Branch 1: first code CORRECT   -> sim accepted? / pressed on? -> if pressed, did round 2 DEGRADE?
-    Branch 2: first code INCORRECT -> sim accepted (false)? / pressed? -> if pressed, did round 2 FIX?
+Report 2 -- the sim's terminate/press decision vs first-code correctness, and
+the value of round 2:
+    Branch 1: first code CORRECT   -> accepted? pressed on?
+                                      if pressed, did round 2 DEGRADE?
+    Branch 2: first code INCORRECT -> accepted (falsely)? pressed?
+                                      if pressed, did round 2 FIX?
 
 Detection from saved fields only (max_code_proposals=2 assumed):
     fc/sc     = 1st / 2nd code turn index, from turn_records[].showed_code
-    accepted  = code_proposals==1 and terminated_by=="user"      (sim responded + ended)
-    no_decision = code_proposals==1 and fc==last turn and terminated_by=="turn_cap"
-                  (loop hit the turn cap AT the first code; the sim never got to respond -> excluded)
+    accepted  = code_proposals==1 and terminated_by=="user"
+                  (sim responded + ended)
+    no_decision = code_proposals==1 and fc==last turn
+                  and terminated_by=="turn_cap" (loop hit the turn cap AT the
+                  first code; the sim never got to respond -> excluded)
     pressed   = showed_code and not accepted and not no_decision
-    2nd code  = code_proposals>=2 ; round-2 correctness from all_pass(final) vs first_code_all_pass.
+    2nd code  = code_proposals>=2 ; round-2 correctness from all_pass(final)
+                  vs first_code_all_pass.
 
 Usage:
     python colbench/spec_eval_reports.py <eval1.json> [<eval2.json> ...]
@@ -86,8 +92,9 @@ def report1(trajs):
     if not n:
       return f"  {name}:  (no turns)"
     return (
-        f"  {name}:  turns={n:<6d} avg_len_raw={st.mean(d['raw']):7.0f}  "
-        f"avg_len_prose={st.mean(d['prose']):7.0f}  capitulation={st.mean(d['cap']):.3f}"
+        f"  {name}:  turns={n:<6d} avg_len_raw={st.mean(d['raw']):7.0f} "
+        f" avg_len_prose={st.mean(d['prose']):7.0f} "
+        f" capitulation={st.mean(d['cap']):.3f}"
     )
 
   print("REPORT 1 -- behavior by segment (per agent turn)")
@@ -139,7 +146,10 @@ class Bucket:
   def behav(self):
     if not self.lens:
       return "segB: -"
-    return f"segB prose_len/turn={st.mean(self.lens):5.0f}  capitulation={st.mean(self.caps):.3f}"
+    return (
+        f"segB prose_len/turn={st.mean(self.lens):5.0f} "
+        f" capitulation={st.mean(self.caps):.3f}"
+    )
 
 
 def report2(trajs):

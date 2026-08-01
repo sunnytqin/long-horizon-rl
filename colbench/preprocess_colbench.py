@@ -1,4 +1,4 @@
-"""Preprocess the ColBench parquet into our VERL RL schema.
+r"""Preprocess the ColBench parquet into our VERL RL schema.
 
 ColBench here is Sweet-RL Backend-Programming.
 
@@ -13,9 +13,10 @@ Source: InfoPO's ``data/colbench_code/{train,test}.parquet`` (10k train rows).
 
 Each output row carries the task payload in BOTH:
  - ``reward_model.ground_truth`` (standard VERL reward channel), and
- - ``extra_info.ground_truth``   (read by ``colbench.colbench_agent`` at rollout),
-so the same {problem, GT source, call-strings} drives the simulator prompt and the final
-fractional pass-rate reward.
+ - ``extra_info.ground_truth`` (read by ``colbench.colbench_agent`` at
+   rollout),
+so the same {problem, GT source, call-strings} drives the simulator prompt and
+the final fractional pass-rate reward.
 
 
 Usage:
@@ -149,8 +150,8 @@ def main(argv):
     val_small.to_parquet(val_small_path)
     print(
         (
-            f"Wrote {len(val_small)} val-small rows -> {val_small_path} (in-training "
-            f"val)"
+            f"Wrote {len(val_small)} val-small rows -> {val_small_path}"
+            f" (in-training val)"
         )
     )
   else:

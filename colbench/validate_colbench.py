@@ -1,4 +1,4 @@
-"""Standalone validation / inspection harness for the ColBench solver.
+r"""Standalone validation / inspection harness for the ColBench solver.
 
 Runs the SAME solver<->frozen-simulator conversation as training on the
 validation/test set, but as an *offline* SGLang batch job with freely tunable
@@ -10,14 +10,16 @@ form to a JSON file.
 The rollout logic is reused VERBATIM from the training path -- this harness
 drives the exact same env seams the agent loop
 (``colbench.colbench_agent.ColBenchAgentLoop``) drives:
-  - ``colbench.env.ColBenchUserSimEnv.is_answer``          -- did the solver submit this turn?
+  - ``colbench.env.ColBenchUserSimEnv.is_answer`` -- did the solver submit on
+    this turn?
   - ``colbench.env.ColBenchUserSimEnv.generate_user_turn`` -- the frozen sim's
     next reply (HTTP to the sim server via OPENAI_BASE_URL /
     MULTITURN_MODEL_NAME); the hidden GT is passed ONLY inside this call and
     never enters the solver's message list.
-  - ``colbench.env.ColBenchUserSimEnv.score``              -- fractional GT pass-rate reward.
-So prompts, marker/code extraction (``colbench.templates``), sim prompt, and grading
-(``colbench.reward``) are byte-identical to training.
+  - ``colbench.env.ColBenchUserSimEnv.score`` -- fractional GT pass-rate
+    reward.
+So prompts, marker/code extraction (``colbench.templates``), sim prompt, and
+grading (``colbench.reward``) are byte-identical to training.
 
 Uses SGLang's offline ``Engine`` for the SOLVER (same inference backend as the
 training rollout), so it runs in the very same SGLang container as training --
@@ -40,8 +42,9 @@ Grading backend (identical semantics to training):
   - In-process fallback (dev/smoke, no sidecar): export
     CODECONTEST_ALLOW_INPROCESS=1
 
-Example (inside the verl SGLang container, run from the repo root, sim server already up):
-    export CODECONTEST_ALLOW_INPROCESS=1                 # or CODECONTEST_EXEC_URL=...
+Example (inside the verl SGLang container, run from the repo root, sim server
+already up):
+    export CODECONTEST_ALLOW_INPROCESS=1     # or CODECONTEST_EXEC_URL=...
     export OPENAI_BASE_URL=http://127.0.0.1:30000/v1     # frozen sim server
     export MULTITURN_MODEL_NAME=colbench-sim
     PYTHONPATH=$(pwd) python colbench/validate_colbench.py \
@@ -217,10 +220,11 @@ def eval_tagged_path(
   The tag is '_turns<N>_n<K>_t<temp>[_reject<R>]', so each eval config gets its
   own self-documenting file and can never clobber a different config.
 
-  ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced to 1), so
-  the tag faithfully records what was run. A '_reject<R>' suffix is added ONLY when
-  rejection sampling is on, so a rejection-sampled eval never overwrites the plain (single-
-  shot) file for the same step/temp -- and the plain-run filename is unchanged. e.g.
+  ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced
+  to 1), so the tag faithfully records what was run. A '_reject<R>' suffix is
+  added ONLY when rejection sampling is on, so a rejection-sampled eval never
+  overwrites the plain (single-shot) file for the same step/temp -- and the
+  plain-run filename is unchanged. e.g.
     (..., 10, 4, 0.6)      -> "...step120_turns10_n4_t0.6.json"
     (..., 10, 4, 0.6, 32)  -> "...step120_turns10_n4_t0.6_reject32.json".
   """
@@ -230,7 +234,10 @@ def eval_tagged_path(
       if sim_reject_max_tries and sim_reject_max_tries > 0
       else ""
   )
-  return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}{reject_tag}{ext or '.json'}"
+  return (
+      f"{root}_turns{turns}_n{n_samples}_t{temperature:g}{reject_tag}"
+      f"{ext or '.json'}"
+  )
 
 
 def _solver_template_kwargs():
@@ -683,9 +690,9 @@ def main():
       "--sim_reject_min_ops",
       type=int,
       default=2,
-      help="Detector (D): min code operators required within the matched n-gram, "
-      "so "
-      "it fires on copied EXPRESSIONS, not prose that shares identifiers.",
+      help="Detector (D): min code operators required within the matched"
+      " n-gram, so it fires on copied EXPRESSIONS, not prose that shares"
+      " identifiers.",
   )
 
   # Inference hyper-parameters (defaults match run_colbench_grpo.sh so a
@@ -782,10 +789,9 @@ def main():
       and os.environ.get("CODECONTEST_ALLOW_INPROCESS") != "1"
   ):
     raise SystemExit(
-        "No code-exec backend configured. Set CODECONTEST_EXEC_URL=http://host:8088 "
-        "(sidecar) "
-        "or CODECONTEST_ALLOW_INPROCESS=1 (in-process dev/smoke) before "
-        "running."
+        "No code-exec backend configured. Set"
+        " CODECONTEST_EXEC_URL=http://host:8088 (sidecar) or"
+        " CODECONTEST_ALLOW_INPROCESS=1 (in-process dev/smoke) before running."
     )
   if not os.environ.get("OPENAI_BASE_URL"):
     print(
@@ -830,7 +836,8 @@ def main():
     n_samples = 1 if temperature == 0.0 else args.n_samples
     if temperature == 0.0 and args.n_samples > 1:
       print(
-          f"[validate] temperature=0 is greedy; forcing n_samples 1 (was {args.n_samples})."
+          f"[validate] temperature=0 is greedy; forcing n_samples 1 (was"
+          f" {args.n_samples})."
       )
     out_path = eval_tagged_path(
         args.out,

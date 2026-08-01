@@ -552,9 +552,9 @@ def build_grounded_sim_messages(
   pure-spec path stays branch-free and byte-identical.
 
   NB: this is the ONE place the GT source enters a sim prompt on the spec path
-      -- the leak invariant (GT never reaches the solver's message list) is
-      enforced downstream by the env's ``sim_wrote_code`` rejection sampling,
-      not by construction as in the spec mode.
+  -- the leak invariant (GT never reaches the solver's message list) is enforced
+  downstream by the env's ``sim_wrote_code`` rejection sampling, not by
+  construction as in the spec mode.
   """
   system = GROUNDED_SIM_SYSTEM_PROMPT.format(
       problem_description=problem_description,

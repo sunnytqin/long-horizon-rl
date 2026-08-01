@@ -76,8 +76,8 @@ def test_full_spec_solver_messages_include_signature_and_requirements():
   }
   msgs = st.build_full_spec_solver_messages(
       (
-          "Create def calculate_stats(a, b). The signature is def calculate_stats(a, "
-          "b)"
+          "Create def calculate_stats(a, b). The signature is def"
+          " calculate_stats(a, b)"
       ),
       spec,
   )

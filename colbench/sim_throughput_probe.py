@@ -108,13 +108,10 @@ def _thinking_check():
   not the product.
 
   Background (2026-07-30): SGLang ACCEPTS AND IGNORES a top-level
-                           ``enable_thinking``; only ``chat_template_kwargs:
-                           {enable_thinking: false}`` reaches the Qwen3
-                           template. While that was broken every hybrid sim
-                           replied with reasoning, and at SIM_MAX_TOKENS=256 the
-                           block never even closed, so truncated
-                           chain-of-thought was injected as the user's dialogue
-                           turn.
+  ``enable_thinking``; only ``chat_template_kwargs: {enable_thinking: false}``
+  reaches the Qwen3 template. While that was broken every hybrid sim replied
+  with reasoning, and at SIM_MAX_TOKENS=256 the block never even closed, so
+  truncated chain-of-thought was injected as the user's dialogue turn.
   """
   # pylint: disable=g-import-not-at-top
   from colbench.env import _sim_extra_body
@@ -124,8 +121,9 @@ def _thinking_check():
   want_off = _sim_extra_body() == {"enable_thinking": False}
   print("-" * 78)
   print(
-      f"Thinking check (SIM_ENABLE_THINKING={os.environ.get('SIM_ENABLE_THINKING', '<unset>')} "
-      f"-> expecting thinking {'OFF' if want_off else 'unconstrained'})"
+      f"Thinking check (SIM_ENABLE_THINKING="
+      f"{os.environ.get('SIM_ENABLE_THINKING', '<unset>')} -> expecting"
+      f" thinking {'OFF' if want_off else 'unconstrained'})"
   )
   reply = openai_sim_backend(
       "You are a user talking to a coding assistant.",
@@ -135,14 +133,14 @@ def _thinking_check():
   stripped = strip_think(reply)
   print(f"  raw reply[:160]: {reply[:160]!r}")
   print(
-      f"  <think> present: {has_think} | usable text after strip: {bool(stripped)}"
+      f"  <think> present: {has_think} | usable text after strip:"
+      f" {bool(stripped)}"
   )
   if want_off and has_think:
     print(
-        "  RESULT: *** FAIL *** thinking is ON despite SIM_ENABLE_THINKING=false "
-        "-- the flag "
-        "is not reaching the chat template (check chat_template_kwargs "
-        "nesting)."
+        "  RESULT: *** FAIL *** thinking is ON despite"
+        " SIM_ENABLE_THINKING=false -- the flag is not reaching the chat"
+        " template (check chat_template_kwargs nesting)."
     )
     return False
   if want_off and not stripped:
@@ -200,15 +198,15 @@ async def _main_async(args):
     )
     if r.get("ok"):
       print(
-          f"{r['concurrency']:>5} {r['ok']:>5} {r['errors']:>4} {r['wall']:>8.1f} "
-          f"{r['out_toks_per_s']:>10.1f} {r['req_per_s']:>7.2f} {r['p50_ms']:>9.0f} "
-          f"{r['p95_ms']:>9.0f}"
+          f"{r['concurrency']:>5} {r['ok']:>5} {r['errors']:>4}"
+          f" {r['wall']:>8.1f} {r['out_toks_per_s']:>10.1f}"
+          f" {r['req_per_s']:>7.2f} {r['p50_ms']:>9.0f} {r['p95_ms']:>9.0f}"
       )
     else:
       print(
           (
-              f"{r['concurrency']:>5} {'0':>5} {r['errors']:>4} {r['wall']:>8.1f} "
-              f" (all failed)"
+              f"{r['concurrency']:>5} {'0':>5} {r['errors']:>4}"
+              f" {r['wall']:>8.1f}  (all failed)"
           )
       )
   print("=" * 78)
@@ -256,7 +254,7 @@ def main():
   p.add_argument(
       "--skip-thinking-check",
       action="store_true",
-      help="Skip the <think>-suppression assertion and only measure throughput.",
+      help="Skip the <think>-suppression assertion; only measure throughput.",
   )
   args = p.parse_args()
   asyncio.run(_main_async(args))

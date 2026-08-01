@@ -114,7 +114,8 @@ class ColBenchAgentLoop(AgentLoopBase):
     self.train_turns = cc.get("train_turns", "all")
     if self.train_turns not in TRAIN_TURNS_MODES:
       raise ValueError(
-          f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}"
+          f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got"
+          f" {self.train_turns!r}"
       )
     # User-sim rejection sampling: resample the sim turn up to N times until it
     # contains no code leak. 0 (default) = off, and the rollout is
@@ -370,17 +371,18 @@ class ColBenchAgentLoop(AgentLoopBase):
       if is_last:
         break
 
-      # ── The user (simulator) turn. THE sim seam. sim_live=True awaits the rollout engine
-      # ── directly (already async); the frozen path is blocking HTTP -> executor. Both get
-      # ── the same hard timeout so a hung/queued sim can't stall the rollout forever.
-      # ── NB under sim_live the sim shares the engine with the solver rollouts, so a busy
-      # ── step queues; raise ENV_STEP_TIMEOUT if `sim_turn_timeout` starts firing.
+      # ── The user (simulator) turn. THE sim seam. sim_live=True awaits the
+      # ── rollout engine directly (already async); the frozen path is blocking
+      # ── HTTP -> executor. Both get the same hard timeout so a hung/queued sim
+      # ── can't stall the rollout forever. NB under sim_live the sim shares the
+      # ── engine with the solver rollouts, so a busy step queues; raise
+      # ── ENV_STEP_TIMEOUT if `sim_turn_timeout` starts firing.
       _sim_t0 = self.loop.time()
       with simple_timer("generate_user_turn", metrics):
         try:
           if self.sim_reject_max_tries > 0:
-            # ngram_n=0 disables detector (D); (A) def-regex + (B) ```python fence
-            # always run. Matches the eval default (SIM_REJECT_NGRAM_N=0).
+            # ngram_n=0 disables detector (D); (A) def-regex + (B) ```python
+            # fence always run. Matches the eval default (SIM_REJECT_NGRAM_N=0).
             if self.sim_live:
               coro = env.agenerate_user_turn_checked(
                   list(sim_dialogue),
@@ -431,11 +433,13 @@ class ColBenchAgentLoop(AgentLoopBase):
         sim_failure_turn = turn
         break
       user_content = res["reply"]
-      # ── Sim-DRIFT instrumentation (the point of the sim_live study). With a frozen sim
-      # ── these are constants of the environment; with a live sim they move WITH the policy,
-      # ── so a trend here is the coupling we are trying to measure. `sim_leaks` is a MONITOR
-      # ── on the ACCEPTED reply: with sim_reject_max_tries=0 it is the honest leak rate; with
-      # ── rejection on it should sit at ~0 and `sim_reject_tries` carries the signal instead.
+      # ── Sim-DRIFT instrumentation (the point of the sim_live study). With a
+      # ── frozen sim these are constants of the environment; with a live sim
+      # ── they move WITH the policy, so a trend here is the coupling we are
+      # ── trying to measure. `sim_leaks` is a MONITOR on the ACCEPTED reply:
+      # ── with sim_reject_max_tries=0 it is the honest leak rate; with
+      # ── rejection on it should sit at ~0 and `sim_reject_tries` carries the
+      # ── signal instead.
       sim_reply_chars.append(len(user_content))
       if (
           templates.detect_code_leak(user_content, env.ground_truth, 0)

@@ -13,9 +13,11 @@ the env:
     a code leak is structurally impossible -- there is NO
     rejection-sampling-for-leaks / ``is_answer`` machinery here. The env is
     ``ColBenchSpecUserSimEnv``; the sim never sees GT.
-  * The solver does NOT "submit" with a marker. It proposes a function inside a ```python block
-    and the USER ends the conversation with ``[TERMINATE]``. The loop grades the LAST function the
-    solver showed (``templates.extract_last_code``). Reward is 0 iff the solver never showed code.
+  * The solver does NOT "submit" with a marker. It proposes a function inside a
+    ```python block and the USER ends the conversation with ``[TERMINATE]``.
+    The loop grades the LAST function the solver showed
+    (``templates.extract_last_code``). Reward is 0 iff the solver never showed
+    code.
   * The env still owns a small rejection sampler for the OPPOSITE leak (an
     ordinary user must never paste code): ``env.generate_user_turn`` re-queries
     the sim up to ``sim_max_tries`` if the reply contains a code fence, and
@@ -117,7 +119,8 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     self.train_turns = cc.get("train_turns", "all")
     if self.train_turns not in TRAIN_TURNS_MODES:
       raise ValueError(
-          f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}"
+          f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got"
+          f" {self.train_turns!r}"
       )
     if self.train_turns == "final_only":
       raise NotImplementedError(
@@ -135,8 +138,8 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # degeneration.
     self.length_penalty_coef = float(cc.get("length_penalty_coef", 0.0) or 0.0)
     self.length_soft_cap = float(cc.get("length_soft_cap", 2048.0) or 2048.0)
-    # Guardrail: max ```python proposals before the loop force-grades the last one (default 2,
-    # reduced from 3 after eval). New spec-path knob.
+    # Guardrail: max ```python proposals before the loop force-grades the last
+    # one (default 2, reduced from 3 after eval). New spec-path knob.
     self.max_code_proposals = int(cc.get("max_code_proposals", 2) or 2)
     # Sim reject-sampling budget: re-query the sim up to N times if it writes
     # code (an ordinary user never pastes a function). On exhaustion the
@@ -424,7 +427,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # Grade the last function shown, once, at whatever stop. Reward 0 iff no
     # code was shown.
     first_code_pass_rate = 0.0
-    raw_pass_rate = 0.0  # raw fractional pass-rate; always kept as a metric (even under binary reward)
+    # Raw fractional pass-rate; always kept as a metric, even under binary
+    # reward.
+    raw_pass_rate = 0.0
     if showed_code and last_code:
       if graded_result is not None:
         # Reuse the terminate-on-all-pass mid-loop grade of this same last_code.
@@ -562,9 +567,10 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                     terminated_by == "sim_code_reject"
                 ),
                 "term_oracle_solved": float(terminated_by == "oracle_solved"),
-                # Did the SIM end the episode on code that actually passes? Divided by term_user
-                # this is P(all_pass | user-terminated) -- the load-bearing assumption of
-                # user-driven termination, and the thing grounding the sim is meant to buy.
+                # Did the SIM end the episode on code that actually passes?
+                # Divided by term_user this is P(all_pass | user-terminated) --
+                # the load-bearing assumption of user-driven termination, and
+                # the thing grounding the sim is meant to buy.
                 "user_term_and_allpass": float(
                     terminated_by == "user"
                     and bool(result.get("all_pass", False))

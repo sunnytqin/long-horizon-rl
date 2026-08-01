@@ -1,14 +1,12 @@
-"""Full solver<->sim simulation + eval for the SPEC path (Phase 1).
+r"""Full solver<->sim simulation + eval for the SPEC path (Phase 1).
 
 The spec-path sibling of ``colbench.validate_colbench``. It drives a REAL
-multi-turn
-conversation: the solver (assistant) and the user-simulator are BOTH served
-              models, and the episode ends when the *sim* emits ``[TERMINATE]``
-              (user-driven termination) -- we then grade the last function the
-              solver showed against the hidden GT (unchanged grading). This is
-              the harness we use to (a) eyeball whether the spec sim honors its
-              plot in a genuine back-and-forth, and (b) measure the
-              extraction-through-dialogue solve rate.
+multi-turn conversation: the solver (assistant) and the user-simulator are BOTH
+served models, and the episode ends when the *sim* emits ``[TERMINATE]``
+(user-driven termination) -- we then grade the last function the solver showed
+against the hidden GT (unchanged grading). This is the harness we use to (a)
+eyeball whether the spec sim honors its plot in a genuine back-and-forth, and
+(b) measure the extraction-through-dialogue solve rate.
 
 Two solver backends, ONE termination loop:
   * ``--solver_backend openai`` -- the solver is an OpenAI-API call to a served
@@ -33,9 +31,11 @@ Grading backend (identical to training / the GT validator):
 
 Example (conda env, base Qwen3-4B on both roles, one vLLM server on :30000):
     export CODECONTEST_ALLOW_INPROCESS=1
-    export OPENAI_BASE_URL=http://127.0.0.1:30000/v1 MULTITURN_MODEL_NAME=colbench-sim
+    export OPENAI_BASE_URL=http://127.0.0.1:30000/v1
+    export MULTITURN_MODEL_NAME=colbench-sim
     PYTHONPATH=$(pwd) python colbench/validate_colbench_spec.py \
-        --solver_backend openai --base_url http://127.0.0.1:30000/v1 --served_model colbench-sim \
+        --solver_backend openai --base_url http://127.0.0.1:30000/v1 \
+        --served_model colbench-sim \
         --model /path/to/Qwen3-4B-Instruct-2507 \
         --val_file ~/data/colbench_spec/selfplay_cond30.parquet \
         --out runs/spec_eval_cond30.json --n_samples 2 --temperature 0.6
@@ -109,8 +109,9 @@ class Trajectory:
     self.first_code_all_pass = False
     self.done = False
     self.overflow = False
-    # How the episode ended: "user" (sim [TERMINATE]) | "code_cap" | "turn_cap" | "no_code"
-    # (terminated/ran out with the solver never having shown a function -> reward 0).
+    # How the episode ended: "user" (sim [TERMINATE]) | "code_cap" | "turn_cap"
+    # | "no_code" (terminated/ran out with the solver never having shown a
+    # function -> reward 0).
     self.terminated_by = None
     self.reward = 0.0
     self.all_pass = False
@@ -325,7 +326,10 @@ def eval_tagged_path(base_out, turns, n_samples, temperature, max_code):
   self-documenting file.
   """
   root, ext = os.path.splitext(base_out)
-  return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}_cc{max_code}{ext or '.json'}"
+  return (
+      f"{root}_turns{turns}_n{n_samples}_t{temperature:g}_cc{max_code}"
+      f"{ext or '.json'}"
+  )
 
 
 def run_eval(
@@ -514,8 +518,9 @@ def run_eval(
   aborts_path = os.path.splitext(out_path)[0] + ".aborts.txt"
   with open(aborts_path, "w", encoding="utf-8") as f:
     f.write(
-        f"{len(aborts)} sim_code_reject aborts / {n_traj} trajectories "
-        f"(sim={summary.get('sim_model')}, sim_max_tries={args.sim_max_tries})\n"
+        f"{len(aborts)} sim_code_reject aborts / {n_traj} trajectories"
+        f" (sim={summary.get('sim_model')},"
+        f" sim_max_tries={args.sim_max_tries})\n"
     )
     for i, t in enumerate(
         sorted(aborts, key=lambda t: (t.row_index, t.sample_idx)), 1
@@ -640,11 +645,13 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
       "overflow_rate": overflow_rate,
       "sim_code_rejected_total": total_code_rejected,
       "sim_code_reject_traj_rate": round(sim_code_reject_traj_rate, 3),
-      "sim_code_reject_aborted": sim_code_reject_aborted,  # conversations aborted (all retries wrote code)
+      # Conversations aborted because every retry wrote code.
+      "sim_code_reject_aborted": sim_code_reject_aborted,
       "terminated_by_counts": dict(
           sorted(term_counts.items(), key=lambda kv: str(kv[0]))
       ),
-      "false_terminate_rate": false_terminate_rate,  # user-terminated AND GT-failed
+      # User-terminated AND GT-failed.
+      "false_terminate_rate": false_terminate_rate,
       "elapsed_sec": round(elapsed, 1),
       "inference": {
           "temperature": temperature,
@@ -669,9 +676,8 @@ def _load_tokenizer(args):
     )
   except Exception as e:  # pylint: disable=broad-exception-caught  # openai mode can proceed without exact token counts
     print(
-        f"[validate_spec] WARNING: could not load tokenizer from {args.model!r} "
-        f"({e}); "
-        "token budgets will be approximate."
+        f"[validate_spec] WARNING: could not load tokenizer from {args.model!r}"
+        f" ({e}); token budgets will be approximate."
     )
     return None
 
@@ -718,9 +724,8 @@ def main():
       "--solver_backend",
       choices=["openai", "sglang"],
       default="openai",
-      help="openai = API solver (conda/eyeball, both roles same server); sglang "
-      "= "
-      "offline Engine (container/production, a merged checkpoint).",
+      help="openai = API solver (conda/eyeball, both roles same server); sglang"
+      " = offline Engine (container/production, a merged checkpoint).",
   )
   ap.add_argument(
       "--model",
@@ -738,7 +743,8 @@ def main():
   ap.add_argument(
       "--served_model",
       default=os.environ.get("MULTITURN_MODEL_NAME", ""),
-      help="openai served-model alias for the solver (defaults to MULTITURN_MODEL_NAME).",
+      help="openai served-model alias for the solver (defaults to"
+      " MULTITURN_MODEL_NAME).",
   )
   ap.add_argument(
       "--val_file",
@@ -797,13 +803,16 @@ def main():
   ap.add_argument("--dtype", default="bfloat16")
   ap.add_argument("--trust_remote_code", action="store_true")
   # ── Frozen user-simulator backend ────────────────────────────────────────
-  # 'local': the sim hits OPENAI_BASE_URL/MULTITURN_MODEL_NAME -- a LOCALLY-served,
-  #   OpenAI-compatible endpoint. That server is SGLang inside the VERL container (the frozen sim
-  #   the entrypoint launches) and vLLM in the FASRC slurm harness; the transport is identical, so
-  #   the name describes the transport, NOT the engine. In openai-solver mode it is the SAME
-  #   server as the solver -- the self-play setup. ('vllm' is accepted as a legacy alias.)
-  # 'openai': the sim hits a REAL hosted OpenAI endpoint (--sim_base_url/--sim_model,
-  #   OPENAI_API_KEY), DECOUPLED from the solver -> Qwen solver vs GPT sim comparison.
+  # 'local': the sim hits OPENAI_BASE_URL/MULTITURN_MODEL_NAME -- a
+  #   LOCALLY-served, OpenAI-compatible endpoint. That server is SGLang inside
+  #   the VERL container (the frozen sim the entrypoint launches) and vLLM in
+  #   the FASRC slurm harness; the transport is identical, so the name
+  #   describes the transport, NOT the engine. In openai-solver mode it is the
+  #   SAME server as the solver -- the self-play setup. ('vllm' is accepted as
+  #   a legacy alias.)
+  # 'openai': the sim hits a REAL hosted OpenAI endpoint
+  #   (--sim_base_url/--sim_model, OPENAI_API_KEY), DECOUPLED from the solver
+  #   -> Qwen solver vs GPT sim comparison.
   ap.add_argument(
       "--sim_backend",
       choices=["local", "vllm", "openai"],
@@ -815,7 +824,8 @@ def main():
   ap.add_argument(
       "--sim_model",
       default=os.environ.get("SIM_OPENAI_MODEL", "gpt-5.4-mini"),
-      help="Model name for --sim_backend openai (e.g. gpt-5.4-mini, gpt-4o-mini).",
+      help="Model name for --sim_backend openai (e.g. gpt-5.4-mini,"
+      " gpt-4o-mini).",
   )
   ap.add_argument(
       "--sim_base_url",
@@ -863,7 +873,8 @@ def main():
       and os.environ.get("CODECONTEST_ALLOW_INPROCESS") != "1"
   ):
     raise SystemExit(
-        "No code-exec backend: set CODECONTEST_EXEC_URL or CODECONTEST_ALLOW_INPROCESS=1."
+        "No code-exec backend: set CODECONTEST_EXEC_URL or"
+        " CODECONTEST_ALLOW_INPROCESS=1."
     )
   # The sim always reads OPENAI_BASE_URL / MULTITURN_MODEL_NAME; in openai mode
   # default them from the solver args so BOTH roles hit the same server without
@@ -874,9 +885,9 @@ def main():
     os.environ["MULTITURN_MODEL_NAME"] = args.served_model
   if not os.environ.get("MULTITURN_MODEL_NAME"):
     print(
-        "[validate_spec] WARNING: MULTITURN_MODEL_NAME unset; the sim server "
-        "call needs a "
-        "served model name (pass --served_model or export MULTITURN_MODEL_NAME)."
+        "[validate_spec] WARNING: MULTITURN_MODEL_NAME unset; the sim server"
+        " call needs a served model name (pass --served_model or export"
+        " MULTITURN_MODEL_NAME)."
     )
 
   val_df = pd.read_parquet(os.path.expanduser(args.val_file))
@@ -885,8 +896,8 @@ def main():
   val_df = val_df.reset_index(drop=True)
   print(
       (
-          f"[validate_spec] loaded {len(val_df)} spec problems from {args.val_file}; "
-          f"solver_backend={args.solver_backend}"
+          f"[validate_spec] loaded {len(val_df)} spec problems from"
+          f" {args.val_file}; solver_backend={args.solver_backend}"
       )
   )
 
@@ -907,10 +918,9 @@ def main():
           "[validate_spec] --sim_backend openai needs OPENAI_API_KEY exported."
       )
     print(
-        f"[validate_spec] SIM = OpenAI '{args.sim_model}' @ {args.sim_base_url} "
-        f"(temp={args.sim_temperature}, top_p={args.sim_top_p}); SOLVER "
-        f"stays on "
-        f"{args.solver_backend}."
+        f"[validate_spec] SIM = OpenAI '{args.sim_model}' @ {args.sim_base_url}"
+        f" (temp={args.sim_temperature}, top_p={args.sim_top_p}); SOLVER stays"
+        f" on {args.solver_backend}."
     )
     sim_backend = make_openai_sim_backend(
         base_url=args.sim_base_url,
