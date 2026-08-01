@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Agent-loop tests for the SPEC path: drive ``ColBenchSpecAgentLoop.run`` end-to-end with a
 scripted solver + scripted sim, asserting the same ``terminated_by`` / reward / masking the pinned
 ``tests/test_env_spec.py::drive`` contract produces.
@@ -33,10 +20,9 @@ os.environ.pop("CODECONTEST_EXEC_URL", None)
 # Skip the entire module unless the verl agent-loop stack is importable (container only).
 pytest.importorskip("verl.experimental.agent_loop.agent_loop")
 
-from verl.workers.rollout.replica import TokenOutput  # noqa: E402
-
 from colbench.colbench_spec_agent import ColBenchSpecAgentLoop  # noqa: E402
 from colbench.env_spec import ColBenchSpecUserSimEnv  # noqa: E402
+from verl.workers.rollout.replica import TokenOutput  # noqa: E402
 
 # Reuse the env-level fixtures' shape (kept local to avoid importing a test module).
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
@@ -44,8 +30,7 @@ WRONG = "def f(x, y):\n    return x + y\n"  # ignores x<10 -> 0.5 pass-rate
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Write a function f(x, y) with some personalized behavior."
 SPEC = {
-    "persona": {"who": "an analyst", "domain": "ops", "python_skill": "analyst",
-                "communication_style": "brief"},
+    "persona": {"who": "an analyst", "domain": "ops", "python_skill": "analyst", "communication_style": "brief"},
     "scenario": "Needs a small helper for a report.",
     "requirements": "The user wants f(x,y): if x is at least 10 return x+y, otherwise x-y.",
     "plot": "The user reveals the threshold of 10 only if the assistant asks about the cutoff.",
@@ -98,9 +83,18 @@ class _FakeServerManager:
         )
 
 
-def _make_loop(solver_turns, sim_replies, *, max_assistant_turns=10, max_code_proposals=2,
-               sim_max_tries=8, train_turns="all", terminate_on_allpass=False, binary_reward=False,
-               grounded_sim=False):
+def _make_loop(
+    solver_turns,
+    sim_replies,
+    *,
+    max_assistant_turns=10,
+    max_code_proposals=2,
+    sim_max_tries=8,
+    train_turns="all",
+    terminate_on_allpass=False,
+    binary_reward=False,
+    grounded_sim=False,
+):
     """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__, wired to fakes."""
     obj = object.__new__(ColBenchSpecAgentLoop)
     tok = _FakeTokenizer()
@@ -233,7 +227,7 @@ def test_all_turns_mask_keeps_every_solver_turn():
     out = _run(obj)
     # Two solver turns worth of 1s plus one sim turn of 0s.
     assert out.response_mask.count(1) == len(("What's the cutoff?" + _code_turn(GT)).encode("utf-8"))
-    assert out.response_mask.count(0) == len("It's 10.".encode("utf-8"))
+    assert out.response_mask.count(0) == len(b"It's 10.")
 
 
 def test_upto_last_code_zeros_trailing_post_code_turn():
@@ -262,7 +256,7 @@ def test_upto_last_code_no_code_keeps_all():
     )
     out = _run(obj)
     assert out.extra_fields["reward_extra_info"]["term_no_code"] == 1.0
-    assert out.response_mask.count(1) == len("Tell me more?".encode("utf-8"))
+    assert out.response_mask.count(1) == len(b"Tell me more?")
 
 
 def test_terminate_on_allpass_breaks_before_sim():
@@ -309,8 +303,8 @@ def test_binary_reward_zeros_partial_but_keeps_fractional_metric():
     )
     out = _run(obj)
     rei = out.extra_fields["reward_extra_info"]
-    assert out.reward_score == 0.0     # binary: not all-pass -> 0
-    assert rei["pass_rate"] == 0.5     # metric keeps the raw fractional rate
+    assert out.reward_score == 0.0  # binary: not all-pass -> 0
+    assert rei["pass_rate"] == 0.5  # metric keeps the raw fractional rate
     assert rei["all_pass"] == 0.0
 
 
@@ -377,11 +371,12 @@ def test_new_reward_extra_info_scalars_present():
         sim_replies=["It's 10.", "Perfect, thanks! [TERMINATE]"],
     )
     rei = _run(obj).extra_fields["reward_extra_info"]
-    assert rei["user_term_and_allpass"] == 1.0          # user-terminated AND all tests pass
+    assert rei["user_term_and_allpass"] == 1.0  # user-terminated AND all tests pass
     assert rei["sim_reply_chars"] == float(len("It's 10."))
     # A no-sim-turn episode still carries both keys (0.0), not a missing key.
-    obj2 = _make_loop(solver_turns=[_code_turn(WRONG), _code_turn(WRONG)],
-                      sim_replies=["Not quite."], max_code_proposals=1)
+    obj2 = _make_loop(
+        solver_turns=[_code_turn(WRONG), _code_turn(WRONG)], sim_replies=["Not quite."], max_code_proposals=1
+    )
     rei2 = _run(obj2).extra_fields["reward_extra_info"]
     assert rei2["user_term_and_allpass"] == 0.0
     assert rei2["sim_reply_chars"] == 0.0

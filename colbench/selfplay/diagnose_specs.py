@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Phase-0, Deliverable 2: the full-spec solve-rate diagnostic.
 
 Hand a solver the ENTIRE authored spec in a SINGLE turn (no clarification dialogue), extract
@@ -88,8 +75,14 @@ def _aggregate(rows: list[dict], n_samples: int) -> dict:
     }
 
 
-def diagnose_specs_file(specs_path: str, tasks_by_index: dict, endpoint: ChatEndpoint,
-                        n_samples: int, reward_time_limit: float, concurrency: int) -> dict:
+def diagnose_specs_file(
+    specs_path: str,
+    tasks_by_index: dict,
+    endpoint: ChatEndpoint,
+    n_samples: int,
+    reward_time_limit: float,
+    concurrency: int,
+) -> dict:
     """Run the requirements full-spec diagnostic for one spec file. Returns {label, metrics,
     rows}. Specs with no ``requirements`` text are skipped (counted)."""
     specs = read_jsonl(specs_path)
@@ -108,18 +101,25 @@ def diagnose_specs_file(specs_path: str, tasks_by_index: dict, endpoint: ChatEnd
 
     rows = []
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
-        futs = [pool.submit(_solve_and_grade, endpoint, task, spec, reward_time_limit)
-                for task, spec in jobs]
+        futs = [pool.submit(_solve_and_grade, endpoint, task, spec, reward_time_limit) for task, spec in jobs]
         for fut in as_completed(futs):
             rows.append(fut.result())
-    return {"label": label, "path": specs_path, "n_missing_field": n_missing,
-            "metrics": _aggregate(rows, n_samples), "rows": rows}
+    return {
+        "label": label,
+        "path": specs_path,
+        "n_missing_field": n_missing,
+        "metrics": _aggregate(rows, n_samples),
+        "rows": rows,
+    }
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data_file", default=os.path.expanduser("~/data/colbench/train.parquet"),
-                    help="The SAME parquet the specs were authored from (for GT + test_cases).")
+    ap.add_argument(
+        "--data_file",
+        default=os.path.expanduser("~/data/colbench/train.parquet"),
+        help="The SAME parquet the specs were authored from (for GT + test_cases).",
+    )
     ap.add_argument("--max_rows", type=int, default=None, help="Limit #tasks loaded (must cover the specs' indices).")
     ap.add_argument("--specs", nargs="+", required=True, help="One or more spec JSONL files to diagnose.")
     ap.add_argument("--out", default=None, help="Optional JSON path to dump per-file metrics + rows.")
@@ -135,15 +135,24 @@ def main():
     ap.add_argument("--enable_thinking", choices=["true", "false"], default=None)
     ap.add_argument("--n_samples", type=int, default=1, help="Solver samples per spec (pass@n).")
     ap.add_argument("--reward_time_limit", type=float, default=6.0, help="Per-case GT exec timeout (s).")
-    ap.add_argument("--concurrency", type=int, default=int(os.getenv("CODECONTEST_EXEC_CONCURRENCY", "16")),
-                    help="Parallel solve+grade workers.")
+    ap.add_argument(
+        "--concurrency",
+        type=int,
+        default=int(os.getenv("CODECONTEST_EXEC_CONCURRENCY", "16")),
+        help="Parallel solve+grade workers.",
+    )
     args = ap.parse_args()
 
     tasks = read_tasks(args.data_file, args.max_rows)
     tasks_by_index = {t["index"]: t for t in tasks}
     endpoint = ChatEndpoint(
-        base_url=args.solver_base_url, model=args.solver_model, api_key=args.solver_api_key,
-        temperature=args.temperature, top_p=args.top_p, top_k=args.top_k, min_p=args.min_p,
+        base_url=args.solver_base_url,
+        model=args.solver_model,
+        api_key=args.solver_api_key,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        min_p=args.min_p,
         max_tokens=args.max_tokens,
         enable_thinking=None if args.enable_thinking is None else (args.enable_thinking == "true"),
     )
@@ -151,13 +160,16 @@ def main():
     t0 = time.time()
     results = []
     for specs_path in args.specs:
-        r = diagnose_specs_file(specs_path, tasks_by_index, endpoint, args.n_samples,
-                                args.reward_time_limit, args.concurrency)
+        r = diagnose_specs_file(
+            specs_path, tasks_by_index, endpoint, args.n_samples, args.reward_time_limit, args.concurrency
+        )
         results.append(r)
         m = r["metrics"]
-        print(f"[diagnose] {r['label']:<20} tasks={m['n_tasks']:<5} "
-              f"solve_rate={m['solve_rate']:.3f}  pass@{args.n_samples}={m['pass_at_n']:.3f}  "
-              f"mean_pass_rate={m['mean_pass_rate']:.3f}  (missing_field={r['n_missing_field']})")
+        print(
+            f"[diagnose] {r['label']:<20} tasks={m['n_tasks']:<5} "
+            f"solve_rate={m['solve_rate']:.3f}  pass@{args.n_samples}={m['pass_at_n']:.3f}  "
+            f"mean_pass_rate={m['mean_pass_rate']:.3f}  (missing_field={r['n_missing_field']})"
+        )
 
     print(f"[diagnose] done in {time.time() - t0:.0f}s")
     print("\n=== full-spec solve-rate diagnostic ===")
@@ -168,9 +180,20 @@ def main():
         out = os.path.expanduser(args.out)
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
         with open(out, "w") as f:
-            json.dump([{"label": r["label"], "path": r["path"],
-                        "n_missing_field": r["n_missing_field"], "metrics": r["metrics"],
-                        "rows": r["rows"]} for r in results], f, indent=2)
+            json.dump(
+                [
+                    {
+                        "label": r["label"],
+                        "path": r["path"],
+                        "n_missing_field": r["n_missing_field"],
+                        "metrics": r["metrics"],
+                        "rows": r["rows"],
+                    }
+                    for r in results
+                ],
+                f,
+                indent=2,
+            )
         print(f"[diagnose] wrote per-file metrics -> {out}")
 
 

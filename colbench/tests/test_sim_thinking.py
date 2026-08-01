@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Thinking suppression for a HYBRID Qwen3 user-simulator.
 
 Confirmed against the running SGLang sim on 2026-07-30:
@@ -29,8 +16,6 @@ sampler. Two things follow, and both are pinned here:
      eval while looking like a fix.
 """
 
-import os
-
 import pytest
 
 from colbench.env import _sim_extra_body
@@ -42,6 +27,7 @@ def _sim_extra_body_payload(monkeypatch, value):
     """Rebuild the extra_body exactly as openai_sim_backend does, without a server."""
     monkeypatch.setenv("SIM_ENABLE_THINKING", value)
     from colbench.env import _sim_sampling
+
     _, _, top_k, min_p = _sim_sampling()
     extra_body = {"top_k": top_k, "min_p": min_p}
     thinking = _sim_extra_body()
@@ -74,12 +60,32 @@ def test_real_backend_payload_nests_it(monkeypatch):
 
     class _Client:
         def __init__(self, *a, **k):
-            self.chat = type("C", (), {"completions": type("D", (), {
-                "create": staticmethod(lambda **kw: (
-                    captured.update(kw),
-                    type("R", (), {"choices": [type("M", (), {
-                        "message": type("Z", (), {"content": "Four."})()})()]})(),
-                )[1])})()})()
+            self.chat = type(
+                "C",
+                (),
+                {
+                    "completions": type(
+                        "D",
+                        (),
+                        {
+                            "create": staticmethod(
+                                lambda **kw: (
+                                    captured.update(kw),
+                                    type(
+                                        "R",
+                                        (),
+                                        {
+                                            "choices": [
+                                                type("M", (), {"message": type("Z", (), {"content": "Four."})()})()
+                                            ]
+                                        },
+                                    )(),
+                                )[1]
+                            )
+                        },
+                    )()
+                },
+            )()
 
     mod = types.ModuleType("openai")
     mod.OpenAI = _Client
@@ -87,6 +93,7 @@ def test_real_backend_payload_nests_it(monkeypatch):
     monkeypatch.setenv("SIM_ENABLE_THINKING", "false")
 
     from colbench.env import openai_sim_backend
+
     assert openai_sim_backend("sys", "user") == "Four."
     eb = captured["extra_body"]
     assert eb["chat_template_kwargs"] == {"enable_thinking": False}
@@ -94,10 +101,13 @@ def test_real_backend_payload_nests_it(monkeypatch):
 
 
 # ── 2. TOKENIZER path: the flag must stay FLAT (guard against the wrong "fix") ────────────────
-@pytest.mark.parametrize("mod_name,fn_name", [
-    ("colbench.validate_colbench", "_solver_template_kwargs"),
-    ("colbench.validate_colbench_spec", "_solver_template_kwargs"),
-])
+@pytest.mark.parametrize(
+    "mod_name,fn_name",
+    [
+        ("colbench.validate_colbench", "_solver_template_kwargs"),
+        ("colbench.validate_colbench_spec", "_solver_template_kwargs"),
+    ],
+)
 def test_tokenizer_kwargs_stay_flat(monkeypatch, mod_name, fn_name):
     """These feed tokenizer.apply_chat_template(**kwargs), which takes enable_thinking DIRECTLY.
 
@@ -132,8 +142,9 @@ def test_strip_think_truncated_block_is_removed():
 
 
 def test_strip_think_keeps_text_before_a_truncated_block():
-    assert strip_think("Sure, can you handle quotes?\n<think>wait, should I ask about") == \
-        "Sure, can you handle quotes?"
+    assert (
+        strip_think("Sure, can you handle quotes?\n<think>wait, should I ask about") == "Sure, can you handle quotes?"
+    )
 
 
 def test_strip_think_handles_closed_then_truncated():

@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Standalone multi-turn validation / inspection harness for the ColBench solver.
 
 Runs the SAME solver<->frozen-simulator conversation as training on the validation/test
@@ -97,14 +84,14 @@ class Trajectory:
         self.env = env
         self.response_budget = response_budget  # max cumulative response tokens (solver + sim replies)
 
-        self.response_tokens = 0   # cumulative response-side tokens used so far
+        self.response_tokens = 0  # cumulative response-side tokens used so far
         self.assistant_turns = 0
         self.user_turns = 0
         self.answered = False
         self.answered_at_turn = -1
         self.overflow = False
         self.done = False
-        self.reward = 0.0          # fractional GT pass-rate of the final submission
+        self.reward = 0.0  # fractional GT pass-rate of the final submission
         self.all_pass = False
         self.num_test_cases = 0
         self.final_answer = None
@@ -298,15 +285,17 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         if not kept:
             continue
         clamped = sum(1 for sp in per_req_params if sp["max_new_tokens"] < args.max_new_tokens_per_turn)
-        print(f"[validate] t={temperature:g} turn {turn}: generating for {len(kept)} active trajectories"
-              f" ({clamped} with context-clamped max_new_tokens)")
+        print(
+            f"[validate] t={temperature:g} turn {turn}: generating for {len(kept)} active trajectories"
+            f" ({clamped} with context-clamped max_new_tokens)"
+        )
         outputs = llm.generate(prompt=prompts, sampling_params=per_req_params)
 
         is_last_turn = turn == args.max_assistant_turns - 1
 
         # Append assistant turns; classify (answered / last-turn / continue).
         pending = []  # trajectories that did not answer and can still get a sim reply
-        for t, out in zip(kept, outputs):
+        for t, out in zip(kept, outputs, strict=False):
             text = out["text"]
             t.messages.append({"role": "assistant", "content": text})
             t.sim_dialogue.append({"role": "assistant", "content": text})
@@ -320,7 +309,7 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
                 t.answered_at_turn = turn
                 t.final_answer = ans
                 t.final_code = templates.extract_code_answer(ans)
-                t._grade_pending = True   # graded in the parallel pass below
+                t._grade_pending = True  # graded in the parallel pass below
             elif is_last_turn:
                 # Ran out of turns without a usable submission -> reward stays 0.
                 t.done = True
@@ -347,8 +336,10 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         def _sim(t):
             if reject:
                 return t, t.env.generate_user_turn_checked(
-                    list(t.sim_dialogue), max_tries=args.sim_reject_max_tries,
-                    ngram_n=args.sim_reject_ngram_n, min_operators=args.sim_reject_min_ops,
+                    list(t.sim_dialogue),
+                    max_tries=args.sim_reject_max_tries,
+                    ngram_n=args.sim_reject_ngram_n,
+                    min_operators=args.sim_reject_min_ops,
                 )
             reply = t.env.generate_user_turn(list(t.sim_dialogue))
             return t, {"reply": reply, "tries": 1, "accepted": True, "reasons": []}
@@ -359,13 +350,15 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
                 # conversation and mark it as its own outcome (NOT a solver failure / reward 0).
                 t.sim_failed = True
                 t.sim_failure_turn = turn
-                t.sim_reject_events.append({"turn": turn, "tries": res["tries"],
-                                            "reasons": res["reasons"], "accepted": False})
+                t.sim_reject_events.append(
+                    {"turn": turn, "tries": res["tries"], "reasons": res["reasons"], "accepted": False}
+                )
                 t.done = True
                 continue
             user_content = res["reply"]
-            t.sim_reject_events.append({"turn": turn, "tries": res["tries"],
-                                        "reasons": res["reasons"], "accepted": True})
+            t.sim_reject_events.append(
+                {"turn": turn, "tries": res["tries"], "reasons": res["reasons"], "accepted": True}
+            )
             feedback_ids = tokenizer.encode(user_content, add_special_tokens=False)
             # Need room for the user turn AND at least one response token next turn.
             if t.response_tokens + len(feedback_ids) >= t.response_budget:
@@ -399,24 +392,20 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         valid_by_problem.setdefault(t.row_index, []).append(t)
 
     answered_trajs = [t for t in valid if t.answered]
-    mean_pass_rate = sum(t.reward for t in valid) / max(1, n_valid)          # primary (val-core analog)
-    all_pass_rate = sum(1 for t in valid if t.all_pass) / max(1, n_valid)     # fully correct
+    mean_pass_rate = sum(t.reward for t in valid) / max(1, n_valid)  # primary (val-core analog)
+    all_pass_rate = sum(1 for t in valid if t.all_pass) / max(1, n_valid)  # fully correct
     answered_rate = len(answered_trajs) / max(1, n_valid)
     overflow_rate = sum(1 for t in valid if t.overflow) / max(1, n_valid)
     avg_turns_to_answer = (
-        sum(t.answered_at_turn + 1 for t in answered_trajs) / len(answered_trajs)
-        if answered_trajs else None
+        sum(t.answered_at_turn + 1 for t in answered_trajs) / len(answered_trajs) if answered_trajs else None
     )
     # Per-problem best (max over VALID samples) -> mean. The pass@n analog for a fractional
     # reward. Problems with no valid sample (all sim-failed) drop out of the denominator.
-    mean_best_pass_rate = (
-        sum(max(t.reward for t in grp) for grp in valid_by_problem.values())
-        / max(1, len(valid_by_problem))
+    mean_best_pass_rate = sum(max(t.reward for t in grp) for grp in valid_by_problem.values()) / max(
+        1, len(valid_by_problem)
     )
     # First-(valid-)sample metric (comparable to a greedy / single-sample run).
-    pass_at_1 = (
-        sum(grp[0].reward for grp in valid_by_problem.values()) / max(1, len(valid_by_problem))
-    )
+    pass_at_1 = sum(grp[0].reward for grp in valid_by_problem.values()) / max(1, len(valid_by_problem))
 
     # ---- rejection-sampling audit (aggregated over every injected sim turn) ----
     all_events = [ev for t in trajs for ev in t.sim_reject_events]
@@ -452,8 +441,8 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
         "n_problems": n_problems,
         "n_samples_per_problem": n_samples,
         "n_trajectories": n_traj,
-        "n_scored_trajectories": n_valid,        # excludes simulation failures
-        "n_sim_failures": n_sim_failures,        # third outcome (not pass, not fail)
+        "n_scored_trajectories": n_valid,  # excludes simulation failures
+        "n_sim_failures": n_sim_failures,  # third outcome (not pass, not fail)
         "mean_pass_rate": mean_pass_rate,
         "mean_best_pass_rate": mean_best_pass_rate,
         "pass@1_mean_pass_rate": pass_at_1,
@@ -491,11 +480,15 @@ def run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max
     out_dir = os.path.dirname(os.path.abspath(out_path))
     os.makedirs(out_dir, exist_ok=True)
     with open(out_path, "w") as f:
-        json.dump({
-            "summary": summary,
-            "num_saved_conversations": len(saved),
-            "trajectories": [t.to_dict() for t in saved],
-        }, f, indent=2)
+        json.dump(
+            {
+                "summary": summary,
+                "num_saved_conversations": len(saved),
+                "trajectories": [t.to_dict() for t in saved],
+            },
+            f,
+            indent=2,
+        )
     print(f"[validate] wrote {len(saved)}/{n_traj} conversations -> {out_path}")
     return summary
 
@@ -522,61 +515,109 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # Model / data
     ap.add_argument("--model", required=True, help="HF model dir or name (a merged checkpoint).")
-    ap.add_argument("--val_file", default=os.path.expanduser("~/data/colbench/test.parquet"),
-                    help="Validation/test parquet (VERL schema from preprocess_colbench.py).")
+    ap.add_argument(
+        "--val_file",
+        default=os.path.expanduser("~/data/colbench/test.parquet"),
+        help="Validation/test parquet (VERL schema from preprocess_colbench.py).",
+    )
     ap.add_argument("--out", required=True, help="Output JSON path stem for the conversation dump.")
     ap.add_argument("--max_problems", type=int, default=None, help="Limit #problems (debug). None = all.")
     ap.add_argument("--n_samples", type=int, default=1, help="Trajectories sampled per problem.")
-    ap.add_argument("--max_saved_convos", type=int, default=1000,
-                    help="Cap on how many (randomly sampled) full conversations are written to "
-                         "JSON (each carries its per-turn sim_reject_events audit). Metrics are "
-                         "still computed over ALL trajectories. <0 = save all.")
+    ap.add_argument(
+        "--max_saved_convos",
+        type=int,
+        default=1000,
+        help="Cap on how many (randomly sampled) full conversations are written to "
+        "JSON (each carries its per-turn sim_reject_events audit). Metrics are "
+        "still computed over ALL trajectories. <0 = save all.",
+    )
 
     # User-simulator rejection sampling (EVAL only). Resample the sim's reply until it contains
     # no leaked code (templates.detect_code_leak), so the frozen sim can't just hand the solver
     # the solution. Off by default (0 tries) => single-shot turns, byte-identical to training.
-    ap.add_argument("--sim_reject_max_tries", type=int, default=0,
-                    help="Max sim resamples per user turn (0 disables rejection sampling). On "
-                         "exhaustion the conversation is marked a 'simulation failure' (a third "
-                         "outcome, excluded from the pass-rate denominator).")
-    ap.add_argument("--sim_reject_ngram_n", type=int, default=0,
-                    help="Detector (D): reject if a symbol-aware n-gram of this length is shared "
-                         "with the hidden GT source (and contains >= --sim_reject_min_ops operators). "
-                         "0 (default) DISABLES (D) -- held as a future consideration; A/B still run.")
-    ap.add_argument("--sim_reject_min_ops", type=int, default=2,
-                    help="Detector (D): min code operators required within the matched n-gram, so "
-                         "it fires on copied EXPRESSIONS, not prose that shares identifiers.")
+    ap.add_argument(
+        "--sim_reject_max_tries",
+        type=int,
+        default=0,
+        help="Max sim resamples per user turn (0 disables rejection sampling). On "
+        "exhaustion the conversation is marked a 'simulation failure' (a third "
+        "outcome, excluded from the pass-rate denominator).",
+    )
+    ap.add_argument(
+        "--sim_reject_ngram_n",
+        type=int,
+        default=0,
+        help="Detector (D): reject if a symbol-aware n-gram of this length is shared "
+        "with the hidden GT source (and contains >= --sim_reject_min_ops operators). "
+        "0 (default) DISABLES (D) -- held as a future consideration; A/B still run.",
+    )
+    ap.add_argument(
+        "--sim_reject_min_ops",
+        type=int,
+        default=2,
+        help="Detector (D): min code operators required within the matched n-gram, so "
+        "it fires on copied EXPRESSIONS, not prose that shares identifiers.",
+    )
 
     # Inference hyper-parameters (defaults match run_colbench_grpo.sh so a checkpoint is
     # evaluated with the same budgets it trained under).
-    ap.add_argument("--temperature", type=float, default=0.6,
-                    help="Single sampling temperature (used only when --temperatures is not given).")
-    ap.add_argument("--temperatures", type=float, nargs="+", default=None,
-                    help="Sweep several temperatures in ONE submission (engine loaded once). Each "
-                         "writes its own JSON tagged '<out_stem>_turns<N>_n<K>_t<temp>.json'. "
-                         "Overrides --temperature. Example: --temperatures 0.0 0.6")
+    ap.add_argument(
+        "--temperature",
+        type=float,
+        default=0.6,
+        help="Single sampling temperature (used only when --temperatures is not given).",
+    )
+    ap.add_argument(
+        "--temperatures",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Sweep several temperatures in ONE submission (engine loaded once). Each "
+        "writes its own JSON tagged '<out_stem>_turns<N>_n<K>_t<temp>.json'. "
+        "Overrides --temperature. Example: --temperatures 0.0 0.6",
+    )
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--top_k", type=int, default=-1, help="-1 disables top-k.")
     ap.add_argument("--seed", type=int, default=0, help="SGLang engine + saved-sample RNG seed.")
     ap.add_argument("--max_assistant_turns", type=int, default=10, help="Total solver turns (clarify + submit).")
     ap.add_argument("--max_new_tokens_per_turn", type=int, default=1024)
-    ap.add_argument("--max_response_length", type=int, default=14336,
-                    help="Cumulative response-token budget (solver turns + injected sim replies) "
-                         "before overflow stop. Default 14336 matches MAX_RESPONSE_LENGTH in "
-                         "run_colbench_grpo.sh.")
-    ap.add_argument("--max_prompt_length", type=int, default=2048,
-                    help="Initial-prompt cap; with --max_response_length sets the engine context.")
-    ap.add_argument("--reward_time_limit", type=float, default=6.0,
-                    help="Per-case GT exec timeout (seconds) for grading (matches training).")
+    ap.add_argument(
+        "--max_response_length",
+        type=int,
+        default=14336,
+        help="Cumulative response-token budget (solver turns + injected sim replies) "
+        "before overflow stop. Default 14336 matches MAX_RESPONSE_LENGTH in "
+        "run_colbench_grpo.sh.",
+    )
+    ap.add_argument(
+        "--max_prompt_length",
+        type=int,
+        default=2048,
+        help="Initial-prompt cap; with --max_response_length sets the engine context.",
+    )
+    ap.add_argument(
+        "--reward_time_limit",
+        type=float,
+        default=6.0,
+        help="Per-case GT exec timeout (seconds) for grading (matches training).",
+    )
 
     # SGLang engine
     ap.add_argument("--tensor_parallel_size", type=int, default=int(os.getenv("ROLLOUT_TP", "1")))
-    ap.add_argument("--gpu_memory_utilization", type=float, default=0.85,
-                    help="SGLang mem_fraction_static (fraction of GPU mem for weights+KV cache).")
+    ap.add_argument(
+        "--gpu_memory_utilization",
+        type=float,
+        default=0.85,
+        help="SGLang mem_fraction_static (fraction of GPU mem for weights+KV cache).",
+    )
     ap.add_argument("--dtype", default="bfloat16")
     ap.add_argument("--trust_remote_code", action="store_true")
-    ap.add_argument("--grade_concurrency", type=int, default=int(os.getenv("CODECONTEST_EXEC_CONCURRENCY", "32")),
-                    help="Threads for the blocking env calls (grading + sim HTTP turns) per turn.")
+    ap.add_argument(
+        "--grade_concurrency",
+        type=int,
+        default=int(os.getenv("CODECONTEST_EXEC_CONCURRENCY", "32")),
+        help="Threads for the blocking env calls (grading + sim HTTP turns) per turn.",
+    )
     args = ap.parse_args()
 
     if not os.environ.get("CODECONTEST_EXEC_URL") and os.environ.get("CODECONTEST_ALLOW_INPROCESS") != "1":
@@ -585,17 +626,21 @@ def main():
             "or CODECONTEST_ALLOW_INPROCESS=1 (in-process dev/smoke) before running."
         )
     if not os.environ.get("OPENAI_BASE_URL"):
-        print("[validate] WARNING: OPENAI_BASE_URL is unset; the frozen sim server must be "
-              "reachable for generate_user_turn (multi-turn eval will otherwise degrade to "
-              "'No response.' replies).")
+        print(
+            "[validate] WARNING: OPENAI_BASE_URL is unset; the frozen sim server must be "
+            "reachable for generate_user_turn (multi-turn eval will otherwise degrade to "
+            "'No response.' replies)."
+        )
 
     # ---- load data ----
     val_df = pd.read_parquet(args.val_file)
     if args.max_problems is not None:
         val_df = val_df.iloc[: args.max_problems].copy()
     val_df = val_df.reset_index(drop=True)
-    print(f"[validate] loaded {len(val_df)} problems from {args.val_file}; "
-          f"up to {args.n_samples} sample(s) each (temperature 0 forced to 1)")
+    print(
+        f"[validate] loaded {len(val_df)} problems from {args.val_file}; "
+        f"up to {args.n_samples} sample(s) each (temperature 0 forced to 1)"
+    )
 
     # ---- tokenizer + engine ----
     max_model_len = args.max_prompt_length + args.max_response_length
@@ -614,12 +659,18 @@ def main():
         n_samples = 1 if temperature == 0.0 else args.n_samples
         if temperature == 0.0 and args.n_samples > 1:
             print(f"[validate] temperature=0 is greedy; forcing n_samples 1 (was {args.n_samples}).")
-        out_path = eval_tagged_path(args.out, args.max_assistant_turns, n_samples, temperature,
-                                    sim_reject_max_tries=args.sim_reject_max_tries)
+        out_path = eval_tagged_path(
+            args.out, args.max_assistant_turns, n_samples, temperature, sim_reject_max_tries=args.sim_reject_max_tries
+        )
         summary = run_eval(llm, tokenizer, val_df, temperature, n_samples, args, out_path, max_model_len)
-        results_index.append({"temperature": temperature, "out": out_path,
-                              "mean_pass_rate": summary["mean_pass_rate"],
-                              "all_pass_rate": summary["all_pass_rate"]})
+        results_index.append(
+            {
+                "temperature": temperature,
+                "out": out_path,
+                "mean_pass_rate": summary["mean_pass_rate"],
+                "all_pass_rate": summary["all_pass_rate"],
+            }
+        )
 
     llm.shutdown()
 

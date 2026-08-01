@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Prompts + answer/code extraction for the ColBench multi-turn loop.
 
 Ported from ``sweet_rl`` (``prompts/{llm_agent_code_prompt,human_simulator_code_prompt}.txt``,
@@ -19,6 +6,11 @@ Ported from ``sweet_rl`` (``prompts/{llm_agent_code_prompt,human_simulator_code_
 (marker extraction, code fence-strip, ``<think>`` strip) live here so the training rollout
 (``colbench_agent``) and the offline validator apply byte-identical text handling.
 """
+
+# The long lines in this file are prompt text inside string literals. Re-wrapping them would
+# change the exact bytes sent to the model and break comparability with completed runs, so
+# E501 is disabled file-wide rather than reflowed.
+# ruff: noqa: E501
 
 import re
 from typing import Optional
@@ -150,11 +142,11 @@ def strip_think(text: str) -> str:
 # Accept the several marker spellings observed in rollouts. Case-insensitive match; the answer
 # is everything AFTER the marker.
 _ANSWER_PATTERNS = [
-    "I WANT TO ANSWER:",   # standard
-    "I WANT_TO_ANSWER:",   # underscore
-    "I WANT_TO ANSWER:",   # mixed
-    "i want to answer:",   # lowercase
-    "i want_to_answer:",   # lowercase + underscore
+    "I WANT TO ANSWER:",  # standard
+    "I WANT_TO_ANSWER:",  # underscore
+    "I WANT_TO ANSWER:",  # mixed
+    "i want to answer:",  # lowercase
+    "i want_to_answer:",  # lowercase + underscore
 ]
 
 
@@ -173,9 +165,9 @@ def check_and_extract_answer(response: str) -> tuple[bool, str]:
         if pattern_lower in response_lower:
             if pattern in response:
                 idx = response.find(pattern)
-                return True, response[idx + len(pattern):].strip()
+                return True, response[idx + len(pattern) :].strip()
             idx_lower = response_lower.find(pattern_lower)
-            return True, response[idx_lower + len(pattern):].strip()
+            return True, response[idx_lower + len(pattern) :].strip()
     return False, ""
 
 
@@ -251,9 +243,7 @@ def _code_tokens(text: str) -> list:
     return re.findall(r"\w+|[^\w\s]", text or "")
 
 
-def detect_code_leak(
-    text: str, ground_truth: str, ngram_n: int = 10, min_operators: int = 2
-) -> Optional[str]:
+def detect_code_leak(text: str, ground_truth: str, ngram_n: int = 10, min_operators: int = 2) -> Optional[str]:
     """Return a short reason string if ``text`` leaks code, else ``None``.
 
     ``ground_truth`` is the hidden GT source the simulator sees (n-gram overlap is computed
@@ -276,9 +266,9 @@ def detect_code_leak(
     gt_toks = _code_tokens(ground_truth)
     tx_toks = _code_tokens(text)
     if len(gt_toks) >= ngram_n and len(tx_toks) >= ngram_n:
-        gt_ngrams = {tuple(gt_toks[i:i + ngram_n]) for i in range(len(gt_toks) - ngram_n + 1)}
+        gt_ngrams = {tuple(gt_toks[i : i + ngram_n]) for i in range(len(gt_toks) - ngram_n + 1)}
         for i in range(len(tx_toks) - ngram_n + 1):
-            ng = tuple(tx_toks[i:i + ngram_n])
+            ng = tuple(tx_toks[i : i + ngram_n])
             if ng in gt_ngrams and sum(tk in _CODE_OPERATORS for tk in ng) >= min_operators:
                 return "ngram"
     return None
@@ -493,8 +483,9 @@ def build_spec_sim_messages(spec: dict, messages: list[dict]) -> tuple[str, str]
     return system, str_dialogue_history(messages)
 
 
-def build_grounded_sim_messages(problem_description: str, ground_truth: str, plot: str,
-                                messages: list[dict]) -> tuple[str, str]:
+def build_grounded_sim_messages(
+    problem_description: str, ground_truth: str, plot: str, messages: list[dict]
+) -> tuple[str, str]:
     """Build the GROUNDED sim's (system, user) messages for one turn.
 
     Same seam split as ``build_spec_sim_messages`` (spec -> system, dialogue -> user), but the sim

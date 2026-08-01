@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Agent-loop tests for the GT path's LIVE-weights simulator (``+colbench.sim_live=True``).
 
 The arm under test keeps ONE copy of the weights for the whole run: the user turn is generated
@@ -39,10 +26,9 @@ os.environ.pop("CODECONTEST_EXEC_URL", None)
 
 pytest.importorskip("verl.experimental.agent_loop.agent_loop")
 
-from verl.workers.rollout.replica import TokenOutput  # noqa: E402
-
 from colbench import templates  # noqa: E402
 from colbench.colbench_agent import ColBenchAgentLoop  # noqa: E402
+from verl.workers.rollout.replica import TokenOutput  # noqa: E402
 
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 WRONG = "def f(x, y):\n    return x + y\n"  # ignores x<10 -> 0.5 pass-rate
@@ -85,8 +71,8 @@ class _RoleAwareServerManager:
         self._ri = 0
         self.solver_ids = []
         self.sim_ids = []
-        self.sim_prompts = []       # decoded sim prompts (assert GT presence / prompt identity)
-        self.sim_sampling = []      # sampling params each sim call was made with
+        self.sim_prompts = []  # decoded sim prompts (assert GT presence / prompt identity)
+        self.sim_sampling = []  # sampling params each sim call was made with
 
     async def generate(self, *, request_id, prompt_ids, sampling_params, **kwargs):
         # The solver's request_id is established on call 1 and reused; sim ids are always new.
@@ -111,8 +97,9 @@ class _RoleAwareServerManager:
         )
 
 
-def _make_loop(solver_turns, sim_replies, *, sim_live=True, max_assistant_turns=10,
-               sim_reject_max_tries=0, train_turns="all"):
+def _make_loop(
+    solver_turns, sim_replies, *, sim_live=True, max_assistant_turns=10, sim_reject_max_tries=0, train_turns="all"
+):
     """Construct a ColBenchAgentLoop bypassing AgentLoopBase.__init__, wired to one fake engine."""
     obj = object.__new__(ColBenchAgentLoop)
     tok = _FakeTokenizer()
@@ -165,7 +152,7 @@ def test_live_sim_generates_on_the_training_engine():
     assert sm.sim_ids[0] not in sm.solver_ids, "sim reused the solver's KV-prefix request_id"
     assert len(set(sm.solver_ids)) == 1, "solver turns must share ONE request_id"
     assert out.reward_score == 1.0
-    assert out.response_mask.count(0) == len("It's 10.".encode("utf-8"))  # sim text, no gradient
+    assert out.response_mask.count(0) == len(b"It's 10.")  # sim text, no gradient
 
 
 def test_live_sim_prompt_carries_the_hidden_gt_and_never_leaks_into_the_solver():
@@ -177,8 +164,7 @@ def test_live_sim_prompt_carries_the_hidden_gt_and_never_leaks_into_the_solver()
     sim_prompt = obj.server_manager.sim_prompts[0]
     # Same prompt content the frozen path builds: sim system prompt + build_sim_user_message(GT).
     expected_user = templates.build_sim_user_message(
-        PROBLEM, GT, [{"role": "user", "content": PROBLEM},
-                      {"role": "assistant", "content": "What's the cutoff?"}]
+        PROBLEM, GT, [{"role": "user", "content": PROBLEM}, {"role": "assistant", "content": "What's the cutoff?"}]
     )
     assert sim_prompt == templates.SIM_SYSTEM_PROMPT + expected_user
     assert GT in sim_prompt  # the sim (and ONLY the sim) sees the ground truth
@@ -222,9 +208,7 @@ def test_sim_drift_metrics_present_on_every_rollout():
     assert rei["sim_leak_frac"] == 0.0
     # A trajectory with NO sim turn (solver answers immediately) still carries all three keys --
     # verl reads the reward_extra_info key set from the first sample.
-    rei2 = _run(_make_loop(solver_turns=[_answer_turn(WRONG)], sim_replies=[])).extra_fields[
-        "reward_extra_info"
-    ]
+    rei2 = _run(_make_loop(solver_turns=[_answer_turn(WRONG)], sim_replies=[])).extra_fields["reward_extra_info"]
     assert rei2["sim_reply_chars"] == 0.0 and rei2["sim_leak_frac"] == 0.0
     assert rei2["pass_rate"] == 0.5
 
@@ -250,7 +234,7 @@ def test_live_sim_rejection_sampling_resamples_until_clean():
         sim_reject_max_tries=4,
     )
     rei = _run(obj).extra_fields["reward_extra_info"]
-    assert rei["sim_reject_tries"] == 2.0   # one rejected, one accepted
+    assert rei["sim_reject_tries"] == 2.0  # one rejected, one accepted
     assert rei["sim_leak_frac"] == 0.0
     assert len(obj.server_manager.sim_ids) == 2
     assert len(set(obj.server_manager.sim_ids)) == 2  # a fresh request_id per sample
@@ -276,9 +260,9 @@ def test_sim_timeout_is_observable_and_kills_the_episode_at_reward_zero():
     out = _run(obj)
     rei = out.extra_fields["reward_extra_info"]
     assert rei["sim_turn_timeout"] == 1.0
-    assert rei["answered"] == 0.0 and out.reward_score == 0.0   # the artifact GRPO would train on
-    assert rei["sim_seconds"] >= 0.05                            # latency is recorded, not lost
-    assert rei["num_assistant_turns"] == 1.0                     # episode truncated after turn 1
+    assert rei["answered"] == 0.0 and out.reward_score == 0.0  # the artifact GRPO would train on
+    assert rei["sim_seconds"] >= 0.05  # latency is recorded, not lost
+    assert rei["num_assistant_turns"] == 1.0  # episode truncated after turn 1
 
 
 def test_timeout_keys_present_on_the_happy_path():
@@ -306,6 +290,6 @@ def test_frozen_path_untouched_when_sim_live_false():
         out = _run(obj)
     finally:
         ColBenchUserSimEnv.__post_init__ = orig
-    assert obj.server_manager.sim_ids == []          # the engine served the solver only
+    assert obj.server_manager.sim_ids == []  # the engine served the solver only
     assert out.extra_fields["reward_extra_info"]["sim_live"] == 0.0
     assert out.reward_score == 1.0

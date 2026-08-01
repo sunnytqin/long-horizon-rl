@@ -11,6 +11,7 @@ Deliberately depends only on `openai` (already a colbench dependency) + stdlib, 
 training container without extra installs and without importing sglang. Non-fatal by contract:
 the entrypoint tolerates a non-zero exit and leaves the server up for manual inspection.
 """
+
 import argparse
 import asyncio
 import os
@@ -28,10 +29,7 @@ _FILLER_SENTENCE = "The user is collaborating with an assistant to refine a solu
 def _make_prompt(input_tokens: int) -> str:
     target_chars = max(0, input_tokens - 32) * 4
     reps = max(1, target_chars // len(_FILLER_SENTENCE))
-    return (
-        _FILLER_SENTENCE * reps
-        + "\n\nGiven the discussion so far, give one concise piece of feedback."
-    )
+    return _FILLER_SENTENCE * reps + "\n\nGiven the discussion so far, give one concise piece of feedback."
 
 
 async def _one_request(client, model, prompt, output_tokens, temperature):
@@ -100,21 +98,29 @@ def _thinking_check():
 
     want_off = _sim_extra_body() == {"enable_thinking": False}
     print("-" * 78)
-    print(f"Thinking check (SIM_ENABLE_THINKING={os.environ.get('SIM_ENABLE_THINKING', '<unset>')} "
-          f"-> expecting thinking {'OFF' if want_off else 'unconstrained'})")
-    reply = openai_sim_backend("You are a user talking to a coding assistant.",
-                               "Reply with exactly one short sentence asking for a CSV parser.")
+    print(
+        f"Thinking check (SIM_ENABLE_THINKING={os.environ.get('SIM_ENABLE_THINKING', '<unset>')} "
+        f"-> expecting thinking {'OFF' if want_off else 'unconstrained'})"
+    )
+    reply = openai_sim_backend(
+        "You are a user talking to a coding assistant.",
+        "Reply with exactly one short sentence asking for a CSV parser.",
+    )
     has_think = "<think>" in reply
     stripped = strip_think(reply)
     print(f"  raw reply[:160]: {reply[:160]!r}")
     print(f"  <think> present: {has_think} | usable text after strip: {bool(stripped)}")
     if want_off and has_think:
-        print("  RESULT: *** FAIL *** thinking is ON despite SIM_ENABLE_THINKING=false -- the flag "
-              "is not reaching the chat template (check chat_template_kwargs nesting).")
+        print(
+            "  RESULT: *** FAIL *** thinking is ON despite SIM_ENABLE_THINKING=false -- the flag "
+            "is not reaching the chat template (check chat_template_kwargs nesting)."
+        )
         return False
     if want_off and not stripped:
-        print("  RESULT: *** FAIL *** reply is empty after stripping -- the sim produced only "
-              "reasoning, so it would inject nothing (or a fragment) as the user turn.")
+        print(
+            "  RESULT: *** FAIL *** reply is empty after stripping -- the sim produced only "
+            "reasoning, so it would inject nothing (or a fragment) as the user turn."
+        )
         return False
     print("  RESULT: PASS")
     return True
@@ -138,14 +144,14 @@ async def _main_async(args):
     print(f"Sim throughput probe -> {base_url} (model={model})")
     print(f"input~{args.input_tokens} tok, output={args.output_tokens} tok, temp={args.temperature}")
     print("=" * 78)
-    header = f"{'conc':>5} {'ok':>5} {'err':>4} {'wall_s':>8} {'out_tok/s':>10} {'req/s':>7} {'p50_ms':>9} {'p95_ms':>9}"
+    header = (
+        f"{'conc':>5} {'ok':>5} {'err':>4} {'wall_s':>8} {'out_tok/s':>10} {'req/s':>7} {'p50_ms':>9} {'p95_ms':>9}"
+    )
     print(header)
     print("-" * len(header))
     for concurrency in args.concurrency:
         num_prompts = max(concurrency * args.prompts_per_conc, concurrency)
-        r = await _run_level(
-            client, model, prompt, args.output_tokens, args.temperature, concurrency, num_prompts
-        )
+        r = await _run_level(client, model, prompt, args.output_tokens, args.temperature, concurrency, num_prompts)
         if r.get("ok"):
             print(
                 f"{r['concurrency']:>5} {r['ok']:>5} {r['errors']:>4} {r['wall']:>8.1f} "
@@ -162,16 +168,24 @@ def _parse_int_list(s):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--concurrency", type=_parse_int_list, default=[1, 8, 32, 64],
-                   help="Space/comma-separated concurrency levels to sweep, e.g. '1 8 32 64'.")
+    p.add_argument(
+        "--concurrency",
+        type=_parse_int_list,
+        default=[1, 8, 32, 64],
+        help="Space/comma-separated concurrency levels to sweep, e.g. '1 8 32 64'.",
+    )
     p.add_argument("--input-tokens", type=int, default=1024, help="Approx prompt length in tokens.")
     p.add_argument("--output-tokens", type=int, default=256, help="max_tokens per request.")
-    p.add_argument("--prompts-per-conc", type=int, default=4,
-                   help="Requests per level = concurrency * this (bounds wall time).")
+    p.add_argument(
+        "--prompts-per-conc", type=int, default=4, help="Requests per level = concurrency * this (bounds wall time)."
+    )
     p.add_argument("--temperature", type=float, default=0.7, help="Mirror the sim's non-greedy sampling.")
     p.add_argument("--timeout", type=float, default=600.0, help="Per-request timeout (s).")
-    p.add_argument("--skip-thinking-check", action="store_true",
-                   help="Skip the <think>-suppression assertion and only measure throughput.")
+    p.add_argument(
+        "--skip-thinking-check",
+        action="store_true",
+        help="Skip the <think>-suppression assertion and only measure throughput.",
+    )
     args = p.parse_args()
     asyncio.run(_main_async(args))
 

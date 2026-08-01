@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Spec-path environment for the ColBench multi-turn loop (Phase 1).
 
 The sibling of ``colbench.env.ColBenchUserSimEnv`` for the SPEC setting. The one difference
@@ -46,14 +33,21 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from colbench import reward, templates
+
 # Reuse the GT env's frozen-sim HTTP backend + sampling resolution verbatim -- only the PROMPT
 # built here differs (spec vs GT source). Keeps sim sampling / thinking-kwarg behavior identical.
 from colbench.env import SimBackend, _sim_extra_body, _sim_sampling, openai_sim_backend  # noqa: F401
 
 
-def make_openai_sim_backend(base_url: str, model: str, api_key: str,
-                            temperature: float = 1.0, top_p: float = 1.0,
-                            max_tokens: int = 4096, timeout: float = 60.0) -> SimBackend:
+def make_openai_sim_backend(
+    base_url: str,
+    model: str,
+    api_key: str,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
+    max_tokens: int = 4096,
+    timeout: float = 60.0,
+) -> SimBackend:
     """Build a sim backend that queries a REAL OpenAI-API endpoint (e.g. api.openai.com).
 
     For comparison studies where the frozen user-simulator is a hosted GPT model instead of the
@@ -78,8 +72,14 @@ def make_openai_sim_backend(base_url: str, model: str, api_key: str,
         ]
         # Start with the standard-chat schema; peel off fields the model rejects (GPT-5/reasoning
         # models: token-limit param is renamed, sampling params are fixed at default).
-        params = {"model": model, "messages": messages, "timeout": timeout,
-                  "max_tokens": max_tokens, "temperature": temperature, "top_p": top_p}
+        params = {
+            "model": model,
+            "messages": messages,
+            "timeout": timeout,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
         for _ in range(5):
             try:
                 completion = client.chat.completions.create(**params)
@@ -103,6 +103,7 @@ def make_openai_sim_backend(base_url: str, model: str, api_key: str,
         return "No response."
 
     return backend
+
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -175,8 +176,10 @@ class ColBenchSpecUserSimEnv:
         """
         if self.grounded:
             system_content, user_content = templates.build_grounded_sim_messages(
-                self.problem_description, self.ground_truth,
-                (self.spec or {}).get("plot", ""), messages,
+                self.problem_description,
+                self.ground_truth,
+                (self.spec or {}).get("plot", ""),
+                messages,
             )
         else:
             system_content, user_content = templates.build_spec_sim_messages(self.spec, messages)
@@ -210,8 +213,15 @@ class ColBenchSpecUserSimEnv:
                 "[COLBENCH_SPEC_SIM] spec_requirements[:%d]=%r\n[COLBENCH_SPEC_SIM] plot[:%d]=%r\n"
                 "[COLBENCH_SPEC_SIM] sim_system[:%d]=%r\n[COLBENCH_SPEC_SIM] raw_reply[:%d]=%r\n"
                 "[COLBENCH_SPEC_SIM] capped_reply=%r",
-                n, str(self.spec.get("requirements"))[:n], n, str(self.spec.get("plot"))[:n],
-                n, system_content[:n], n, str(raw)[:n], reply,
+                n,
+                str(self.spec.get("requirements"))[:n],
+                n,
+                str(self.spec.get("plot"))[:n],
+                n,
+                system_content[:n],
+                n,
+                str(raw)[:n],
+                reply,
             )
         return reply
 
@@ -222,6 +232,4 @@ class ColBenchSpecUserSimEnv:
         function on every call-string via the sandboxed exec sidecar (functional equivalence).
         """
         code = templates.extract_code_answer(answer_text)
-        return reward.grade(
-            code, self.ground_truth, self.test_cases, time_limit=self.reward_time_limit
-        )
+        return reward.grade(code, self.ground_truth, self.test_cases, time_limit=self.reward_time_limit)

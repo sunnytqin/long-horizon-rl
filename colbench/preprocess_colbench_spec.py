@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Preprocess the SPEC-path ColBench dataset into our VERL RL schema (Phase 1).
 
 Sibling of ``colbench.preprocess_colbench`` for the spec setting. Joins the Phase-0 authored
@@ -88,33 +75,43 @@ def build_rows(raw_parquet: str, specs_jsonl: str, split: str) -> list[dict]:
             "test_cases": gt["test_cases"],
         }
         spec = {k: sp.get(k) for k in _SPEC_KEYS}
-        rows.append({
-            "data_source": DATA_SOURCE,
-            "prompt": [
-                {"role": "system", "content": COLBENCH_SPEC_AGENT_SYSTEM_PROMPT},
-                {"role": "user", "content": build_initial_user_message(problem_description)},
-            ],
-            "ability": "code",
-            "reward_model": {"style": "rule", "ground_truth": ground_truth},
-            "extra_info": {
-                "split": split,
-                "index": int(idx),
-                "agent_name": "colbench_spec_agent",
-                "ground_truth": ground_truth,
-                "spec": spec,
-            },
-        })
-    print(f"[preprocess_spec] {len(rows)} usable rows "
-          f"(skipped {skipped_unusable} unusable, {skipped_oob} out-of-range) from {len(specs)} specs")
+        rows.append(
+            {
+                "data_source": DATA_SOURCE,
+                "prompt": [
+                    {"role": "system", "content": COLBENCH_SPEC_AGENT_SYSTEM_PROMPT},
+                    {"role": "user", "content": build_initial_user_message(problem_description)},
+                ],
+                "ability": "code",
+                "reward_model": {"style": "rule", "ground_truth": ground_truth},
+                "extra_info": {
+                    "split": split,
+                    "index": int(idx),
+                    "agent_name": "colbench_spec_agent",
+                    "ground_truth": ground_truth,
+                    "spec": spec,
+                },
+            }
+        )
+    print(
+        f"[preprocess_spec] {len(rows)} usable rows "
+        f"(skipped {skipped_unusable} unusable, {skipped_oob} out-of-range) from {len(specs)} specs"
+    )
     return rows
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--raw_parquet", default="InfoPO/data/colbench_code/train.parquet",
-                    help="Raw InfoPO parquet the specs' `index` points into (GT source + test_cases).")
-    ap.add_argument("--specs_jsonl", required=True,
-                    help="Phase-0 specs JSONL (e.g. train.selfplay.plot.jsonl or the cond30 subset).")
+    ap.add_argument(
+        "--raw_parquet",
+        default="InfoPO/data/colbench_code/train.parquet",
+        help="Raw InfoPO parquet the specs' `index` points into (GT source + test_cases).",
+    )
+    ap.add_argument(
+        "--specs_jsonl",
+        required=True,
+        help="Phase-0 specs JSONL (e.g. train.selfplay.plot.jsonl or the cond30 subset).",
+    )
     ap.add_argument("--out", required=True, help="Output parquet path (VERL schema).")
     ap.add_argument("--split", default="train", help="Value stored in extra_info.split (metadata).")
     args = ap.parse_args()

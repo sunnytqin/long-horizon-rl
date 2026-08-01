@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """CPU tests for colbench.env.ColBenchUserSimEnv (mocked simulator; no GPU, no server).
 
 Covers answer extraction / termination, the leak invariant (GT source never enters the
@@ -54,13 +41,18 @@ def _sim_stub(reply="The threshold is 10 and below it we subtract."):
 def _env(**kw):
     backend, captured = _sim_stub(**{k: kw.pop(k) for k in list(kw) if k == "reply"})
     e = ColBenchUserSimEnv(
-        problem_description=PROBLEM, ground_truth=GT, test_cases=CALLS,
-        max_steps=10, sim_backend=backend, **kw,
+        problem_description=PROBLEM,
+        ground_truth=GT,
+        test_cases=CALLS,
+        max_steps=10,
+        sim_backend=backend,
+        **kw,
     )
     return e, captured
 
 
 # ── answer extraction / termination ──────────────────────────────────────────
+
 
 def test_marker_answer_extracted_midturn():
     e, _ = _env()
@@ -94,6 +86,7 @@ def test_think_block_stripped_before_marker():
 
 
 # ── simulator turn: capping + the GT is passed ONLY to the backend ────────────
+
 
 def test_user_turn_capped_and_gt_only_in_sim_prompt():
     long_reply = "x" * 999
@@ -142,16 +135,18 @@ def test_marker_answer_is_graded_as_code_by_the_spec_extractor():
     comparison.
     """
     code = "def f(x):\n    return x + 1"
-    for turn in (f"I WANT TO ANSWER:\n{code}",
-                 f"I WANT TO ANSWER:\n```python\n{code}\n```",
-                 f"i want to answer:\n{code}"):
+    for turn in (
+        f"I WANT TO ANSWER:\n{code}",
+        f"I WANT TO ANSWER:\n```python\n{code}\n```",
+        f"i want to answer:\n{code}",
+    ):
         extracted = templates.extract_last_code([{"role": "assistant", "content": turn}])
         assert extracted == code, f"marker leaked into the graded code for: {turn!r}"
         compile(extracted, "<graded>", "exec")  # would raise SyntaxError before the fix
     # Spec-protocol turns (no marker) are untouched.
-    assert templates.extract_last_code(
-        [{"role": "assistant", "content": f"Here you go:\n```python\n{code}\n```"}]
-    ) == code
+    assert (
+        templates.extract_last_code([{"role": "assistant", "content": f"Here you go:\n```python\n{code}\n```"}]) == code
+    )
 
 
 def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
@@ -162,10 +157,12 @@ def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
     recognisably ColBench rather than a prompt we invented.
     """
     raw, live = templates._AGENT_PROMPT_RAW, templates.COLBENCH_AGENT_SYSTEM_PROMPT
-    for bullet in ("1) Note that the problem is highly personalized",
-                   "2) Note that you should not ask human users complicated questions",
-                   "4) Note that you can only interact with the human users WITHIN 10",
-                   "5) You should be as concise as possible"):
+    for bullet in (
+        "1) Note that the problem is highly personalized",
+        "2) Note that you should not ask human users complicated questions",
+        "4) Note that you can only interact with the human users WITHIN 10",
+        "5) You should be as concise as possible",
+    ):
         assert bullet in raw and bullet in live, f"bullet drifted: {bullet!r}"
     # The marker is gone from the live prompt; the fence instruction replaces it.
     assert templates.ANSWER_MARKER in raw
@@ -176,27 +173,34 @@ def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
 
 # ── GT-path submission: a fenced function, with the marker still accepted ─────
 
-@pytest.mark.parametrize("turn,expected_def", [
-    ("Here is the function:\n```python\ndef f(x):\n    return x + 1\n```", True),
-    # Unterminated fence: the 1024-token per-turn cap cut the closing ``` off.
-    ("```python\ndef f(x):\n    return x + 1", True),
-    # Legacy marker protocol must still submit (old parquets / old checkpoints).
-    ("I WANT TO ANSWER:\ndef f(x):\n    return x + 1", True),
-])
+
+@pytest.mark.parametrize(
+    "turn,expected_def",
+    [
+        ("Here is the function:\n```python\ndef f(x):\n    return x + 1\n```", True),
+        # Unterminated fence: the 1024-token per-turn cap cut the closing ``` off.
+        ("```python\ndef f(x):\n    return x + 1", True),
+        # Legacy marker protocol must still submit (old parquets / old checkpoints).
+        ("I WANT TO ANSWER:\ndef f(x):\n    return x + 1", True),
+    ],
+)
 def test_final_answer_accepts_both_submit_protocols(turn, expected_def):
     has_answer, ans = templates.final_answer(turn, episode_done=False)
     assert has_answer is True
     assert ("def f" in ans) is expected_def
 
 
-@pytest.mark.parametrize("turn", [
-    # A bare `def` in PROSE must not force-submit -- this is the one-shot arm.
-    "Sure -- something like def parse(rows), is that right?",
-    # A fenced block with no function definition is not a submission either.
-    "Like this:\n```python\nprint(total)\n```\nDoes that match?",
-    # Plain clarification.
-    "What should happen when the file is empty?",
-])
+@pytest.mark.parametrize(
+    "turn",
+    [
+        # A bare `def` in PROSE must not force-submit -- this is the one-shot arm.
+        "Sure -- something like def parse(rows), is that right?",
+        # A fenced block with no function definition is not a submission either.
+        "Like this:\n```python\nprint(total)\n```\nDoes that match?",
+        # Plain clarification.
+        "What should happen when the file is empty?",
+    ],
+)
 def test_final_answer_does_not_submit_mid_clarification(turn):
     assert templates.final_answer(turn, episode_done=False) == (False, "")
 
@@ -214,14 +218,13 @@ def test_fence_wins_over_a_trailing_marker():
     discards the function. The marker strip is therefore gated on there being no fence at all.
     """
     code = "def f(x):\n    return x + 1"
-    assert templates.extract_code_answer(
-        f"```python\n{code}\n```\nI WANT TO ANSWER: that's my final answer"
-    ) == code
+    assert templates.extract_code_answer(f"```python\n{code}\n```\nI WANT TO ANSWER: that's my final answer") == code
     # Marker BEFORE a fence still works (the fence is what gets extracted either way).
     assert templates.extract_code_answer(f"I WANT TO ANSWER:\n```python\n{code}\n```") == code
 
 
 # ── leak invariant: GT never appears in the solver's message list ─────────────
+
 
 def test_leak_invariant_full_episode():
     """Drive a full mocked episode and assert the GT never enters solver-visible messages.
@@ -267,6 +270,7 @@ def test_leak_invariant_full_episode():
 
 # ── grading through the env ───────────────────────────────────────────────────
 
+
 def test_score_exact_answer_full_marks():
     e, _ = _env()
     answer = "```python\n" + GT + "```"
@@ -281,6 +285,7 @@ def test_score_partial_answer_fraction():
 
 # ── COLBENCH_DEBUG_SIM dump renders ───────────────────────────────────────────
 
+
 def test_debug_sim_dump_renders(monkeypatch, caplog):
     monkeypatch.setattr(env_mod, "_DEBUG_SIM", True)
     e, _ = _env()
@@ -291,6 +296,7 @@ def test_debug_sim_dump_renders(monkeypatch, caplog):
 
 
 # ── code-leak detection (templates.detect_code_leak) ──────────────────────────
+
 
 def test_detect_def_signature():
     assert templates.detect_code_leak("Here is it: def parse(x):", GT) == "def"
@@ -310,7 +316,11 @@ def test_detect_ngram_expression_leak():
 def test_detect_prose_spec_not_flagged():
     # A legitimate natural-language behavior description: shares identifiers with the GT but
     # NOT a run of operators -> must NOT be flagged (the Ex4-style false positive we avoid).
-    gt = "def check(platform, version):\n    if platform == 'Linux' and version in ['10.0', '10.1']:\n        return True\n"
+    gt = (
+        "def check(platform, version):\n"
+        "    if platform == 'Linux' and version in ['10.0', '10.1']:\n"
+        "        return True\n"
+    )
     reply = "For Linux with versions 10.0 or 10.1 the playback is paused, otherwise it is not."
     assert templates.detect_code_leak(reply, gt) is None
 
@@ -320,6 +330,7 @@ def test_detect_clean_reply_none():
 
 
 # ── rejection sampling (env.generate_user_turn_checked) ───────────────────────
+
 
 def _scripted_backend(replies):
     """A sim backend returning successive canned replies (one per call)."""
@@ -336,11 +347,13 @@ def _scripted_backend(replies):
 
 def test_rejection_accepts_after_retries():
     # Two leaking samples, then a clean one -> accepted on the 3rd try.
-    backend = _scripted_backend([
-        "def f(x, y): return x + y",
-        "```python\nreturn x - y\n```",
-        "The cutoff is 10 and below it we subtract.",
-    ])
+    backend = _scripted_backend(
+        [
+            "def f(x, y): return x + y",
+            "```python\nreturn x - y\n```",
+            "The cutoff is 10 and below it we subtract.",
+        ]
+    )
     e = ColBenchUserSimEnv(problem_description=PROBLEM, ground_truth=GT, test_cases=CALLS, sim_backend=backend)
     res = e.generate_user_turn_checked([{"role": "user", "content": PROBLEM}], max_tries=8)
     assert res["accepted"] is True
@@ -363,6 +376,7 @@ def test_rejection_exhausts_to_sim_failure():
 
 # ── sim thinking-kwarg guard (SIM_ENABLE_THINKING) ────────────────────────────
 
+
 def test_sim_extra_body_default_sends_nothing(monkeypatch):
     monkeypatch.delenv("SIM_ENABLE_THINKING", raising=False)
     assert env_mod._sim_extra_body() is None  # safe default for all models
@@ -379,6 +393,7 @@ def test_sim_extra_body_explicit_true(monkeypatch):
 
 
 # ── sim sampling (must NOT be greedy for Qwen3) ───────────────────────────────
+
 
 def test_sim_sampling_default_is_non_greedy(monkeypatch):
     for k in ("SIM_TEMPERATURE", "SIM_TOP_P", "SIM_TOP_K", "SIM_MIN_P"):
@@ -398,6 +413,7 @@ def test_sim_sampling_env_override(monkeypatch):
 
 if __name__ == "__main__":
     import pytest  # noqa: F401
+
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn) and fn.__code__.co_argcount == 0:
             fn()

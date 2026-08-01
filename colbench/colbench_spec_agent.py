@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """ColBench SPEC-path multi-turn agent loop: solver vs. a SPEC-conditioned frozen user sim.
 
 Sibling of ``colbench.colbench_agent.ColBenchAgentLoop`` (same budget/overflow bookkeeping,
@@ -49,9 +36,9 @@ import os
 from typing import Any
 from uuid import uuid4
 
+from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
 from colbench import templates
 from colbench.env_spec import ColBenchSpecUserSimEnv
-from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
@@ -129,7 +116,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         # the shared sim env is untouched, and eval (validate_colbench_spec) runs its own loop and
         # never sees this flag. OFF by default -> baseline byte-identical.
         _tap = cc.get("terminate_on_allpass", False)
-        self.terminate_on_allpass = _tap if isinstance(_tap, bool) else str(_tap).strip().lower() in ("1", "true", "yes", "on")
+        self.terminate_on_allpass = (
+            _tap if isinstance(_tap, bool) else str(_tap).strip().lower() in ("1", "true", "yes", "on")
+        )
         # Binary reward: reward = 1.0 iff the graded code passes ALL tests, else 0.0 (vs the default
         # fractional pass_rate). Cleaner objective proxy + suppresses partial-credit reinforcement of
         # mediocre-code-plus-ramble. The raw fractional pass_rate is ALWAYS kept as a metric. OFF by
@@ -154,9 +143,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
 
         # The initial (public) problem turn = the last user message of the prompt. It seeds the
         # simulator's dialogue history -- it carries NO ground truth.
-        problem_text = next(
-            (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
-        )
+        problem_text = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
 
         # Task payload: prefer extra_info.ground_truth, fall back to reward_model.ground_truth.
         gt = extra_info.get("ground_truth")
@@ -406,21 +393,21 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         # "upto_last_code" keeps [0 .. last_code_turn_idx] and zeros the trailing post-code turns
         # (removes the reward-irrelevant post-code ramble free-ride). "final_only" is still rejected
         # by the __init__ guard on the spec path.
-        apply_train_turns_mask(
-            response_mask, solver_turn_spans, self.train_turns, last_code_idx=last_code_turn_idx
-        )
+        apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns, last_code_idx=last_code_turn_idx)
 
         if _DEBUG_CONVO and index < _DEBUG_CONVO_N:
             self._dump_conversation(index, problem_text, spec, sim_dialogue, last_code, reward, terminated_by, result)
 
-        response_ids = prompt_ids[-len(response_mask):]
+        response_ids = prompt_ids[-len(response_mask) :]
         prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]
 
         output = AgentLoopOutput(
             prompt_ids=prompt_ids_out,
             response_ids=response_ids[: self.response_length],
             response_mask=response_mask[: self.response_length],
-            response_logprobs=response_logprobs[: self.response_length] if track_logprobs and response_logprobs else None,
+            response_logprobs=response_logprobs[: self.response_length]
+            if track_logprobs and response_logprobs
+            else None,
             reward_score=reward,
             num_turns=assistant_turns + user_turns + 1,
             metrics=metrics,
@@ -461,9 +448,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                     # Did the SIM end the episode on code that actually passes? Divided by term_user
                     # this is P(all_pass | user-terminated) -- the load-bearing assumption of
                     # user-driven termination, and the thing grounding the sim is meant to buy.
-                    "user_term_and_allpass": float(
-                        terminated_by == "user" and bool(result.get("all_pass", False))
-                    ),
+                    "user_term_and_allpass": float(terminated_by == "user" and bool(result.get("all_pass", False))),
                     # Mean chars per injected sim reply (0 if the sim never got to speak).
                     "sim_reply_chars": float(sim_reply_chars_total / user_turns) if user_turns else 0.0,
                 },
@@ -478,9 +463,13 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         logger.warning("[COLBENCH_SPEC_CONVO] problem[:%d]=%r", n, str(problem_text)[:n])
         logger.warning("[COLBENCH_SPEC_CONVO] spec.requirements[:%d]=%r", n, str(spec.get("requirements"))[:n])
         for i, m in enumerate(sim_dialogue):
-            logger.warning("[COLBENCH_SPEC_CONVO] turn=%d role=%s content[:%d]=%r", i, m.get("role"), n, str(m.get("content"))[:n])
+            logger.warning(
+                "[COLBENCH_SPEC_CONVO] turn=%d role=%s content[:%d]=%r", i, m.get("role"), n, str(m.get("content"))[:n]
+            )
         logger.warning("[COLBENCH_SPEC_CONVO] terminated_by=%s last_code[:%d]=%r", terminated_by, n, str(last_code)[:n])
         logger.warning(
             "[COLBENCH_SPEC_CONVO] pass_rate=%.3f all_pass=%s n=%d",
-            reward, result.get("all_pass"), result.get("n", 0),
+            reward,
+            result.get("all_pass"),
+            result.get("n", 0),
         )

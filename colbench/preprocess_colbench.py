@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Preprocess ColBench (Sweet-RL Backend-Programming) parquet into our VERL RL schema.
 
 
@@ -37,86 +24,66 @@ Usage:
        --local_dir /tmp/colbench --max_train 20 --max_val 20
 """
 
-
-import argparse
 import os
-
+import sys
 
 import datasets
+import pandas as pd
+from absl import app, flags
 
-
-import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from colbench.templates import COLBENCH_AGENT_SYSTEM_PROMPT, build_initial_user_message
-
 
 DATA_SOURCE = "colbench_code_local"  # routes nowhere special; reward comes from the loop
 
 
-
-
 def _extract_test_cases(extra_info: dict) -> list:
-   """Pull the non-None call-strings out of the nested tools_kwargs task payload."""
-   tools_kwargs = (extra_info or {}).get("tools_kwargs", {}) or {}
-   create_kwargs = (tools_kwargs.get("interact_with_env", {}) or {}).get("create_kwargs", {}) or {}
-   task = (create_kwargs.get("task", {}) or {})
-   test_cases = task.get("test_cases", {}) or {}
-   # Keep only non-None values (parquet pads the dict with None keys for schema consistency).
-   return [str(v) for v in test_cases.values() if v is not None]
-
-
+    """Pull the non-None call-strings out of the nested tools_kwargs task payload."""
+    tools_kwargs = (extra_info or {}).get("tools_kwargs", {}) or {}
+    create_kwargs = (tools_kwargs.get("interact_with_env", {}) or {}).get("create_kwargs", {}) or {}
+    task = create_kwargs.get("task", {}) or {}
+    test_cases = task.get("test_cases", {}) or {}
+    # Keep only non-None values (parquet pads the dict with None keys for schema consistency).
+    return [str(v) for v in test_cases.values() if v is not None]
 
 
 def make_map_fn(split: str):
-   def process_fn(example, idx):
-       reward_model = example["reward_model"] or {}
-       problem_description = reward_model.get("problem_description", "")
-       ground_truth_src = reward_model.get("ground_truth", "")
-       test_cases = _extract_test_cases(example.get("extra_info", {}) or {})
+    def process_fn(example, idx):
+        reward_model = example["reward_model"] or {}
+        problem_description = reward_model.get("problem_description", "")
+        ground_truth_src = reward_model.get("ground_truth", "")
+        test_cases = _extract_test_cases(example.get("extra_info", {}) or {})
 
+        ground_truth = {
+            "problem_description": problem_description,
+            "ground_truth": ground_truth_src,
+            "test_cases": test_cases,
+        }
+        return {
+            "data_source": DATA_SOURCE,
+            "prompt": [
+                {"role": "system", "content": COLBENCH_AGENT_SYSTEM_PROMPT},
+                {"role": "user", "content": build_initial_user_message(problem_description)},
+            ],
+            "ability": "code",
+            "reward_model": {"style": "rule", "ground_truth": ground_truth},
+            "extra_info": {
+                "split": split,
+                "index": idx,
+                "agent_name": "colbench_agent",
+                "ground_truth": ground_truth,
+            },
+        }
 
-       ground_truth = {
-           "problem_description": problem_description,
-           "ground_truth": ground_truth_src,
-           "test_cases": test_cases,
-       }
-       return {
-           "data_source": DATA_SOURCE,
-           "prompt": [
-               {"role": "system", "content": COLBENCH_AGENT_SYSTEM_PROMPT},
-               {"role": "user", "content": build_initial_user_message(problem_description)},
-           ],
-           "ability": "code",
-           "reward_model": {"style": "rule", "ground_truth": ground_truth},
-           "extra_info": {
-               "split": split,
-               "index": idx,
-               "agent_name": "colbench_agent",
-               "ground_truth": ground_truth,
-           },
-       }
-
-
-   return process_fn
-
-
-
-
-import pandas as pd
+    return process_fn
 
 
 def build_split(src_path: str, out_split: str, max_rows):
-   df = pd.read_parquet(src_path)
-   if max_rows is not None:
-       df = df.iloc[:max_rows]
-   ds = datasets.Dataset.from_pandas(df)
-   return ds.map(make_map_fn(out_split), with_indices=True, remove_columns=ds.column_names)
-
-
-
-
-from absl import app
-from absl import flags
+    df = pd.read_parquet(src_path)
+    if max_rows is not None:
+        df = df.iloc[:max_rows]
+    ds = datasets.Dataset.from_pandas(df)
+    return ds.map(make_map_fn(out_split), with_indices=True, remove_columns=ds.column_names)
 
 
 FLAGS = flags.FLAGS
@@ -128,51 +95,40 @@ flags.DEFINE_integer("val_small", 2000, "limit small val size")
 
 
 def main(argv):
-   del argv
-   src_dir = os.path.expanduser(FLAGS.src_dir)
-   local_dir = os.path.expanduser(FLAGS.local_dir)
-   os.makedirs(local_dir, exist_ok=True)
+    del argv
+    src_dir = os.path.expanduser(FLAGS.src_dir)
+    local_dir = os.path.expanduser(FLAGS.local_dir)
+    os.makedirs(local_dir, exist_ok=True)
 
+    print(f"Loading train: {src_dir}/train.parquet")
+    train = build_split(os.path.join(src_dir, "train.parquet"), "train", FLAGS.max_train)
+    print(f"Loading val: {src_dir}/test.parquet")
+    val = build_split(os.path.join(src_dir, "test.parquet"), "test", FLAGS.max_val)
 
-   print(f"Loading train: {src_dir}/train.parquet")
-   train = build_split(os.path.join(src_dir, "train.parquet"), "train", FLAGS.max_train)
-   print(f"Loading val: {src_dir}/test.parquet")
-   val = build_split(os.path.join(src_dir, "test.parquet"), "test", FLAGS.max_val)
+    train_path = os.path.join(local_dir, "train.parquet")
+    val_path = os.path.join(local_dir, "test.parquet")
+    train.to_parquet(train_path)
+    val.to_parquet(val_path)
+    print(f"Wrote {len(train)} train rows -> {train_path}")
+    print(f"Wrote {len(val)} val rows   -> {val_path}")
 
-
-   train_path = os.path.join(local_dir, "train.parquet")
-   val_path = os.path.join(local_dir, "test.parquet")
-   train.to_parquet(train_path)
-   val.to_parquet(val_path)
-   print(f"Wrote {len(train)} train rows -> {train_path}")
-   print(f"Wrote {len(val)} val rows   -> {val_path}")
-
-
-   # Light in-training validation set: a deterministic first-N slice of the full val set.
-   # The full test.parquet is reserved for the offline eval loop (colbench/validate_colbench.py).
-   if 0 < FLAGS.val_small < len(val):
-       val_small = val.select(range(FLAGS.val_small))
-       val_small_path = os.path.join(local_dir, "test_small.parquet")
-       val_small.to_parquet(val_small_path)
-       print(f"Wrote {len(val_small)} val-small rows -> {val_small_path} (in-training val)")
-   else:
-       print(f"Skipped test_small.parquet (val_small={FLAGS.val_small}, full val={len(val)})")
-   print("Example row:")
-   ex = train[0]
-   print("  prompt[0].role:", ex["prompt"][0]["role"])
-   print("  data_source:", ex["data_source"])
-   print("  reward_model.ground_truth keys:", list(ex["reward_model"]["ground_truth"].keys()))
-   print("  extra_info.agent_name:", ex["extra_info"]["agent_name"])
-   print("  #test cases:", len(ex["extra_info"]["ground_truth"]["test_cases"]))
-
-
+    # Light in-training validation set: a deterministic first-N slice of the full val set.
+    # The full test.parquet is reserved for the offline eval loop (colbench/validate_colbench.py).
+    if 0 < FLAGS.val_small < len(val):
+        val_small = val.select(range(FLAGS.val_small))
+        val_small_path = os.path.join(local_dir, "test_small.parquet")
+        val_small.to_parquet(val_small_path)
+        print(f"Wrote {len(val_small)} val-small rows -> {val_small_path} (in-training val)")
+    else:
+        print(f"Skipped test_small.parquet (val_small={FLAGS.val_small}, full val={len(val)})")
+    print("Example row:")
+    ex = train[0]
+    print("  prompt[0].role:", ex["prompt"][0]["role"])
+    print("  data_source:", ex["data_source"])
+    print("  reward_model.ground_truth keys:", list(ex["reward_model"]["ground_truth"].keys()))
+    print("  extra_info.agent_name:", ex["extra_info"]["agent_name"])
+    print("  #test cases:", len(ex["extra_info"]["ground_truth"]["test_cases"]))
 
 
 if __name__ == "__main__":
-   app.run(main)
-
-
-
-
-
-
+    app.run(main)

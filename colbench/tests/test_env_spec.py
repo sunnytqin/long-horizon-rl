@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """CPU tests for the SPEC path: colbench.env_spec + the spec templates helpers (mocked sim).
 
 Covers the leak invariant (GT source NEVER enters the spec sim prompt -- only the spec does),
@@ -34,8 +21,7 @@ WRONG = "def f(x, y):\n    return x + y\n"  # ignores the x<10 branch -> 0.5 pas
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Write a function f(x, y) with some personalized behavior."
 SPEC = {
-    "persona": {"who": "an analyst", "domain": "ops", "python_skill": "analyst",
-                "communication_style": "brief"},
+    "persona": {"who": "an analyst", "domain": "ops", "python_skill": "analyst", "communication_style": "brief"},
     "scenario": "Needs a small helper for a report.",
     "requirements": "The user wants f(x,y): if x is at least 10 return x+y, otherwise x-y.",
     "plot": "The user reveals the threshold of 10 only if the assistant asks about the cutoff.",
@@ -57,8 +43,12 @@ def _scripted_backend(replies):
 
 def _env(sim_backend=None, grounded=False):
     return ColBenchSpecUserSimEnv(
-        problem_description=PROBLEM, spec=SPEC, ground_truth=GT, test_cases=CALLS,
-        sim_backend=sim_backend, grounded=grounded,
+        problem_description=PROBLEM,
+        spec=SPEC,
+        ground_truth=GT,
+        test_cases=CALLS,
+        sim_backend=sim_backend,
+        grounded=grounded,
     )
 
 
@@ -67,6 +57,7 @@ def _code_turn(src):
 
 
 # ── leak invariant: the GT source never enters the spec sim prompt ────────────
+
 
 def test_spec_prompt_has_no_gt():
     captured = {}
@@ -77,8 +68,7 @@ def test_spec_prompt_has_no_gt():
         return "Sure, above 10 we add. "
 
     e = _env(sim_backend=backend)
-    e.generate_user_turn([{"role": "user", "content": PROBLEM},
-                          {"role": "assistant", "content": "What's the cutoff?"}])
+    e.generate_user_turn([{"role": "user", "content": PROBLEM}, {"role": "assistant", "content": "What's the cutoff?"}])
     # The spec (requirements/plot/persona) IS injected; the GT code is NOT.
     assert "at least 10" in captured["sys"] and "an analyst" in captured["sys"]
     assert GT not in captured["sys"] and GT not in captured["usr"]
@@ -91,12 +81,13 @@ def test_generate_user_turn_no_char_truncation():
     long_reply = "x" * (templates.HUMAN_RESPONSE_CHARACTER_LIMIT + 800) + " [TERMINATE]"
     e = _env(sim_backend=_scripted_backend([long_reply]))
     reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
-    assert reply == e.last_sim_raw                              # no post-hoc truncation
+    assert reply == e.last_sim_raw  # no post-hoc truncation
     assert len(reply) > templates.HUMAN_RESPONSE_CHARACTER_LIMIT
-    assert templates.sim_terminated(reply) is True             # sentinel survives (nothing chopped)
+    assert templates.sim_terminated(reply) is True  # sentinel survives (nothing chopped)
 
 
 # ── spec templates helpers ────────────────────────────────────────────────────
+
 
 def test_sim_terminated_variants():
     assert templates.sim_terminated("All good, thanks! [TERMINATE]") is True
@@ -124,6 +115,7 @@ def test_extract_last_code_none_when_no_code():
 
 # ── sim code fidelity: detection, stripping, and rejection sampling ────────────
 
+
 def test_sim_wrote_code_detects_fence():
     assert templates.sim_wrote_code("Here: ```python\ndef f(): pass\n```") is True
     assert templates.sim_wrote_code("just a bare ```\nx=1\n``` block") is True
@@ -133,10 +125,14 @@ def test_sim_wrote_code_detects_fence():
 
 def test_generate_user_turn_rejection_samples_code():
     # First reply writes code (rejected), second is natural language -> the NL one is returned.
-    e = _env(sim_backend=_scripted_backend([
-        "Sure: ```python\ndef f(x, y): return x + y\n```",
-        "Below 10 it should subtract instead of add.",
-    ]))
+    e = _env(
+        sim_backend=_scripted_backend(
+            [
+                "Sure: ```python\ndef f(x, y): return x + y\n```",
+                "Below 10 it should subtract instead of add.",
+            ]
+        )
+    )
     reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
     assert "```" not in reply and "subtract" in reply
     assert e.last_sim_code_rejected == 1
@@ -147,13 +143,17 @@ def test_generate_user_turn_flags_exhaustion_when_all_tries_write_code():
     # loop aborts the conversation for inspection. last_sim_raw keeps the offending reply verbatim.
     offending = "Do this: ```python\ndef f(): return 0\n``` ok?"
     e = ColBenchSpecUserSimEnv(
-        problem_description=PROBLEM, spec=SPEC, ground_truth=GT, test_cases=CALLS, sim_max_tries=3,
+        problem_description=PROBLEM,
+        spec=SPEC,
+        ground_truth=GT,
+        test_cases=CALLS,
+        sim_max_tries=3,
         sim_backend=_scripted_backend([offending]),
     )
     e.generate_user_turn([{"role": "user", "content": PROBLEM}])
     assert e.last_sim_code_reject_exhausted is True
     assert e.last_sim_code_rejected == 3
-    assert "```python" in e.last_sim_raw          # offending reply kept verbatim (not stripped)
+    assert "```python" in e.last_sim_raw  # offending reply kept verbatim (not stripped)
 
 
 def test_generate_user_turn_no_exhaustion_when_reply_is_clean():
@@ -165,6 +165,7 @@ def test_generate_user_turn_no_exhaustion_when_reply_is_clean():
 
 # ── grading parity with the GT env ────────────────────────────────────────────
 
+
 def test_score_full_and_partial():
     e = _env()
     assert e.score("```python\n" + GT + "```")["pass_rate"] == 1.0
@@ -172,6 +173,7 @@ def test_score_full_and_partial():
 
 
 # ── USER-DRIVEN termination state machine (inline driver mirrors the plan loop) ──
+
 
 def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
     """Replicate the spec agent loop's termination state machine (the pinned contract).
@@ -209,8 +211,12 @@ def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
         reward = 0.0
         if terminated_by == "user":
             terminated_by = "no_code"
-    return {"reward": reward, "terminated_by": terminated_by,
-            "code_proposals": code_proposals, "showed_code": showed_code}
+    return {
+        "reward": reward,
+        "terminated_by": terminated_by,
+        "code_proposals": code_proposals,
+        "showed_code": showed_code,
+    }
 
 
 def test_gated_never_asked_terminates_on_imperfect_code():
@@ -226,10 +232,14 @@ def test_gated_never_asked_terminates_on_imperfect_code():
 def test_correct_on_code_then_terminate():
     # Wrong code -> one correction (no terminate) -> correct code -> terminate. Grade the correct
     # code (1.0). Sim replies: correction, then [TERMINATE].
-    e = _env(sim_backend=_scripted_backend([
-        "No -- below 10 it should subtract, not add.",
-        "Perfect, that's exactly it. [TERMINATE]",
-    ]))
+    e = _env(
+        sim_backend=_scripted_backend(
+            [
+                "No -- below 10 it should subtract, not add.",
+                "Perfect, that's exactly it. [TERMINATE]",
+            ]
+        )
+    )
     out = drive(e, [_code_turn(WRONG), _code_turn(GT)])
     assert out["terminated_by"] == "user"
     assert out["reward"] == 1.0
@@ -239,8 +249,7 @@ def test_correct_on_code_then_terminate():
 def test_code_cap_forces_terminate():
     # Sim never terminates; solver keeps proposing code -> code cap (3) fires -> grade last code.
     e = _env(sim_backend=_scripted_backend(["Hmm, not quite, keep trying."]))
-    out = drive(e, [_code_turn(WRONG), _code_turn(WRONG), _code_turn(GT), _code_turn(GT)],
-                max_code_proposals=3)
+    out = drive(e, [_code_turn(WRONG), _code_turn(WRONG), _code_turn(GT), _code_turn(GT)], max_code_proposals=3)
     assert out["terminated_by"] == "code_cap"
     assert out["code_proposals"] == 3
     assert out["reward"] == 1.0  # 3rd proposal (the code cap turn) was the correct GT
@@ -270,6 +279,7 @@ def test_user_terminates_without_code_is_no_code_reward_zero():
 # The GT is now IN the sim's prompt, so "leak impossible by construction" no longer holds and the
 # episode-level invariant below (GT never reaches the SOLVER's message list) is what enforces it.
 
+
 def _capturing_backend(reply="Above 10 we add, below we subtract."):
     """Sim backend that records every (system, user) pair it was called with."""
     seen = []
@@ -284,8 +294,7 @@ def _capturing_backend(reply="Above 10 we add, below we subtract."):
 def test_grounded_prompt_has_gt_and_plot_not_requirements():
     backend, seen = _capturing_backend()
     e = _env(sim_backend=backend, grounded=True)
-    e.generate_user_turn([{"role": "user", "content": PROBLEM},
-                          {"role": "assistant", "content": "What's the cutoff?"}])
+    e.generate_user_turn([{"role": "user", "content": PROBLEM}, {"role": "assistant", "content": "What's the cutoff?"}])
     sys_msg, usr_msg = seen[-1]
     # The GT source and the plot ARE injected...
     assert GT.strip() in sys_msg
@@ -309,25 +318,34 @@ def test_spec_mode_unchanged_when_not_grounded():
     sys_msg, usr_msg = seen[-1]
     assert GT not in sys_msg and GT not in usr_msg
     assert "x >= 10" not in sys_msg
-    assert SPEC["requirements"] in sys_msg          # the spec prompt is what it used
+    assert SPEC["requirements"] in sys_msg  # the spec prompt is what it used
 
 
 def test_grounded_still_rejects_fenced_reply():
     # Rejection sampling is the load-bearing leak defense in grounded mode (the sim can SEE the GT),
     # so it must still fire there.
     e = ColBenchSpecUserSimEnv(
-        problem_description=PROBLEM, spec=SPEC, ground_truth=GT, test_cases=CALLS,
-        grounded=True, sim_max_tries=3,
+        problem_description=PROBLEM,
+        spec=SPEC,
+        ground_truth=GT,
+        test_cases=CALLS,
+        grounded=True,
+        sim_max_tries=3,
         sim_backend=_scripted_backend(["Like this: ```python\n" + GT + "```"]),
     )
     e.generate_user_turn([{"role": "user", "content": PROBLEM}])
     assert e.last_sim_code_reject_exhausted is True
     assert e.last_sim_code_rejected == 3
     # And a clean reply on a retry is accepted normally.
-    e2 = _env(sim_backend=_scripted_backend([
-        "Here: ```python\ndef f(x, y): return x + y\n```",
-        "Below 10 it should subtract instead.",
-    ]), grounded=True)
+    e2 = _env(
+        sim_backend=_scripted_backend(
+            [
+                "Here: ```python\ndef f(x, y): return x + y\n```",
+                "Below 10 it should subtract instead.",
+            ]
+        ),
+        grounded=True,
+    )
     reply = e2.generate_user_turn([{"role": "user", "content": PROBLEM}])
     assert "```" not in reply and e2.last_sim_code_rejected == 1
 
@@ -336,11 +354,16 @@ def test_grounded_leak_invariant_full_episode():
     # THE test for this arm: over a whole episode the GT source (and any distinctive fragment of
     # it) must never appear in a turn injected into the SOLVER's message list, even though the sim
     # is reading it. Mirrors tests/test_env.py::test_leak_invariant_full_episode.
-    e = _env(sim_backend=_scripted_backend([
-        "Above a certain number we add them, otherwise we take the difference.",
-        "The cutoff is ten.",
-        "That's it, thanks! [TERMINATE]",
-    ]), grounded=True)
+    e = _env(
+        sim_backend=_scripted_backend(
+            [
+                "Above a certain number we add them, otherwise we take the difference.",
+                "The cutoff is ten.",
+                "That's it, thanks! [TERMINATE]",
+            ]
+        ),
+        grounded=True,
+    )
     injected = []
 
     def _drive_capturing():

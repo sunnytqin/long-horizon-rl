@@ -1,25 +1,14 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """CPU tests for colbench.selfplay.spec_templates (parsing + prompt building). No server."""
 
 from colbench.selfplay import spec_templates as st
 
 
 def test_parse_clean_json():
-    raw = ('{"persona": {"who": "a bookseller", "domain": "publishing", '
-           '"python_skill": "non-coder", "communication_style": "casual"}, '
-           '"scenario": "She tracks a press.", "requirements": "Subtract the 126 laid off."}')
+    raw = (
+        '{"persona": {"who": "a bookseller", "domain": "publishing", '
+        '"python_skill": "non-coder", "communication_style": "casual"}, '
+        '"scenario": "She tracks a press.", "requirements": "Subtract the 126 laid off."}'
+    )
     spec = st.parse_spec(raw)
     assert spec["ok"] is True
     assert spec["scenario"] == "She tracks a press."
@@ -28,9 +17,11 @@ def test_parse_clean_json():
 
 
 def test_parse_json_wrapped_in_prose_and_fence():
-    raw = ("Sure! Here is the spec:\n```json\n"
-           '{"persona": "an analyst", "scenario": "s", "requirements": "do X then Y"}\n'
-           "```\nHope that helps.")
+    raw = (
+        "Sure! Here is the spec:\n```json\n"
+        '{"persona": "an analyst", "scenario": "s", "requirements": "do X then Y"}\n'
+        "```\nHope that helps."
+    )
     spec = st.parse_spec(raw)
     assert spec["ok"] is True
     assert spec["requirements"] == "do X then Y"
@@ -62,18 +53,21 @@ def test_author_messages_contain_both_public_and_gt():
 def test_full_spec_solver_messages_include_signature_and_requirements():
     spec = {"persona": "an analyst", "scenario": "quarter close", "requirements": "return the exact numbers"}
     msgs = st.build_full_spec_solver_messages(
-        "Create def calculate_stats(a, b). The signature is def calculate_stats(a, b)", spec)
+        "Create def calculate_stats(a, b). The signature is def calculate_stats(a, b)", spec
+    )
     user = msgs[1]["content"]
-    assert "calculate_stats" in user            # signature carried from the public request
-    assert "return the exact numbers" in user   # requirements carried
-    assert "an analyst" in user                 # persona flavor present
+    assert "calculate_stats" in user  # signature carried from the public request
+    assert "return the exact numbers" in user  # requirements carried
+    assert "an analyst" in user  # persona flavor present
 
 
 # ── plot variant ──────────────────────────────────────────────────────────────
 def test_parse_plot_spec_ok_requires_requirements_and_plot():
-    raw = ('{"persona": "a home user", "scenario": "netbook boot issue", '
-           '"requirements": "if year>=1970 subtract 126 employees", '
-           '"plot": "The user forgets the 126 layoff rule at first and only mentions it after a draft."}')
+    raw = (
+        '{"persona": "a home user", "scenario": "netbook boot issue", '
+        '"requirements": "if year>=1970 subtract 126 employees", '
+        '"plot": "The user forgets the 126 layoff rule at first and only mentions it after a draft."}'
+    )
     spec = st.parse_plot_spec(raw)
     assert spec["ok"] is True
     assert "126" in spec["requirements"]
@@ -111,8 +105,12 @@ def test_plot_author_messages_ask_for_direction_not_script():
 
 def test_plot_solver_still_uses_requirements():
     # the diagnostic solver reads requirements (unchanged full-spec solver), not the plot
-    spec = {"persona": "a home user", "scenario": "boot issue",
-            "requirements": "return the exact numbers", "plot": "forgets an edge case"}
+    spec = {
+        "persona": "a home user",
+        "scenario": "boot issue",
+        "requirements": "return the exact numbers",
+        "plot": "forgets an edge case",
+    }
     msgs = st.build_full_spec_solver_messages("Create def diagnose(a, b)", spec)
     user = msgs[1]["content"]
     assert "diagnose" in user and "return the exact numbers" in user

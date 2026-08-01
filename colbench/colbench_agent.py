@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """ColBench multi-turn agent loop: solver vs. a FROZEN user simulator.
 
 Structurally a sibling of ``codecontest.model_feedback_agent.ModelFeedbackAgentLoop`` (same
@@ -54,9 +41,9 @@ from functools import partial
 from typing import Any
 from uuid import uuid4
 
+from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
 from colbench import templates
 from colbench.env import ColBenchUserSimEnv, _sim_sampling
-from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
@@ -184,9 +171,7 @@ class ColBenchAgentLoop(AgentLoopBase):
 
         # The initial (public) problem turn = the last user message of the prompt. It seeds
         # the simulator's dialogue history (sweet_rl reset()) -- it carries NO ground truth.
-        problem_text = next(
-            (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
-        )
+        problem_text = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
 
         # Task payload: prefer extra_info.ground_truth, fall back to reward_model.ground_truth.
         gt = extra_info.get("ground_truth")
@@ -350,9 +335,7 @@ class ColBenchAgentLoop(AgentLoopBase):
                         if self.sim_live:
                             coro = env.agenerate_user_turn(list(sim_dialogue))
                         else:
-                            coro = self.loop.run_in_executor(
-                                None, env.generate_user_turn, list(sim_dialogue)
-                            )
+                            coro = self.loop.run_in_executor(None, env.generate_user_turn, list(sim_dialogue))
                         reply = await asyncio.wait_for(coro, timeout=self.env_step_timeout)
                         res = {"reply": reply, "tries": 1, "accepted": True}
                 except asyncio.TimeoutError:
@@ -404,14 +387,16 @@ class ColBenchAgentLoop(AgentLoopBase):
         if _DEBUG_CONVO and index < _DEBUG_CONVO_N:
             self._dump_conversation(index, problem_text, sim_dialogue, answered, answer_text, reward, result)
 
-        response_ids = prompt_ids[-len(response_mask):]
+        response_ids = prompt_ids[-len(response_mask) :]
         prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]
 
         output = AgentLoopOutput(
             prompt_ids=prompt_ids_out,
             response_ids=response_ids[: self.response_length],
             response_mask=response_mask[: self.response_length],
-            response_logprobs=response_logprobs[: self.response_length] if track_logprobs and response_logprobs else None,
+            response_logprobs=response_logprobs[: self.response_length]
+            if track_logprobs and response_logprobs
+            else None,
             reward_score=reward,
             num_turns=assistant_turns + user_turns + 1,
             metrics=metrics,
@@ -438,9 +423,7 @@ class ColBenchAgentLoop(AgentLoopBase):
                     # reads the reward_extra_info key set from the FIRST sample, so a key missing
                     # on the no-sim-turn path would break logging for the whole run.
                     "sim_live": float(self.sim_live),
-                    "sim_reply_chars": (
-                        sum(sim_reply_chars) / len(sim_reply_chars) if sim_reply_chars else 0.0
-                    ),
+                    "sim_reply_chars": (sum(sim_reply_chars) / len(sim_reply_chars) if sim_reply_chars else 0.0),
                     "sim_leak_frac": (sim_leaks / len(sim_reply_chars)) if sim_reply_chars else 0.0,
                     # Contention watch (see the declarations above). sim_seconds = MEAN wall time
                     # per sim call incl. rejection resamples; sim_turn_timeout meaned over the
@@ -468,9 +451,14 @@ class ColBenchAgentLoop(AgentLoopBase):
         logger.warning("[COLBENCH_CONVO] ===== trajectory index=%d =====", index)
         logger.warning("[COLBENCH_CONVO] problem[:%d]=%r", n, str(problem_text)[:n])
         for i, m in enumerate(sim_dialogue):
-            logger.warning("[COLBENCH_CONVO] turn=%d role=%s content[:%d]=%r", i, m.get("role"), n, str(m.get("content"))[:n])
+            logger.warning(
+                "[COLBENCH_CONVO] turn=%d role=%s content[:%d]=%r", i, m.get("role"), n, str(m.get("content"))[:n]
+            )
         logger.warning("[COLBENCH_CONVO] answered=%s answer[:%d]=%r", answered, n, str(answer_text)[:n])
         logger.warning(
             "[COLBENCH_CONVO] pass_rate=%.3f all_pass=%s per_case=%s n=%d",
-            reward, result.get("all_pass"), result.get("per_case"), result.get("n", 0),
+            reward,
+            result.get("all_pass"),
+            result.get("per_case"),
+            result.get("n", 0),
         )

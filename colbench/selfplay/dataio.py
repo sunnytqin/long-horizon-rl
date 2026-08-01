@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Shared row reading + JSONL cache helpers for the Phase-0 spec scripts.
 
 ``read_tasks`` normalizes a ColBench parquet row (either the raw InfoPO source schema or our
@@ -35,7 +22,7 @@ def _extract_test_cases(extra_info: dict) -> list:
     """
     tools_kwargs = (extra_info or {}).get("tools_kwargs", {}) or {}
     create_kwargs = (tools_kwargs.get("interact_with_env", {}) or {}).get("create_kwargs", {}) or {}
-    task = (create_kwargs.get("task", {}) or {})
+    task = create_kwargs.get("task", {}) or {}
     test_cases = task.get("test_cases", {}) or {}
     return [str(v) for v in test_cases.values() if v is not None]
 
@@ -88,7 +75,7 @@ def read_jsonl(path: str) -> list[dict]:
     if not os.path.exists(path):
         return []
     out = []
-    with open(path, "r") as f:
+    with open(path) as f:
         for line in f:
             line = line.strip()
             if line:

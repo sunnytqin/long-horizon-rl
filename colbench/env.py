@@ -1,16 +1,3 @@
-# Copyright 2025 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Environment for the ColBench multi-turn loop: a user simulator + a GT-graded reward.
 
 ``ColBenchUserSimEnv`` is the pluggable "what happens between assistant turns" component
@@ -113,8 +100,7 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
     # max_retries=0: the SDK otherwise adds its OWN exponentially-backed-off retries (default 2)
     # on top of our manual loop below, so a slow/busy sim could fan a single call out to ~9 requests
     # and stack timeouts into minutes. Keep our loop the SINGLE source of retry behavior.
-    client = OpenAI(api_key=api_key, base_url=base_url,
-                    max_retries=int(os.environ.get("SIM_MAX_RETRIES", "0") or "0"))
+    client = OpenAI(api_key=api_key, base_url=base_url, max_retries=int(os.environ.get("SIM_MAX_RETRIES", "0") or "0"))
 
     messages = [
         {"role": "system", "content": system_content},
@@ -143,8 +129,13 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
     # over a poisoned one. SIM_TIMEOUT overrides (bump higher for a very large/saturated sim).
     sim_timeout = float(os.environ.get("SIM_TIMEOUT", "180") or "180")
     params = {
-        "model": model, "messages": messages, "max_tokens": sim_max_tokens,
-        "temperature": temperature, "top_p": top_p, "extra_body": extra_body, "timeout": sim_timeout,
+        "model": model,
+        "messages": messages,
+        "max_tokens": sim_max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "extra_body": extra_body,
+        "timeout": sim_timeout,
     }
 
     for _ in range(3):
@@ -231,7 +222,13 @@ class ColBenchUserSimEnv:
             logger.warning(
                 "[COLBENCH_SIM] hidden_gt[:%d]=%r\n[COLBENCH_SIM] sim_user_prompt[:%d]=%r\n"
                 "[COLBENCH_SIM] raw_reply[:%d]=%r\n[COLBENCH_SIM] capped_reply=%r",
-                n, str(self.ground_truth)[:n], n, user_content[:n], n, str(raw)[:n], reply,
+                n,
+                str(self.ground_truth)[:n],
+                n,
+                user_content[:n],
+                n,
+                str(raw)[:n],
+                reply,
             )
         return reply
 
@@ -333,6 +330,4 @@ class ColBenchUserSimEnv:
         call-string via the sandboxed exec sidecar (functional equivalence).
         """
         code = templates.extract_code_answer(answer_text)
-        return reward.grade(
-            code, self.ground_truth, self.test_cases, time_limit=self.reward_time_limit
-        )
+        return reward.grade(code, self.ground_truth, self.test_cases, time_limit=self.reward_time_limit)
