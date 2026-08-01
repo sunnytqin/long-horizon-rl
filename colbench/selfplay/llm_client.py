@@ -1,12 +1,14 @@
 """A configurable OpenAI-compatible chat client for the Phase-0 offline scripts.
 
-Generalizes ``colbench.env.openai_sim_backend``: instead of reading a single fixed endpoint
-from env vars, ``ChatEndpoint`` takes an explicit base_url / model / sampling so the spec
-author (``strong`` teacher OR ``selfplay`` frozen base) and the diagnostic solver can point at
-DIFFERENT served models in the same run. Same retry-to-default and SGLang ``extra_body``
-(top_k / min_p / enable_thinking) handling as the sim backend, so behavior matches training.
+Generalizes ``colbench.env.openai_sim_backend``: instead of reading a single
+fixed endpoint from env vars, ``ChatEndpoint`` takes an explicit base_url /
+model / sampling so the spec author (``strong`` teacher OR ``selfplay`` frozen
+base) and the diagnostic solver can point at DIFFERENT served models in the same
+run. Same retry-to-default and SGLang ``extra_body`` (top_k / min_p /
+enable_thinking) handling as the sim backend, so behavior matches training.
 
-``openai`` is imported lazily so CPU tests (which inject a stub callable) never need the SDK.
+``openai`` is imported lazily so CPU tests (which inject a stub callable) never
+need the SDK.
 """
 
 import logging
@@ -17,26 +19,31 @@ from typing import Callable, Optional
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# A raw chat backend maps a list[{role, content}] -> reply text. Default is the real HTTP
-# call; tests inject a stub. Mirrors ``colbench.env.SimBackend`` but takes full messages.
+# A raw chat backend maps a list[{role, content}] -> reply text. Default is the
+# real HTTP call; tests inject a stub. Mirrors ``colbench.env.SimBackend`` but
+# takes full messages.
 ChatBackend = Callable[[list], str]
 
 
 @dataclass
 class ChatEndpoint:
-  """One served model behind an OpenAI-compatible API, with fixed sampling params.
+  """One served model behind an OpenAI-compatible API, with fixed sampling
+  params.
 
   Args:
       base_url: e.g. ``http://127.0.0.1:30000/v1``.
       model: served model name/alias (the server's ``--served-model-name``).
       api_key: usually ``"EMPTY"`` for a local SGLang/vLLM server.
-      temperature/top_p/top_k/min_p: sampling (defaults = Qwen3-Instruct recommendation,
-          matching ``colbench.env._sim_sampling``; NB Qwen3 degrades under greedy).
+               temperature/top_p/top_k/min_p: sampling (defaults =
+               Qwen3-Instruct recommendation, matching
+               ``colbench.env._sim_sampling``; NB Qwen3 degrades under greedy).
       max_tokens: completion cap.
-      enable_thinking: None -> send no thinking kwarg (safe for all models); True/False sets
-          the SGLang ``enable_thinking`` extra_body for a hybrid Qwen3 model.
-      retries/timeout: per-call retry budget and socket timeout.
-      backend: injectable raw backend (tests). None -> the lazy OpenAI HTTP call.
+      enable_thinking: None -> send no thinking kwarg (safe for all models);
+                       True/False sets the SGLang ``enable_thinking`` extra_body
+                       for a hybrid Qwen3 model. retries/timeout: per-call retry
+                       budget and socket timeout.
+      backend: injectable raw backend (tests). None -> the lazy OpenAI HTTP
+               call.
   """
 
   base_url: str
@@ -69,9 +76,10 @@ class ChatEndpoint:
     return eb
 
   def _param_sets(self, messages: list) -> list:
-    """Ordered param dicts to try. For the OpenAI API we degrade gracefully because newer
-    models reject a custom ``temperature``/``top_p`` and require ``max_completion_tokens``
-    instead of ``max_tokens``: try full sampling, then temperature-only, then bare.
+    """Ordered param dicts to try. For the OpenAI API we degrade gracefully
+    because newer models reject a custom ``temperature``/``top_p`` and require
+    ``max_completion_tokens`` instead of ``max_tokens``: try full sampling, then
+    temperature-only, then bare.
     """
     if self.vendor == "openai":
       base = {

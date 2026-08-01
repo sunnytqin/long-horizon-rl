@@ -1,8 +1,8 @@
 """CPU unit tests for colbench.reward.grade (functional-equivalence pass-rate).
 
-Needs the exec sidecar up, OR CODECONTEST_ALLOW_INPROCESS=1 (set here) to grade via the
-in-process fallback -- no GPU, no server. Run:
-    CODECONTEST_ALLOW_INPROCESS=1 pytest colbench/tests/test_reward.py
+Needs the exec sidecar up, OR CODECONTEST_ALLOW_INPROCESS=1 (set here) to grade
+via the in-process fallback -- no GPU, no server. Run:
+CODECONTEST_ALLOW_INPROCESS=1 pytest colbench/tests/test_reward.py
 """
 
 import os
@@ -18,7 +18,10 @@ from colbench import reward  # pylint: disable=g-import-not-at-top,wrong-import-
 
 # A GT with a hidden branch (x >= 10) so a "sum only" candidate matches PART of
 # the cases.
-GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
+GT = (
+    "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
+    "       return x - y\n"
+)
 CALLS = [
     "f(1, 2)",
     "f(20, 5)",
@@ -54,15 +57,19 @@ def test_candidate_stdout_is_suppressed():
   # A correct impl that ALSO prints must still score 1.0 -- the harness
   # suppresses candidate stdout so the sole harness output stays the boolean the
   # sidecar compares to "True".
-  candidate = "def f(x, y):\n    print('noisy candidate output')\n    return x + y if x >= 10 else x - y\n"
+  candidate = (
+      "def f(x, y):\n    print('noisy candidate output')\n    return "
+      "x + y if x >= 10 else x - y\n"
+  )
   res = reward.grade(candidate, GT, CALLS)
   assert res["pass_rate"] == 1.0
 
 
 def test_call_string_with_escaped_newline_not_corrupted():
-  # base64-on-stdin must survive local_exec.normalise's `\n`->newline rewrite. A call whose
-  # arg is a string literal containing \n would break if passed raw; here GT==candidate so a
-  # correct decode yields a match, a corrupted decode raises -> 0.
+  # base64-on-stdin must survive local_exec.normalise's `\n`->newline rewrite. A
+  # call whose arg is a string literal containing \n would break if passed raw;
+  # here GT==candidate so a correct decode yields a match, a corrupted decode
+  # raises -> 0.
   gt = "def g(s):\n    return s.count(chr(10))\n"
   calls = ['g("a\\nb\\nc")']  # the literal 4-char sequences a \n b ...
   res = reward.grade(gt, gt, calls)
@@ -70,9 +77,10 @@ def test_call_string_with_escaped_newline_not_corrupted():
 
 
 def test_numpy_array_test_cases():
-  # Defensive: verl (HF datasets) gives a list, but a pandas reader returns an ndarray.
-  # grade() must NOT do `x or []` on it (bool() on a multi-element array raises). Assert it
-  # iterates cleanly either way.
+  # Defensive: verl (HF datasets) gives a list, but a pandas reader returns an
+  #            ndarray. grade() must NOT do `x or []` on it (bool() on a
+  #            multi-element array raises). Assert it iterates cleanly either
+  #            way.
   np = pytest.importorskip("numpy")
   calls = np.array(CALLS, dtype=object)
   res = reward.grade(GT, GT, calls)

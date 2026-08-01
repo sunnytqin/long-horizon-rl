@@ -1,4 +1,6 @@
-"""CPU tests for colbench.selfplay.spec_templates (parsing + prompt building). No server."""
+"""CPU tests for colbench.selfplay.spec_templates (parsing + prompt building).
+No server.
+"""
 
 from colbench.selfplay import spec_templates as st
 
@@ -7,7 +9,8 @@ def test_parse_clean_json():
   raw = (
       '{"persona": {"who": "a bookseller", "domain": "publishing", '
       '"python_skill": "non-coder", "communication_style": "casual"}, '
-      '"scenario": "She tracks a press.", "requirements": "Subtract the 126 laid off."}'
+      '"scenario": "She tracks a press.", "requirements": "Subtract the '
+      '126 laid off."}'
   )
   spec = st.parse_spec(raw)
   assert spec["ok"] is True
@@ -19,7 +22,8 @@ def test_parse_clean_json():
 def test_parse_json_wrapped_in_prose_and_fence():
   raw = (
       "Sure! Here is the spec:\n```json\n"
-      '{"persona": "an analyst", "scenario": "s", "requirements": "do X then Y"}\n'
+      '{"persona": "an analyst", "scenario": "s", "requirements": "do '
+      'X then Y"}\n'
       "```\nHope that helps."
   )
   spec = st.parse_spec(raw)
@@ -66,7 +70,10 @@ def test_full_spec_solver_messages_include_signature_and_requirements():
       "requirements": "return the exact numbers",
   }
   msgs = st.build_full_spec_solver_messages(
-      "Create def calculate_stats(a, b). The signature is def calculate_stats(a, b)",
+      (
+          "Create def calculate_stats(a, b). The signature is def calculate_stats(a, "
+          "b)"
+      ),
       spec,
   )
   user = msgs[1]["content"]
@@ -80,7 +87,8 @@ def test_parse_plot_spec_ok_requires_requirements_and_plot():
   raw = (
       '{"persona": "a home user", "scenario": "netbook boot issue", '
       '"requirements": "if year>=1970 subtract 126 employees", '
-      '"plot": "The user forgets the 126 layoff rule at first and only mentions it after a draft."}'
+      '"plot": "The user forgets the 126 layoff rule at first and only '
+      'mentions it after a draft."}'
   )
   spec = st.parse_plot_spec(raw)
   assert spec["ok"] is True

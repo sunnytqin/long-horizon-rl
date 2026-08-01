@@ -1,27 +1,35 @@
 """Full solver<->sim simulation + eval for the SPEC path (Phase 1).
 
-The spec-path sibling of ``colbench.validate_colbench``. It drives a REAL multi-turn
-conversation: the solver (assistant) and the user-simulator are BOTH served models, and the
-episode ends when the *sim* emits ``[TERMINATE]`` (user-driven termination) -- we then grade the
-last function the solver showed against the hidden GT (unchanged grading). This is the harness we
-use to (a) eyeball whether the spec sim honors its plot in a genuine back-and-forth, and (b)
-measure the extraction-through-dialogue solve rate.
+The spec-path sibling of ``colbench.validate_colbench``. It drives a REAL
+multi-turn
+conversation: the solver (assistant) and the user-simulator are BOTH served
+              models, and the episode ends when the *sim* emits ``[TERMINATE]``
+              (user-driven termination) -- we then grade the last function the
+              solver showed against the hidden GT (unchanged grading). This is
+              the harness we use to (a) eyeball whether the spec sim honors its
+              plot in a genuine back-and-forth, and (b) measure the
+              extraction-through-dialogue solve rate.
 
 Two solver backends, ONE termination loop:
-  * ``--solver_backend openai`` -- the solver is an OpenAI-API call to a served model (reuses
-    ``selfplay.llm_client.ChatEndpoint``). Run BOTH roles against the SAME served base model in
-    the ``openrlhf`` conda env (no container, in-process grading) for a cheap first eyeball.
-  * ``--solver_backend sglang`` -- the solver is an offline ``sgl.Engine`` (a merged checkpoint),
-    the production eval inside the VERL/SGLang container. Same loop, same dumps.
+  * ``--solver_backend openai`` -- the solver is an OpenAI-API call to a served
+    model (reuses ``selfplay.llm_client.ChatEndpoint``). Run BOTH roles against
+    the SAME served base model in the ``openrlhf`` conda env (no container,
+    in-process grading) for a cheap first eyeball.
+  * ``--solver_backend sglang`` -- the solver is an offline ``sgl.Engine`` (a
+    merged checkpoint), the production eval inside the VERL/SGLang container.
+    Same loop, same dumps.
 
-The frozen user-simulator is always the HTTP server ``colbench.env_spec.ColBenchSpecUserSimEnv``
-calls (OPENAI_BASE_URL / MULTITURN_MODEL_NAME) -- in the openai path that's the same server the
-solver uses. The GT source is passed ONLY inside the sim prompt and never enters the solver's
-message list; there is no code leak possible here (the sim conditions on the NL spec, not code).
+The frozen user-simulator is always the HTTP server
+``colbench.env_spec.ColBenchSpecUserSimEnv`` calls (OPENAI_BASE_URL /
+MULTITURN_MODEL_NAME) -- in the openai path that's the same server the solver
+uses. The GT source is passed ONLY inside the sim prompt and never enters the
+solver's message list; there is no code leak possible here (the sim conditions
+on the NL spec, not code).
 
 Grading backend (identical to training / the GT validator):
   - Sidecar sandbox: export CODECONTEST_EXEC_URL=http://host:8088   (preferred)
-  - In-process fallback (dev/eyeball, no sidecar): export CODECONTEST_ALLOW_INPROCESS=1
+  - In-process fallback (dev/eyeball, no sidecar): export
+    CODECONTEST_ALLOW_INPROCESS=1
 
 Example (conda env, base Qwen3-4B on both roles, one vLLM server on :30000):
     export CODECONTEST_ALLOW_INPROCESS=1
@@ -55,10 +63,12 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 CTX_MARGIN = 8
 
 
-# ----------------------------------------------------------------------------- #
-# Per-trajectory state (one per (problem, sample)). Carries the growing solver conversation,
-# the GT-free sim dialogue, its spec env, and the user-driven-termination bookkeeping.
-# ----------------------------------------------------------------------------- #
+# -----------------------------------------------------------------------------
+# # Per-trajectory state (one per (problem, sample)). Carries the growing solver
+# conversation, the GT-free sim dialogue, its spec env, and the
+# user-driven-termination bookkeeping.
+# -----------------------------------------------------------------------------
+# #
 class Trajectory:
 
   def __init__(
@@ -134,12 +144,16 @@ class Trajectory:
     }
 
 
-# ----------------------------------------------------------------------------- #
-# Solver backends -- both expose generate(message_lists, tokenizer, max_model_len, sampling)
-# -> list of {"text": str, "tokens": int}. The termination loop is backend-agnostic.
-# ----------------------------------------------------------------------------- #
+# -----------------------------------------------------------------------------
+# # Solver backends -- both expose generate(message_lists, tokenizer,
+# max_model_len, sampling) -> list of {"text": str, "tokens": int}. The
+# termination loop is backend-agnostic.
+# -----------------------------------------------------------------------------
+# #
 class OpenAISolver:
-  """Solver = OpenAI-API chat calls to a served model (reuses ChatEndpoint), threaded per req."""
+  """Solver = OpenAI-API chat calls to a served model (reuses ChatEndpoint),
+  threaded per req.
+  """
 
   def __init__(
       self,
@@ -154,10 +168,12 @@ class OpenAISolver:
   ):
     from colbench.selfplay.llm_client import ChatEndpoint
 
-    # NOTE: vendor="vllm" here is the ChatEndpoint SAMPLING DIALECT (pack top_k/min_p/
-    # enable_thinking into extra_body), NOT an engine choice -- SGLang accepts the same
-    # extra_body. It is unrelated to --sim_backend, and only used by the openai-SOLVER path
-    # (FASRC eyeball); the container solver is an offline sgl.Engine and never builds this.
+    # NOTE: vendor="vllm" here is the ChatEndpoint SAMPLING DIALECT (pack
+    #       top_k/min_p/ enable_thinking into extra_body), NOT an engine choice
+    #       -- SGLang accepts the same extra_body. It is unrelated to
+    #       --sim_backend, and only used by the openai-SOLVER path (FASRC
+    #       eyeball); the container solver is an offline sgl.Engine and never
+    #       builds this.
     self._ep = ChatEndpoint(
         base_url=base_url,
         model=model,
@@ -187,7 +203,9 @@ class OpenAISolver:
 
 
 class SGLangSolver:
-  """Solver = offline sgl.Engine (a merged checkpoint), batched, with per-turn context clamp."""
+  """Solver = offline sgl.Engine (a merged checkpoint), batched, with per-turn
+  context clamp.
+  """
 
   def __init__(
       self, engine, template_kwargs, temperature, top_p, top_k, max_new_tokens
@@ -231,7 +249,9 @@ class SGLangSolver:
 
 
 def _solver_template_kwargs():
-  """apply_chat_template kwargs for the SOLVER from SOLVER_ENABLE_THINKING (see GT validator)."""
+  """apply_chat_template kwargs for the SOLVER from SOLVER_ENABLE_THINKING (see
+  GT validator).
+  """
   v = os.environ.get("SOLVER_ENABLE_THINKING", "").strip().lower()
   if v in ("true", "1"):
     return {"enable_thinking": True}
@@ -250,7 +270,9 @@ def _solver_thinking():
 
 
 def build_trajectories(val_df, n_samples, args, sim_backend=None):
-  """Expand each spec row into ``n_samples`` independent trajectories (spec env per traj)."""
+  """Expand each spec row into ``n_samples`` independent trajectories (spec env
+  per traj).
+  """
   trajs = []
   for row_index, row in val_df.iterrows():
     extra_info = row.get("extra_info", {}) or {}
@@ -291,7 +313,9 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
 
 
 def eval_tagged_path(base_out, turns, n_samples, temperature, max_code):
-  """'_turns<N>_n<K>_t<temp>_cc<C>' tag so each config gets its own self-documenting file."""
+  """'_turns<N>_n<K>_t<temp>_cc<C>' tag so each config gets its own
+  self-documenting file.
+  """
   root, ext = os.path.splitext(base_out)
   return f"{root}_turns{turns}_n{n_samples}_t{temperature:g}_cc{max_code}{ext or '.json'}"
 
@@ -309,10 +333,11 @@ def run_eval(
 ):
   """Run the full spec simulation at one temperature and dump one JSON.
 
-  The termination loop mirrors ``colbench.tests.test_env_spec.drive`` (the pinned contract) and
-  the eventual ``colbench_spec_agent``: solver turn -> track last code / count proposals ->
-  turn cap -> code cap -> else sim reply -> [TERMINATE]. Grade the last shown function; reward 0
-  (terminated_by 'no_code') if the solver never showed code.
+  The termination loop mirrors ``colbench.tests.test_env_spec.drive`` (the
+  pinned contract) and the eventual ``colbench_spec_agent``: solver turn ->
+  track last code / count proposals -> turn cap -> code cap -> else sim reply ->
+  [TERMINATE]. Grade the last shown function; reward 0 (terminated_by 'no_code')
+  if the solver never showed code.
   """
   trajs = build_trajectories(val_df, n_samples, args, sim_backend=sim_backend)
   pool = ThreadPoolExecutor(max_workers=max(1, args.grade_concurrency))
@@ -340,7 +365,10 @@ def run_eval(
       pass
     else:
       print(
-          f"[validate_spec] t={temperature:g} turn {turn}: generating for {len(gen_batch)} active"
+          (
+              f"[validate_spec] t={temperature:g} turn {turn}: generating for "
+              f"{len(gen_batch)} active"
+          )
       )
       outs = solver.generate(
           [t.messages for t in gen_batch], tokenizer, max_model_len
@@ -372,7 +400,8 @@ def run_eval(
         else:
           pending.append(t)
 
-      # ---- Advance the frozen sim for each still-open trajectory (parallel HTTP). ----
+      # ---- Advance the frozen sim for each still-open trajectory (parallel
+      # HTTP). ----
       def _sim(t):
         reply = t.env.generate_user_turn(list(t.sim_dialogue))
         return (
@@ -415,7 +444,8 @@ def run_eval(
         t.user_turns += 1
         t.response_tokens += feedback_tokens
 
-    # ---- Grade every trajectory that finished THIS turn with a shown function (parallel). ----
+    # ---- Grade every trajectory that finished THIS turn with a shown function
+    # (parallel). ----
     to_grade = [t for t in trajs if t._grade_pending]
 
     def _grade(t):
@@ -427,8 +457,9 @@ def run_eval(
       t.all_pass = bool(result.get("all_pass", False))
       t.num_test_cases = int(result.get("n", 0))
 
-  # ---- Grade each trajectory's FIRST code proposal (the lift diagnostic: how much the sim's
-  #      feedback improved the final code over the assistant's first attempt). ----
+  # ---- Grade each trajectory's FIRST code proposal (the lift diagnostic: how
+  # much the sim's feedback improved the final code over the assistant's first
+  # attempt). ----
   first_to_grade = [t for t in trajs if t.first_code]
 
   def _grade_first(t):
@@ -516,10 +547,11 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
   showed = [t for t in trajs if t.showed_code]
   showed_rate = len(showed) / max(1, n)
 
-  # Lift diagnostic: FIRST-code vs FINAL-code pass rate. Computed both over ALL trajectories
-  # (no-code counts 0, apples-to-apples with mean_pass_rate) and over the showed-code subset
-  # (isolates the trajectories where iteration could actually help). mean_pass - first = the
-  # improvement attributable to the sim's feedback + the assistant's revisions.
+  # Lift diagnostic: FIRST-code vs FINAL-code pass rate. Computed both over ALL
+  # trajectories (no-code counts 0, apples-to-apples with mean_pass_rate) and
+  # over the showed-code subset (isolates the trajectories where iteration could
+  # actually help). mean_pass - first = the improvement attributable to the
+  # sim's feedback + the assistant's revisions.
   mean_first_pass = sum(t.first_code_reward for t in trajs) / max(1, n)
   first_all_pass = sum(1 for t in trajs if t.first_code_all_pass) / max(1, n)
   mean_first_pass_showed = (
@@ -629,7 +661,8 @@ def _load_tokenizer(args):
     )
   except Exception as e:  # pylint: disable=broad-exception-caught  # openai mode can proceed without exact token counts
     print(
-        f"[validate_spec] WARNING: could not load tokenizer from {args.model!r} ({e}); "
+        f"[validate_spec] WARNING: could not load tokenizer from {args.model!r} "
+        f"({e}); "
         "token budgets will be approximate."
     )
     return None
@@ -677,13 +710,17 @@ def main():
       "--solver_backend",
       choices=["openai", "sglang"],
       default="openai",
-      help="openai = API solver (conda/eyeball, both roles same server); sglang = "
+      help="openai = API solver (conda/eyeball, both roles same server); sglang "
+      "= "
       "offline Engine (container/production, a merged checkpoint).",
   )
   ap.add_argument(
       "--model",
       required=True,
-      help="HF dir: the sglang engine path AND the tokenizer (openai mode uses it only for token counting).",
+      help=(
+          "HF dir: the sglang engine path AND the tokenizer (openai mode "
+          "uses it only for token counting)."
+      ),
   )
   ap.add_argument(
       "--base_url",
@@ -793,15 +830,19 @@ def main():
       "--sim_max_tries",
       type=int,
       default=int(os.environ.get("SIM_MAX_TRIES", "8")),
-      help="Rejection-sampling tries when the sim writes code; if all fail, the "
-      "conversation is aborted (terminated_by 'sim_code_reject') for inspection.",
+      help="Rejection-sampling tries when the sim writes code; if all fail, "
+      "the "
+      "conversation is aborted (terminated_by 'sim_code_reject') for "
+      "inspection.",
   )
   ap.add_argument(
       "--sim_max_tokens",
       type=int,
       default=int(os.environ.get("SIM_MAX_TOKENS", "256")),
-      help="Generation-time token bound on each user (sim) turn. Replaces the old "
-      "post-hoc character truncation; the local backend reads SIM_MAX_TOKENS too.",
+      help="Generation-time token bound on each user (sim) turn. Replaces "
+      "the old "
+      "post-hoc character truncation; the local backend reads SIM_MAX_TOKENS "
+      "too.",
   )
   args = ap.parse_args()
   # Normalize the legacy 'vllm' alias so downstream checks + the summary report
@@ -825,7 +866,8 @@ def main():
     os.environ["MULTITURN_MODEL_NAME"] = args.served_model
   if not os.environ.get("MULTITURN_MODEL_NAME"):
     print(
-        "[validate_spec] WARNING: MULTITURN_MODEL_NAME unset; the sim server call needs a "
+        "[validate_spec] WARNING: MULTITURN_MODEL_NAME unset; the sim server "
+        "call needs a "
         "served model name (pass --served_model or export MULTITURN_MODEL_NAME)."
     )
 
@@ -834,7 +876,10 @@ def main():
     val_df = val_df.iloc[: args.max_problems].copy()
   val_df = val_df.reset_index(drop=True)
   print(
-      f"[validate_spec] loaded {len(val_df)} spec problems from {args.val_file}; solver_backend={args.solver_backend}"
+      (
+          f"[validate_spec] loaded {len(val_df)} spec problems from {args.val_file}; "
+          f"solver_backend={args.solver_backend}"
+      )
   )
 
   max_model_len = args.max_prompt_length + args.max_response_length
@@ -855,7 +900,8 @@ def main():
       )
     print(
         f"[validate_spec] SIM = OpenAI '{args.sim_model}' @ {args.sim_base_url} "
-        f"(temp={args.sim_temperature}, top_p={args.sim_top_p}); SOLVER stays on "
+        f"(temp={args.sim_temperature}, top_p={args.sim_top_p}); SOLVER "
+        f"stays on "
         f"{args.solver_backend}."
     )
     sim_backend = make_openai_sim_backend(
@@ -878,8 +924,8 @@ def main():
   for temperature in temps:
     n_samples = 1 if temperature == 0.0 else args.n_samples
     # NOTE: openai solver sampling is fixed at construction; for a temperature
-    # sweep the openai backend would need rebuilding per temp. sglang re-uses
-    # the engine with per-request temp.
+    #       sweep the openai backend would need rebuilding per temp. sglang
+    #       re-uses the engine with per-request temp.
     if args.solver_backend == "openai" and len(temps) > 1:
       args.temperature = temperature
       solver.shutdown()

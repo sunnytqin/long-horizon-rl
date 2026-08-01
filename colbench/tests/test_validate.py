@@ -1,10 +1,12 @@
-"""CPU tests for colbench.validate_colbench.run_eval (no GPU, no SGLang, no sim server).
+"""CPU tests for colbench.validate_colbench.run_eval (no GPU, no SGLang, no sim
+server).
 
-Drives the offline multi-turn eval loop with a FAKE solver engine (scripted turns) + a STUB
-sim backend + the in-process exec grader, and checks: the fractional-reward summary, that a
-correct submission scores 1.0, that the saved-conversation dump is bounded by
---max_saved_convos while metrics still cover ALL trajectories, and that the hidden GT never
-leaks into a saved (solver-visible) message. Mirrors the stub style of test_env.py.
+Drives the offline multi-turn eval loop with a FAKE solver engine (scripted
+turns) + a STUB sim backend + the in-process exec grader, and checks: the
+fractional-reward summary, that a correct submission scores 1.0, that the
+saved-conversation dump is bounded by --max_saved_convos while metrics still
+cover ALL trajectories, and that the hidden GT never leaks into a saved
+(solver-visible) message. Mirrors the stub style of test_env.py.
 """
 
 import json
@@ -18,7 +20,10 @@ import pandas as pd  # pylint: disable=g-import-not-at-top,wrong-import-position
 
 from colbench import validate_colbench as vc  # pylint: disable=g-import-not-at-top,wrong-import-position
 
-GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
+GT = (
+    "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
+    "       return x - y\n"
+)
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Write a function f(x, y) with some personalized behavior."
 
@@ -36,8 +41,9 @@ class FakeTokenizer:
 
 
 class FakeLLM:
-  """Scripted solver engine. Returns turn `i`'s response for every prompt in the batch,
-  advancing the turn counter once per `.generate` call (one call per turn in run_eval).
+  """Scripted solver engine. Returns turn `i`'s response for every prompt in the
+  batch, advancing the turn counter once per `.generate` call (one call per turn
+  in run_eval).
   """
 
   def __init__(self, scripts):

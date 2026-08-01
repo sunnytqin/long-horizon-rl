@@ -1,8 +1,8 @@
 """CPU tests for the Phase-0 spec pipeline: dataio, generate, diagnose.
 
-Uses a STUBBED ChatEndpoint (no server / no openai SDK) and the in-process exec fallback for
-grading (no sidecar). Run:
-    CODECONTEST_ALLOW_INPROCESS=1 pytest colbench/selfplay/tests/test_pipeline.py
+Uses a STUBBED ChatEndpoint (no server / no openai SDK) and the in-process exec
+fallback for grading (no sidecar). Run: CODECONTEST_ALLOW_INPROCESS=1 pytest
+colbench/selfplay/tests/test_pipeline.py
 """
 
 import os
@@ -22,7 +22,10 @@ from colbench.selfplay.llm_client import ChatEndpoint  # pylint: disable=g-impor
 
 # Same GT/branch as test_reward so the in-process grader is exercised
 # end-to-end.
-GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
+GT = (
+    "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
+    "       return x - y\n"
+)
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Create def f(x, y). The signature is def f(x, y)."
 
@@ -30,7 +33,10 @@ CORRECT_CODE = (
     "```python\ndef f(x, y):\n    return x + y if x >= 10 else x - y\n```"
 )
 WRONG_CODE = "```python\ndef f(x, y):\n    return 0\n```"
-SPEC_JSON = '{"persona": "an analyst", "scenario": "s", "requirements": "if x>=10 add else subtract"}'
+SPEC_JSON = (
+    '{"persona": "an analyst", "scenario": "s", "requirements": "if '
+    'x>=10 add else subtract"}'
+)
 
 
 def _endpoint(reply):
@@ -215,7 +221,8 @@ def test_diagnose_skips_specs_without_matching_task():
 PLOT_SPEC_JSON = (
     '{"persona": "an analyst", "scenario": "s", '
     '"requirements": "if x>=10 add else subtract", '
-    '"plot": "The user forgets the below-10 subtract branch until the assistant asks."}'
+    '"plot": "The user forgets the below-10 subtract branch until the '
+    'assistant asks."}'
 )
 
 

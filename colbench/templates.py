@@ -1,10 +1,12 @@
 """Prompts + answer/code extraction for the ColBench multi-turn loop.
 
-Ported from ``sweet_rl`` (``prompts/{llm_agent_code_prompt,human_simulator_code_prompt}.txt``,
-``utils/code_utils.check_correctness`` fence-strip) and InfoPO's ``run_simulate_api.py``
-(``check_and_extract_answer`` flexible marker patterns). The number-affecting transforms
-(marker extraction, code fence-strip, ``<think>`` strip) live here so the training rollout
-(``colbench_agent``) and the offline validator apply byte-identical text handling.
+Ported from ``sweet_rl``
+(``prompts/{llm_agent_code_prompt,human_simulator_code_prompt}.txt``,
+``utils/code_utils.check_correctness`` fence-strip) and InfoPO's
+``run_simulate_api.py`` (``check_and_extract_answer`` flexible marker patterns).
+The number-affecting transforms (marker extraction, code fence-strip,
+``<think>`` strip) live here so the training rollout (``colbench_agent``) and
+the offline validator apply byte-identical text handling.
 """
 
 # The long lines in this file are prompt text inside string literals.
@@ -42,9 +44,10 @@ Complete only the immediate agent response in this dialogue:
 # preprocess_colbench). Bullets 1, 2, 4 and 5 are verbatim from the sweet_rl
 # original above; two things deliberately differ:
 #
-#  (a) The trailing "{dialogue_history}" placeholder is gone. sweet_rl formatted the whole
-#      conversation into it and called a COMPLETION endpoint; we use a real CHAT template and let
-#      the actual message turns carry the history (same as InfoPO's run_simulate_api.py).
+#  (a) The trailing "{dialogue_history}" placeholder is gone. sweet_rl formatted
+#      the whole conversation into it and called a COMPLETION endpoint; we use a
+#      real CHAT template and let the actual message turns carry the history
+#      (same as InfoPO's run_simulate_api.py).
 #
 #  (b) 2026-07-31: bullet 3's "I WANT TO ANSWER:" submit marker is replaced by a ```python code
 #      block, matching the SPEC path's submission syntax. The golden spec eval is the shared
@@ -53,9 +56,10 @@ Complete only the immediate agent response in this dialogue:
 #      protocol conformance rather than capability. Aligning the syntax kills that confound at the
 #      source instead of teaching the extractor to be bilingual.
 #
-#      What is NOT changed is the TERMINATION CONTROL FLOW, which stays intentionally different
-#      between the arms: here the solver's own submission ends the episode (one shot, no reaction
-#      to its code), while the spec path lets the user react and terminate.
+#      What is NOT changed is the TERMINATION CONTROL FLOW, which stays
+#      intentionally different between the arms: here the solver's own
+#      submission ends the episode (one shot, no reaction to its code), while
+#      the spec path lets the user react and terminate.
 #
 #      The trailing paragraph mirrors sweet_rl's own two sentences almost word-for-word with the
 #      mechanism swapped, plus one clause: "Showing this code block indicates you are submitting
@@ -64,11 +68,12 @@ Complete only the immediate agent response in this dialogue:
 #      models emit constantly while explaining, so nothing about it says "this is my submission".
 #      It is deliberately phrased as what the act MEANS, not as an instruction about what to do.
 #
-#      Note the coupling this introduces: under the marker, showing code and submitting were
-#      separate acts, so the solver could sketch a snippet mid-clarification for free. Now it
-#      cannot. Whether that costs anything is UNMEASURED. Watch `num_assistant_turns` /
-#      `answered_at_turn` in the first ~20 steps: a collapse to 1-turn episodes means the rule is
-#      not landing, and the fix would be in the prompt, not the detector.
+#      Note the coupling this introduces: under the marker, showing code and
+#      submitting were separate acts, so the solver could sketch a snippet
+#      mid-clarification for free. Now it cannot. Whether that costs anything is
+#      UNMEASURED. Watch `num_assistant_turns` / `answered_at_turn` in the first
+#      ~20 steps: a collapse to 1-turn episodes means the rule is not landing,
+#      and the fix would be in the prompt, not the detector.
 COLBENCH_AGENT_SYSTEM_PROMPT = """You are a helpful LLM agent.
 Your task is to help a human user to resolve their problem, in particular python programming.
 1) Note that the problem is highly personalized so you need to explicitly gather information
@@ -125,10 +130,11 @@ ANSWER_MARKER = "I WANT TO ANSWER:"
 # char cap) so reasoning never leaks into the extracted answer or the injected user turn. For
 # a plain Instruct model this is a defensive no-op.
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
-# An UNTERMINATED block: the generation hit its token cap mid-reasoning, so `</think>` never
-# arrives. This is not a rare edge case -- the spec sim runs at SIM_MAX_TOKENS=256, far too few
-# for a hybrid Qwen3 to finish thinking, so EVERY reply is truncated this way if thinking is on.
-# Matching only the closed form let raw chain-of-thought through as the user's dialogue turn.
+# An UNTERMINATED block: the generation hit its token cap mid-reasoning, so
+# `</think>` never arrives. This is not a rare edge case -- the spec sim runs at
+# SIM_MAX_TOKENS=256, far too few for a hybrid Qwen3 to finish thinking, so
+# EVERY reply is truncated this way if thinking is on. Matching only the closed
+# form let raw chain-of-thought through as the user's dialogue turn.
 _THINK_OPEN_UNCLOSED = re.compile(r"<think>(?!.*</think>).*\Z", re.DOTALL)
 
 
@@ -159,9 +165,10 @@ _ANSWER_PATTERNS = [
 def check_and_extract_answer(response: str) -> tuple[bool, str]:
   """Return ``(has_answer, answer_text)``.
 
-  ``has_answer`` is True iff any accepted spelling of the answer marker is present; the
-  answer text is everything after the (first-matched) marker, stripped. Byte-identical to
-  InfoPO's ``check_and_extract_answer`` so training and offline eval agree.
+  ``has_answer`` is True iff any accepted spelling of the answer marker is
+  present; the answer text is everything after the (first-matched) marker,
+  stripped. Byte-identical to InfoPO's ``check_and_extract_answer`` so training
+  and offline eval agree.
   """
   if not response:
     return False, ""
@@ -200,8 +207,9 @@ def extract_code_answer(answer_text: str) -> str:
 
   The no-fence guard is load-bearing, not tidiness. Stripping unconditionally REGRESSES a turn
   that shows a fenced function and mentions the marker AFTERWARDS ("```python...``` I WANT TO
-  ANSWER: that's it"): splitting at the marker discards the fence and grades the trailing prose.
-  A fence, when present, is always the more reliable signal, so it wins outright.
+  ANSWER: that's it"): splitting at the marker discards the fence and grades the
+          trailing prose. A fence, when present, is always the more reliable
+          signal, so it wins outright.
   """
   text = answer_text or ""
   if "```" not in text:
@@ -227,11 +235,13 @@ def extract_code_answer(answer_text: str) -> str:
 #   (B) a ```python fenced block                    -> "fenced"
 #   (D) a >=ngram_n symbol-aware token run shared with the GT source whose matched span holds
 #       >= min_operators code operators             -> "ngram"    (inline formula / expression)
-# (C) whole-line overlap from the study is intentionally dropped (0 hits, redundant with A).
-# (D) is symbol-aware and operator-gated on PURPOSE: a word-only n-gram also fires on
-# legitimate natural-language behavior specs (e.g. matching platform names / version strings),
-# which are exactly the good sim turns we must NOT reject. Requiring operators in the matched
-# span keeps the real expression leaks and spares prose.
+# (C) whole-line overlap from the study is intentionally dropped (0 hits,
+#     redundant with A).
+# (D) is symbol-aware and operator-gated on PURPOSE: a word-only n-gram also
+#     fires on legitimate natural-language behavior specs (e.g. matching
+#     platform names / version strings), which are exactly the good sim turns we
+#     must NOT reject. Requiring operators in the matched span keeps the real
+#     expression leaks and spares prose.
 _DEF_SIGNATURE_RE = re.compile(r"\bdef\s+\w+\s*\(")
 _PY_FENCE_RE = re.compile(r"```python", re.IGNORECASE)
 # Arithmetic / comparison / bracket operators. Deliberately excludes ',' '.' ':'
@@ -243,9 +253,10 @@ _CODE_OPERATORS = frozenset("+-*/%()[]=<>")
 def _code_tokens(text: str) -> list:
   """Symbol-aware tokenizer: each word OR each individual operator/punctuation char.
 
-  Unlike a word-only (``\\w+``) split this preserves operators, so a matched n-gram can be
-  required to contain them -- the knob that separates a copied CODE expression from a prose
-  behavior description that merely shares identifiers with the GT.
+  Unlike a word-only (``\\w+``) split this preserves operators, so a matched
+  n-gram can be required to contain them -- the knob that separates a copied
+  CODE expression from a prose behavior description that merely shares
+  identifiers with the GT.
   """
   return re.findall(r"\w+|[^\w\s]", text or "")
 
@@ -255,14 +266,16 @@ def detect_code_leak(
 ) -> Optional[str]:
   """Return a short reason string if ``text`` leaks code, else ``None``.
 
-  ``ground_truth`` is the hidden GT source the simulator sees (n-gram overlap is computed
-  against it, NOT the agent's own output -- that substitution was an offline-study
-  convenience only). Reasons: ``"def"`` / ``"fenced"`` / ``"ngram"`` (see the module comment
-  above). Checked in that order and short-circuits on the first hit.
+  ``ground_truth`` is the hidden GT source the simulator sees (n-gram overlap is
+  computed against it, NOT the agent's own output -- that substitution was an
+  offline-study convenience only). Reasons: ``"def"`` / ``"fenced"`` /
+  ``"ngram"`` (see the module comment above). Checked in that order and
+  short-circuits on the first hit.
 
-  ``ngram_n <= 0`` DISABLES detector (D) (the default in the eval harness for now): the
-  operator-gated n-gram check is a solid idea but held back as a FUTURE CONSIDERATION while
-  we validate on the A/B leaks that dominate. (A)/(B) always run.
+  ``ngram_n <= 0`` DISABLES detector (D) (the default in the eval harness for
+  now): the operator-gated n-gram check is a solid idea but held back as a
+  FUTURE CONSIDERATION while we validate on the A/B leaks that dominate. (A)/(B)
+  always run.
   """
   if not text:
     return None
@@ -304,13 +317,15 @@ _PY_FENCE_UNCLOSED_RE = re.compile(
 def fenced_function(text: str) -> Optional[str]:
   """Return the body of the first ```python block that DEFINES a function, else ``None``.
 
-  The ``def`` requirement is the whole point: this is the GT path's SUBMIT signal, and a
-  submission ends the episode after a single shot. ``contains_code`` (used on the spec path to
-  pick a grading target) also fires on a bare ``def`` anywhere in prose -- harmless there, since
-  showing code just invites a user reply and there is a 2-proposal budget, but fatal here, where
-  "something like def parse(rows), is that right?" mid-clarification would force-submit the
-  trajectory. Requiring a fenced block that actually contains a definition restores the
-  deliberateness the "I WANT TO ANSWER:" marker used to provide.
+  The ``def`` requirement is the whole point: this is the GT path's SUBMIT
+  signal, and a submission ends the episode after a single shot.
+  ``contains_code`` (used on the spec path to pick a grading target) also fires
+  on a bare ``def`` anywhere in prose -- harmless there, since showing code just
+  invites a user reply and there is a 2-proposal budget, but fatal here, where
+  "something like def parse(rows), is that right?" mid-clarification would
+  force-submit the trajectory. Requiring a fenced block that actually contains a
+  definition restores the deliberateness the "I WANT TO ANSWER:" marker used to
+  provide.
   """
   for m in _PY_FENCE_CLOSED_RE.finditer(text or ""):
     body = m.group(1)
@@ -328,14 +343,16 @@ def final_answer(assistant_text: str, episode_done: bool) -> tuple[bool, str]:
   Returns ``(has_answer, answer_text)``:
     1. A ```python block defining a function -> that block IS the submission (the live protocol;
        see COLBENCH_AGENT_SYSTEM_PROMPT bullet 3).
-    2. Else the legacy ``I WANT TO ANSWER:`` marker -> the text after it. Still accepted so that
-       checkpoints and parquets predating 2026-07-31 keep working against this code: the marker
-       prompt shipped in the GT dataset for months, and a fence-only detector would leave such a
-       run silently unable to submit, every episode grinding to the turn cap. Accepting BOTH is
-       also why no submit-protocol toggle is needed anywhere in the stack.
-    3. Else, on the FINAL turn (``episode_done``), fall back to the whole response when it looks
-       like code (``def``/``import``/``return``/`=` ...) or is non-trivial, so an episode that
-       ran out of turns still submits the model's last attempt.
+    2. Else the legacy ``I WANT TO ANSWER:`` marker -> the text after it. Still
+       accepted so that checkpoints and parquets predating 2026-07-31 keep
+       working against this code: the marker prompt shipped in the GT dataset
+       for months, and a fence-only detector would leave such a run silently
+       unable to submit, every episode grinding to the turn cap. Accepting BOTH
+       is also why no submit-protocol toggle is needed anywhere in the stack.
+    3. Else, on the FINAL turn (``episode_done``), fall back to the whole
+       response when it looks like code (``def``/``import``/``return``/`=` ...)
+       or is non-trivial, so an episode that ran out of turns still submits the
+       model's last attempt.
     4. Else no answer yet (keep interacting).
   ``assistant_text`` should already be ``strip_think``-ed by the caller.
   """
@@ -359,9 +376,10 @@ def final_answer(assistant_text: str, episode_done: bool) -> tuple[bool, str]:
 def str_dialogue_history(messages: list[dict]) -> str:
   """Render the running dialogue as the sim-prompt ``{dialogue_history}`` string.
 
-  Byte-identical to sweet_rl HumanInteractionEnv.str_dialogue_history: ``"<role>:<content>"``
-  per turn separated by four newlines, terminated with a trailing ``"agent:"`` cue so the
-  simulator answers as the human to the agent's latest turn.
+  Byte-identical to sweet_rl HumanInteractionEnv.str_dialogue_history:
+  ``"<role>:<content>"`` per turn separated by four newlines, terminated with a
+  trailing ``"agent:"`` cue so the simulator answers as the human to the agent's
+  latest turn.
   """
   result = ""
   for d in messages:
@@ -411,11 +429,12 @@ Your task is to help a human user write a personalized python function.
 4) You may revise and show an updated ```python block as many times as needed within 10 back-and-forth rounds. There is no special submit phrase -- the user ends the conversation once their needs are met.
 5) Be as concise as possible in your messages to the user.""".strip()
 
-# The user-simulator's SYSTEM prompt for the spec path. Conditioned on the authored spec
-# (persona/scenario/requirements/plot) -- the GT code is NEVER injected. The running dialogue is
-# passed as the sim's USER message (str_dialogue_history), mirroring the GT path's split. Wording
-# is intentionally natural prose (a person could act on it), with per-mechanism bullets for WHEN
-# to terminate; tune against real rollouts in eval.
+# The user-simulator's SYSTEM prompt for the spec path. Conditioned on the
+# authored spec (persona/scenario/requirements/plot) -- the GT code is NEVER
+# injected. The running dialogue is passed as the sim's USER message
+# (str_dialogue_history), mirroring the GT path's split. Wording is
+# intentionally natural prose (a person could act on it), with per-mechanism
+# bullets for WHEN to terminate; tune against real rollouts in eval.
 SPEC_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time.
 
 Who you are: {who}, in {domain}. Your comfort with Python: {python_skill}. You come across as: {communication_style}.
@@ -443,16 +462,20 @@ You're an ordinary user, not a code reviewer: you don't check every line, you ca
 
 Keep every reply very SHORT -- usually one or two sentences, the way a person fires off a quick message. Do not explain everything at once or recite all your requirements in one go. Only use [TERMINATE] once both conditions above are met."""
 
-# The GROUNDED user-simulator's SYSTEM prompt (opt-in via +colbench.grounded_sim). Same spec-path
-# machinery -- user-driven [TERMINATE], code cap, grade-last-shown-code -- but the sim conditions on
-# the hidden GT function source + the plot INSTEAD of persona/scenario/requirements. Motivation: the
-# spec-conditioned 4B sim is unreliable (arm (1) collapses ~step 300) while the GT-conditioned sim
-# works (arm (2)); this arm asks whether the PLOT mechanism survives once the sim has an artifact it
-# can read off. Blocks are drawn from HUMAN_SIMULATOR_PROMPT (the GT path) and SPEC_SIM_SYSTEM_PROMPT
-# (the spec path); the two NEW pieces are the "volunteering is limited to the plot" carve-out and the
-# soft-judge termination condition (2), which replaces SPEC's "correctness is NOT your call".
-# NOTE: unlike the spec path, the GT source IS in the sim's context here -- so the env's
-# sim_wrote_code rejection sampling is load-bearing, not belt-and-braces.
+# The GROUNDED user-simulator's SYSTEM prompt (opt-in via
+# +colbench.grounded_sim). Same spec-path machinery -- user-driven [TERMINATE],
+# code cap, grade-last-shown-code -- but the sim conditions on the hidden GT
+# function source + the plot INSTEAD of persona/scenario/requirements.
+# Motivation: the spec-conditioned 4B sim is unreliable (arm (1) collapses ~step
+# 300) while the GT-conditioned sim works (arm (2)); this arm asks whether the
+# PLOT mechanism survives once the sim has an artifact it can read off. Blocks
+# are drawn from HUMAN_SIMULATOR_PROMPT (the GT path) and SPEC_SIM_SYSTEM_PROMPT
+# (the spec path); the two NEW pieces are the "volunteering is limited to the
+# plot" carve-out and the soft-judge termination condition (2), which replaces
+# SPEC's "correctness is NOT your call".
+# NOTE: unlike the spec path, the GT source IS in the sim's context here -- so
+#       the env's sim_wrote_code rejection sampling is load-bearing, not
+#       belt-and-braces.
 GROUNDED_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time. You are not an AI assistant and you never break character.
 
 What you asked them for:
@@ -492,10 +515,11 @@ def build_spec_sim_messages(
 ) -> tuple[str, str]:
   """Build the spec sim's (system, user) messages for one turn.
 
-  ``spec`` carries ``persona{who,domain,python_skill,communication_style}, scenario,
-  requirements, plot``. The system message conditions the sim on that spec (NEVER the GT
-  code); the user message is the running dialogue (``str_dialogue_history``) -- the same
-  seam split as the GT path's ``build_sim_user_message``.
+  ``spec`` carries ``persona{who,domain,python_skill,communication_style},
+  scenario, requirements, plot``. The system message conditions the sim on that
+  spec (NEVER the GT code); the user message is the running dialogue
+  (``str_dialogue_history``) -- the same seam split as the GT path's
+  ``build_sim_user_message``.
   """
   persona = spec.get("persona", {}) or {}
   system = SPEC_SIM_SYSTEM_PROMPT.format(
@@ -515,14 +539,16 @@ def build_grounded_sim_messages(
 ) -> tuple[str, str]:
   """Build the GROUNDED sim's (system, user) messages for one turn.
 
-  Same seam split as ``build_spec_sim_messages`` (spec -> system, dialogue -> user), but the sim
-  is conditioned on the hidden GT function source + the plot instead of the authored spec's
-  persona/scenario/requirements. Kept as a SEPARATE function rather than a flag on
-  ``build_spec_sim_messages`` so the pure-spec path stays branch-free and byte-identical.
+  Same seam split as ``build_spec_sim_messages`` (spec -> system, dialogue ->
+  user), but the sim is conditioned on the hidden GT function source + the plot
+  instead of the authored spec's persona/scenario/requirements. Kept as a
+  SEPARATE function rather than a flag on ``build_spec_sim_messages`` so the
+  pure-spec path stays branch-free and byte-identical.
 
-  NB: this is the ONE place the GT source enters a sim prompt on the spec path -- the leak
-  invariant (GT never reaches the solver's message list) is enforced downstream by the env's
-  ``sim_wrote_code`` rejection sampling, not by construction as in the spec mode.
+  NB: this is the ONE place the GT source enters a sim prompt on the spec path
+      -- the leak invariant (GT never reaches the solver's message list) is
+      enforced downstream by the env's ``sim_wrote_code`` rejection sampling,
+      not by construction as in the spec mode.
   """
   system = GROUNDED_SIM_SYSTEM_PROMPT.format(
       problem_description=problem_description,
@@ -570,9 +596,9 @@ def sim_wrote_code(reply: str) -> bool:
 def extract_last_code(messages: list[dict]) -> str:
   """Return the code from the most recent assistant turn that proposed a function, else ``""``.
 
-  Scans ``messages`` newest-first for an assistant turn with ``contains_code`` and returns
-  ``extract_code_answer`` of it -- the "last function the solver showed", which the spec path
-  grades on termination.
+  Scans ``messages`` newest-first for an assistant turn with ``contains_code``
+  and returns ``extract_code_answer`` of it -- the "last function the solver
+  showed", which the spec path grades on termination.
   """
   for m in reversed(messages):
     if m.get("role") == "assistant" and contains_code(m.get("content", "")):

@@ -1,12 +1,14 @@
-"""Preprocess ColBench (Sweet-RL Backend-Programming) parquet into our VERL RL schema.
+"""Preprocess ColBench (Sweet-RL Backend-Programming) parquet into our VERL RL
+schema.
 
 
-Source: InfoPO's ``data/colbench_code/{train,test}.parquet`` (10k train rows). Each source
-row carries:
- - ``reward_model.{problem_description, ground_truth}`` (GT function source), and
- - ``extra_info.tools_kwargs.interact_with_env.create_kwargs.task.test_cases`` -- a dict of
-   ``label -> call-string`` where MANY values are ``None`` (parquet schema-padding); we keep
-   only the non-None call-strings.
+Source: InfoPO's ``data/colbench_code/{train,test}.parquet`` (10k train rows).
+        Each source row carries:
+ - ``reward_model.{problem_description, ground_truth}`` (GT function source),
+   and
+ - ``extra_info.tools_kwargs.interact_with_env.create_kwargs.task.test_cases``
+   -- a dict of ``label -> call-string`` where MANY values are ``None`` (parquet
+   schema-padding); we keep only the non-None call-strings.
 
 
 Each output row carries the task payload in BOTH:
@@ -32,7 +34,10 @@ import pandas as pd
 from absl import app, flags
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from colbench.templates import COLBENCH_AGENT_SYSTEM_PROMPT, build_initial_user_message
+from colbench.templates import (
+    COLBENCH_AGENT_SYSTEM_PROMPT,
+    build_initial_user_message,
+)
 
 DATA_SOURCE = (
     "colbench_code_local"  # routes nowhere special; reward comes from the loop
@@ -140,11 +145,17 @@ def main(argv):
     val_small_path = os.path.join(local_dir, "test_small.parquet")
     val_small.to_parquet(val_small_path)
     print(
-        f"Wrote {len(val_small)} val-small rows -> {val_small_path} (in-training val)"
+        (
+            f"Wrote {len(val_small)} val-small rows -> {val_small_path} (in-training "
+            f"val)"
+        )
     )
   else:
     print(
-        f"Skipped test_small.parquet (val_small={FLAGS.val_small}, full val={len(val)})"
+        (
+            f"Skipped test_small.parquet (val_small={FLAGS.val_small}, full "
+            f"val={len(val)})"
+        )
     )
   print("Example row:")
   ex = train[0]

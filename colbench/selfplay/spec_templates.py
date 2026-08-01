@@ -1,21 +1,32 @@
 """Prompts + parsing for the self-play spec setting (Phase 0).
 
-Two prompts live here, kept separate from ``colbench.templates`` (the GT-code path) so the two
-settings never entangle:
+Two prompts live here, kept separate from ``colbench.templates`` (the GT-code
+path) so the two settings never entangle:
 
-  * ``SPEC_AUTHOR_*`` -- asks a model to author a realistic **spec** from the public problem +
-    the hidden GT code. The spec is split into ``persona`` / ``scenario`` / ``requirements``.
-    The persona is the DIVERSITY lever: who would realistically ask for THIS function, and at
-    what Python skill level -- which flavors *how* the requirements are later voiced by the
-    simulator, WITHOUT changing their completeness (the person knows their own numbers even if
-    they cannot write code). The requirements must capture every constant/branch/edge-case the
-    GT implements, or the task becomes unsolvable regardless of solver skill.
+  * ``SPEC_AUTHOR_*`` -- asks a model to author a realistic **spec** from the
+    public problem + the hidden GT code. The spec is split into ``persona`` /
+    ``scenario`` / ``requirements``. The persona is the DIVERSITY lever: who
+    would realistically ask for THIS function, and at what Python skill level --
+    which flavors *how* the requirements are later voiced by the simulator,
+    WITHOUT changing their completeness (the person knows their own numbers even
+    if they cannot write code). The requirements must capture every
+    constant/branch/edge-case the GT implements, or the task becomes unsolvable
+    regardless of solver skill.
 
-  * ``FULL_SPEC_SOLVER_*`` -- the diagnostic solver prompt: hand the solver the ENTIRE spec in
-    one turn and ask for the function. Grading (``colbench.reward``) is unchanged.
+  * ``FULL_SPEC_SOLVER_*`` -- the diagnostic solver prompt: hand the solver the
+    ENTIRE spec in one turn and ask for the function. Grading
+    (``colbench.reward``) is unchanged.
 
-Parsing (``parse_spec``) is tolerant of models that wrap the JSON in prose or fences.
+Parsing (``parse_spec``) is tolerant of models that wrap the JSON in prose or
+fences.
 """
+
+# The long lines in this file are prompt text inside string literals. Re-wrapping
+# them would change the exact bytes sent to the model and break comparability with
+# completed runs, so the line-length limit is disabled file-wide rather than
+# reflowed. A per-line disable is not an option here: the comment would land inside
+# the prompt and be sent to the model.
+# pylint: disable=line-too-long
 
 import json
 import re
@@ -235,10 +246,11 @@ def _persona_to_text(persona: Any) -> str:
 def parse_spec(raw: str) -> dict:
   """Parse an author model's reply into ``{persona, scenario, requirements, raw, ok}``.
 
-  Tolerant: strips prose/fences around the JSON object. If no JSON parses, we fall back to
-  treating the whole reply as free-text requirements (``ok=False``) so a malformed generation
-  is still usable/inspectable rather than lost. ``persona`` is kept as-authored (dict or str);
-  use ``_persona_to_text`` when composing prompt text.
+  Tolerant: strips prose/fences around the JSON object. If no JSON parses, we
+            fall back to treating the whole reply as free-text requirements
+            (``ok=False``) so a malformed generation is still usable/inspectable
+            rather than lost. ``persona`` is kept as-authored (dict or str); use
+            ``_persona_to_text`` when composing prompt text.
   """
   text = (raw or "").strip()
   obj = None
@@ -285,8 +297,8 @@ def build_full_spec_solver_messages(
 ) -> list[dict]:
   """Chat messages for the full-spec diagnostic solver call.
 
-  Includes the public request (for the exact signature/name) plus the full authored spec.
-  ``spec`` is a parsed dict from ``parse_spec``.
+  Includes the public request (for the exact signature/name) plus the full
+  authored spec. ``spec`` is a parsed dict from ``parse_spec``.
   """
   return [
       {"role": "system", "content": FULL_SPEC_SOLVER_SYSTEM},
@@ -305,10 +317,11 @@ def build_full_spec_solver_messages(
 def parse_plot_spec(raw: str) -> dict:
   """Parse a plot author reply into ``{persona, scenario, requirements, plot, raw, ok}``.
 
-  ``requirements`` is the full intent the simulator must eventually convey; ``plot`` is the
-  tailored, high-level direction for how this conversation naturally unfolds (NOT a script).
-  Tolerant like ``parse_spec``: ``ok`` requires BOTH ``requirements`` and ``plot``. On
-  malformed JSON the whole reply becomes free-text requirements with ``ok=False``.
+  ``requirements`` is the full intent the simulator must eventually convey;
+  ``plot`` is the tailored, high-level direction for how this conversation
+  naturally unfolds (NOT a script). Tolerant like ``parse_spec``: ``ok``
+  requires BOTH ``requirements`` and ``plot``. On malformed JSON the whole reply
+  becomes free-text requirements with ``ok=False``.
   """
   text = (raw or "").strip()
   obj = None

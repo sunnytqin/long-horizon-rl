@@ -1,30 +1,40 @@
-"""ColBench SPEC-path multi-turn agent loop: solver vs. a SPEC-conditioned frozen user sim.
+"""ColBench SPEC-path multi-turn agent loop: solver vs. a SPEC-conditioned
+frozen user sim.
 
-Sibling of ``colbench.colbench_agent.ColBenchAgentLoop`` (same budget/overflow bookkeeping,
-weights-version handling, response-mask construction, ``AgentLoopOutput`` assembly, and
-``masking.apply_train_turns_mask`` for the SET-2 study). The one thing that differs is the
-TERMINATION STATE MACHINE and the env:
+Sibling of ``colbench.colbench_agent.ColBenchAgentLoop`` (same budget/overflow
+bookkeeping, weights-version handling, response-mask construction,
+``AgentLoopOutput`` assembly, and ``masking.apply_train_turns_mask`` for the
+SET-2 study). The one thing that differs is the TERMINATION STATE MACHINE and
+the env:
 
   * The frozen user-simulator is conditioned on a natural-language **spec**
-    (``persona/scenario/requirements/plot``) instead of the hidden GT source, so a code leak is
-    structurally impossible -- there is NO rejection-sampling-for-leaks / ``is_answer`` machinery
-    here. The env is ``ColBenchSpecUserSimEnv``; the sim never sees GT.
+    (``persona/scenario/requirements/plot``) instead of the hidden GT source, so
+    a code leak is structurally impossible -- there is NO
+    rejection-sampling-for-leaks / ``is_answer`` machinery here. The env is
+    ``ColBenchSpecUserSimEnv``; the sim never sees GT.
   * The solver does NOT "submit" with a marker. It proposes a function inside a ```python block
     and the USER ends the conversation with ``[TERMINATE]``. The loop grades the LAST function the
     solver showed (``templates.extract_last_code``). Reward is 0 iff the solver never showed code.
-  * The env still owns a small rejection sampler for the OPPOSITE leak (an ordinary user must never
-    paste code): ``env.generate_user_turn`` re-queries the sim up to ``sim_max_tries`` if the reply
-    contains a code fence, and flags ``last_sim_code_reject_exhausted`` if every try wrote code ->
-    the loop aborts that conversation (``terminated_by="sim_code_reject"``).
+  * The env still owns a small rejection sampler for the OPPOSITE leak (an
+    ordinary user must never paste code): ``env.generate_user_turn`` re-queries
+    the sim up to ``sim_max_tries`` if the reply contains a code fence, and
+    flags ``last_sim_code_reject_exhausted`` if every try wrote code -> the loop
+    aborts that conversation (``terminated_by="sim_code_reject"``).
 
-Reference contract (MUST stay byte-identical): ``validate_colbench_spec.run_eval`` and the pinned
+Reference contract (MUST stay byte-identical):
+``validate_colbench_spec.run_eval`` and the pinned
 ``tests/test_env_spec.py::drive``. Per turn, per active trajectory:
-  1. Solver generates. If it contains code: record last_code, code_proposals += 1, showed_code.
-  2. Turn cap (last turn) -> stop; grade last_code (terminated_by "turn_cap", or "no_code").
-  3. Code cap (code_proposals >= max_code_proposals, default 2) -> stop; grade (terminated_by "code_cap").
+  1. Solver generates. If it contains code: record last_code, code_proposals +=
+     1, showed_code.
+  2. Turn cap (last turn) -> stop; grade last_code (terminated_by "turn_cap", or
+     "no_code").
+  3. Code cap (code_proposals >= max_code_proposals, default 2) -> stop; grade
+     (terminated_by "code_cap").
   4. Else the sim replies:
-       - exhausted (all tries wrote code) -> stop; terminated_by "sim_code_reject"; grade last_code.
-       - elif sim_terminated -> stop; terminated_by "user" (or "no_code"); grade last_code.
+       - exhausted (all tries wrote code) -> stop; terminated_by
+         "sim_code_reject"; grade last_code.
+       - elif sim_terminated -> stop; terminated_by "user" (or "no_code"); grade
+         last_code.
        - else append the sim reply (mask=0) and continue.
 
 Training is SOLVER-ONLY. The simulator is frozen and its turns are masked.
@@ -39,7 +49,11 @@ from uuid import uuid4
 from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
 from colbench import templates
 from colbench.env_spec import ColBenchSpecUserSimEnv
-from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
+from verl.experimental.agent_loop.agent_loop import (
+    AgentLoopBase,
+    AgentLoopOutput,
+    register,
+)
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
 from verl.workers.rollout.replica import TokenOutput
@@ -57,7 +71,9 @@ _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
 @register("colbench_spec_agent")
 class ColBenchSpecAgentLoop(AgentLoopBase):
-  """Solver rollout against a SPEC-conditioned frozen ColBench user sim (fractional GT reward)."""
+  """Solver rollout against a SPEC-conditioned frozen ColBench user sim
+  (fractional GT reward).
+  """
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
@@ -70,8 +86,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         self.rollout_config.multi_turn.max_assistant_turns or 10
     )
 
-    # Optional `colbench` config block (add via `+colbench.key=value`); minimal knobs,
-    # reusing the solver sampling_params + per-turn cap rather than adding many.
+    # Optional `colbench` config block (add via `+colbench.key=value`); minimal
+    # knobs, reusing the solver sampling_params + per-turn cap rather than
+    # adding many.
     cc = {}
     try:
       cc = self.config.get("colbench", {}) or {}
@@ -85,15 +102,17 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
     # Per-case exec timeout for the final GT grading.
     self.reward_time_limit = float(cc.get("reward_time_limit", 6.0))
-    # SET 2 gradient-masking arm (shared with codecontest). Default "all" (train every solver
-    # turn) is the first-run setting and a no-op in apply_train_turns_mask. "upto_last_code"
-    # (Intervention 2) keeps turns [0 .. last-code-turn] and zeros the trailing post-code turns;
-    # it is the spec-aware mode that consumes the last-code-turn index the loop records.
-    # "final_only" (keep ONLY the last solver turn) is still NOT supported on the spec path:
-    # unlike the GT path (where the loop breaks on submit so the last solver turn IS the graded
-    # one), the spec sim can [TERMINATE] after a NON-code clarification turn, so the last solver
-    # turn may not be the graded code turn -- masking to it would train the wrong tokens. Hard-
-    # error rather than silently mis-mask; use "upto_last_code" instead.
+    # SET 2 gradient-masking arm (shared with codecontest). Default "all" (train
+    # every solver turn) is the first-run setting and a no-op in
+    # apply_train_turns_mask. "upto_last_code" (Intervention 2) keeps turns [0
+    # .. last-code-turn] and zeros the trailing post-code turns; it is the
+    # spec-aware mode that consumes the last-code-turn index the loop records.
+    # "final_only" (keep ONLY the last solver turn) is still NOT supported on
+    # the spec path: unlike the GT path (where the loop breaks on submit so the
+    # last solver turn IS the graded one), the spec sim can [TERMINATE] after a
+    # NON-code clarification turn, so the last solver turn may not be the graded
+    # code turn -- masking to it would train the wrong tokens. Hard- error
+    # rather than silently mis-mask; use "upto_last_code" instead.
     self.train_turns = cc.get("train_turns", "all")
     if self.train_turns not in TRAIN_TURNS_MODES:
       raise ValueError(
@@ -101,14 +120,18 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       )
     if self.train_turns == "final_only":
       raise NotImplementedError(
-          "colbench.train_turns='final_only' is not supported on the spec path yet: the spec "
-          "sim can [TERMINATE] after a non-code turn, so the last solver turn may not be the "
+          "colbench.train_turns='final_only' is not supported on the spec "
+          "path yet: the spec "
+          "sim can [TERMINATE] after a non-code turn, so the last solver "
+          "turn may not be the "
           "graded code turn. Use 'all', or add last-code-turn masking first."
       )
-    # Length penalty (Intervention 1.5; OFF by default -> Int-1 leaves reward untouched). When
-    # length_penalty_coef>0, subtract coef * clip((solver_tokens - soft_cap)/soft_cap, 0, 1)
-    # from the trajectory reward. solver_tokens = total tokens the SOLVER generated across turns
-    # (sum of the response-mask=1 spans). Targets the ~step-300 runaway-length degeneration.
+    # Length penalty (Intervention 1.5; OFF by default -> Int-1 leaves reward
+    # untouched). When length_penalty_coef>0, subtract coef *
+    # clip((solver_tokens - soft_cap)/soft_cap, 0, 1) from the trajectory
+    # reward. solver_tokens = total tokens the SOLVER generated across turns
+    # (sum of the response-mask=1 spans). Targets the ~step-300 runaway-length
+    # degeneration.
     self.length_penalty_coef = float(cc.get("length_penalty_coef", 0.0) or 0.0)
     self.length_soft_cap = float(cc.get("length_soft_cap", 2048.0) or 2048.0)
     # Guardrail: max ```python proposals before the loop force-grades the last one (default 2,
@@ -144,13 +167,15 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         if isinstance(_br, bool)
         else str(_br).strip().lower() in ("1", "true", "yes", "on")
     )
-    # GROUNDED sim (TRAINING-only): condition the frozen sim on the hidden GT function source +
-    # spec["plot"] instead of persona/scenario/requirements. Tests whether the plot mechanism
-    # survives when the 4B sim has a reliable artifact to read off (the spec-conditioned sim
-    # collapses ~step 300; the GT-conditioned one does not). All other spec machinery --
-    # user-driven [TERMINATE], max_code_proposals, grade-last-shown-code, sim_wrote_code
-    # rejection, the solver prompt, the parquet -- is unchanged. OFF by default, and eval
-    # (validate_colbench_spec) never reads it, so the golden eval stays spec-conditioned.
+    # GROUNDED sim (TRAINING-only): condition the frozen sim on the hidden GT
+    # function source + spec["plot"] instead of persona/scenario/requirements.
+    # Tests whether the plot mechanism survives when the 4B sim has a reliable
+    # artifact to read off (the spec-conditioned sim collapses ~step 300; the
+    # GT-conditioned one does not). All other spec machinery -- user-driven
+    # [TERMINATE], max_code_proposals, grade-last-shown-code, sim_wrote_code
+    # rejection, the solver prompt, the parquet -- is unchanged. OFF by default,
+    # and eval (validate_colbench_spec) never reads it, so the golden eval stays
+    # spec-conditioned.
     _gs = cc.get("grounded_sim", False)
     self.grounded_sim = (
         _gs
@@ -181,8 +206,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # The authored spec the sim conditions on
     # (persona/scenario/requirements/plot). NEVER GT.
     spec = extra_info.get("spec", {}) or {}
-    # verl (HF datasets) hands test_cases as a plain list; a pandas reader would give an
-    # np.ndarray. Convert via an explicit None check (an ndarray would raise under `or []`).
+    # verl (HF datasets) hands test_cases as a plain list; a pandas reader would
+    # give an np.ndarray. Convert via an explicit None check (an ndarray would
+    # raise under `or []`).
     _tc = gt.get("test_cases")
     env = ColBenchSpecUserSimEnv(
         problem_description=gt.get("problem_description", problem_text),
@@ -305,11 +331,12 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         if not first_code:
           first_code = last_code
 
-      # 1b. Terminate-on-all-pass (TRAINING-only; needs GT oracle). Grade the code just shown;
-      #     if it passes ALL tests, end the episode NOW -- before the sim replies -- so no
-      #     post-code free-ride ramble is generated. Additive early-exit; OFF by default. The
-      #     grade is cached in `graded_result` (for this last_code) and reused at final grading
-      #     to avoid a second exec call.
+      # 1b. Terminate-on-all-pass (TRAINING-only; needs GT oracle). Grade the
+      # code just shown; if it passes ALL tests, end the episode NOW -- before
+      # the sim replies -- so no post-code free-ride ramble is generated.
+      # Additive early-exit; OFF by default. The grade is cached in
+      # `graded_result` (for this last_code) and reused at final grading to
+      # avoid a second exec call.
       if self.terminate_on_allpass and showed_code and last_code:
         with simple_timer("env_score", metrics):
           try:
@@ -325,7 +352,8 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
           terminated_by = "oracle_solved"
           break
 
-      # 2. Turn cap: last allowed solver turn -> stop, grade the last code shown.
+      # 2. Turn cap: last allowed solver turn -> stop, grade the last code
+      #    shown.
       if turn == self.max_assistant_turns - 1:
         terminated_by = "turn_cap" if showed_code else "no_code"
         break
@@ -335,9 +363,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         terminated_by = "code_cap"
         break
 
-      # 4. Else the sim replies. env.generate_user_turn does the (no-code) rejection
-      #    sampling internally; blocking HTTP -> executor + hard timeout so a hung sim can't
-      #    stall the rollout.
+      # 4. Else the sim replies. env.generate_user_turn does the (no-code)
+      #    rejection sampling internally; blocking HTTP -> executor + hard
+      #    timeout so a hung sim can't stall the rollout.
       with simple_timer("generate_user_turn", metrics):
         try:
           reply = await asyncio.wait_for(
@@ -452,10 +480,11 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       length_penalty = self.length_penalty_coef * max(0.0, min(1.0, over))
       reward = reward - length_penalty
 
-    # SET 2 / Intervention 2: restrict the loss to the selected solver turns. "all" is a no-op;
-    # "upto_last_code" keeps [0 .. last_code_turn_idx] and zeros the trailing post-code turns
-    # (removes the reward-irrelevant post-code ramble free-ride). "final_only" is still rejected
-    # by the __init__ guard on the spec path.
+    # SET 2 / Intervention 2: restrict the loss to the selected solver turns.
+    # "all" is a no-op; "upto_last_code" keeps [0 .. last_code_turn_idx] and
+    # zeros the trailing post-code turns (removes the reward-irrelevant
+    # post-code ramble free-ride). "final_only" is still rejected by the
+    # __init__ guard on the spec path.
     apply_train_turns_mask(
         response_mask,
         solver_turn_spans,
@@ -493,15 +522,19 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
             "tool_rewards": [],
             "min_global_steps": min_global_steps,
             "max_global_steps": max_global_steps,
-            # `overflow` is consumed at top-level by verl core (-> val-aux/solve/overflow_rate).
+            # `overflow` is consumed at top-level by verl core (->
+            # val-aux/solve/overflow_rate).
             "overflow": overflow,
-            # Outcome diagnostics. verl does NOT log arbitrary top-level extra_fields keys --
-            # compute_data_metrics only aggregates a hardcoded whitelist. The one supported
-            # channel is the nested `reward_extra_info` dict: verl means every key here into
-            # val-core/val-aux metrics (per test_freq) and per-step rollout_data_dir dumps.
-            # So every scalar we want on the dashboards MUST live here. terminated_by is a
-            # string, so it is one-hot expanded into 0/1 scalars per category. Keys must be
-            # identical across all rollouts (verl reads the key set from the first sample).
+            # Outcome diagnostics. verl does NOT log arbitrary top-level
+            # extra_fields keys -- compute_data_metrics only aggregates a
+            # hardcoded whitelist. The one supported channel is the nested
+            # `reward_extra_info` dict: verl means every key here into
+            # val-core/val-aux metrics (per test_freq) and per-step
+            # rollout_data_dir dumps. So every scalar we want on the dashboards
+            # MUST live here. terminated_by is a string, so it is one-hot
+            # expanded into 0/1 scalars per category. Keys must be identical
+            # across all rollouts (verl reads the key set from the first
+            # sample).
             "reward_extra_info": {
                 "showed_code": float(showed_code),
                 "code_proposals": float(code_proposals),

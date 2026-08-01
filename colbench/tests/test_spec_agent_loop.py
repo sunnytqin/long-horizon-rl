@@ -1,12 +1,14 @@
-"""Agent-loop tests for the SPEC path: drive ``ColBenchSpecAgentLoop.run`` end-to-end with a
-scripted solver + scripted sim, asserting the same ``terminated_by`` / reward / masking the pinned
+"""Agent-loop tests for the SPEC path: drive ``ColBenchSpecAgentLoop.run``
+end-to-end with a scripted solver + scripted sim, asserting the same
+``terminated_by`` / reward / masking the pinned
 ``tests/test_env_spec.py::drive`` contract produces.
 
 CONTAINER-ONLY: importing ``colbench.colbench_spec_agent`` pulls in
-``verl.experimental.agent_loop`` (needs py>=3.11 + ray), which is NOT importable in the light
-conda eval env. The whole module is skipped there via ``importorskip`` and runs inside the
-VERL/SGLang training container. It complements the env-level tests (which run everywhere) by
-exercising the loop's token/mask bookkeeping and extra_fields, not just the env seams.
+``verl.experimental.agent_loop`` (needs py>=3.11 + ray), which is NOT importable
+in the light conda eval env. The whole module is skipped there via
+``importorskip`` and runs inside the VERL/SGLang training container. It
+complements the env-level tests (which run everywhere) by exercising the loop's
+token/mask bookkeeping and extra_fields, not just the env seams.
 """
 
 import asyncio
@@ -27,7 +29,10 @@ from verl.workers.rollout.replica import TokenOutput  # pylint: disable=g-import
 
 # Reuse the env-level fixtures' shape (kept local to avoid importing a test
 # module).
-GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
+GT = (
+    "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
+    "       return x - y\n"
+)
 WRONG = "def f(x, y):\n    return x + y\n"  # ignores x<10 -> 0.5 pass-rate
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Write a function f(x, y) with some personalized behavior."
@@ -39,8 +44,14 @@ SPEC = {
         "communication_style": "brief",
     },
     "scenario": "Needs a small helper for a report.",
-    "requirements": "The user wants f(x,y): if x is at least 10 return x+y, otherwise x-y.",
-    "plot": "The user reveals the threshold of 10 only if the assistant asks about the cutoff.",
+    "requirements": (
+        "The user wants f(x,y): if x is at least 10 return x+y, otherwise "
+        "x-y."
+    ),
+    "plot": (
+        "The user reveals the threshold of 10 only if the assistant asks "
+        "about the cutoff."
+    ),
 }
 
 
@@ -61,7 +72,9 @@ def _scripted_backend(replies):
 
 
 class _FakeTokenizer:
-  """UTF-8 byte tokenizer: exact encode/decode roundtrip + realistic token counts."""
+  """UTF-8 byte tokenizer: exact encode/decode roundtrip + realistic token
+  counts.
+  """
 
   def encode(self, text, add_special_tokens=False):
     return list(text.encode("utf-8"))
@@ -71,7 +84,9 @@ class _FakeTokenizer:
 
 
 class _FakeServerManager:
-  """Yields the scripted solver turns as TokenOutput, encoded by the fake tokenizer."""
+  """Yields the scripted solver turns as TokenOutput, encoded by the fake
+  tokenizer.
+  """
 
   def __init__(self, tokenizer, solver_turns):
     self._tok = tokenizer
@@ -102,7 +117,9 @@ def _make_loop(
     binary_reward=False,
     grounded_sim=False,
 ):
-  """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__, wired to fakes."""
+  """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__, wired
+  to fakes.
+  """
   obj = object.__new__(ColBenchSpecAgentLoop)
   tok = _FakeTokenizer()
   obj.tokenizer = tok
@@ -124,8 +141,8 @@ def _make_loop(
   obj.terminate_on_allpass = terminate_on_allpass
   obj.binary_reward = binary_reward
   # NB: run() reads every attribute set here -- this fake bypasses __init__, so
-  # a knob added to the loop and NOT mirrored here raises AttributeError
-  # mid-rollout.
+  #     a knob added to the loop and NOT mirrored here raises AttributeError
+  #     mid-rollout.
   obj.grounded_sim = grounded_sim
 
   # apply_chat_template is normally an AgentLoopBase method; override on the
@@ -191,7 +208,7 @@ def test_correct_code_then_user_terminate():
   assert rei["showed_code"] == 1.0
   assert rei["code_proposals"] == 1.0
   # Mask: solver turns are 1, the injected sim turn is 0, and at least one of
-  # each exists.
+  #       each exists.
   assert any(m == 1 for m in out.response_mask)
   assert any(m == 0 for m in out.response_mask)
 
@@ -255,8 +272,8 @@ def test_all_turns_mask_keeps_every_solver_turn():
 
 def test_upto_last_code_zeros_trailing_post_code_turn():
   # Solver: clarify -> code(GT) -> trailing ramble; sim keeps it going, then
-  # [TERMINATE]. 'upto_last_code' must KEEP the clarify + code turns (mask=1)
-  # and ZERO the trailing ramble.
+  #         [TERMINATE]. 'upto_last_code' must KEEP the clarify + code turns
+  #         (mask=1) and ZERO the trailing ramble.
   clarify, code, ramble = (
       "What's the cutoff?",
       _code_turn(GT),
@@ -276,7 +293,7 @@ def test_upto_last_code_zeros_trailing_post_code_turn():
   # zeroed.
   assert out.response_mask.count(1) == len((clarify + code).encode("utf-8"))
   # Sanity: the graded reward is unaffected by masking (GT was the last code
-  # shown).
+  #         shown).
   assert out.reward_score == 1.0
 
 
@@ -331,8 +348,9 @@ def test_terminate_on_allpass_partial_does_not_break():
 
 
 def test_binary_reward_zeros_partial_but_keeps_fractional_metric():
-  # binary_reward: a partial (0.5) pass becomes reward 0.0, but the raw pass_rate METRIC stays
-  # 0.5 -- the reward and the diagnostic are decoupled.
+  # binary_reward: a partial (0.5) pass becomes reward 0.0, but the raw
+  #                pass_rate METRIC stays 0.5 -- the reward and the diagnostic
+  #                are decoupled.
   obj = _make_loop(
       solver_turns=[_code_turn(WRONG), _code_turn(WRONG)],
       sim_replies=["Not quite, try again."],
@@ -361,7 +379,9 @@ def test_binary_reward_all_pass_is_one():
 
 
 def _capturing_backend(replies):
-  """Scripted backend that also records the (system, user) pairs it was called with."""
+  """Scripted backend that also records the (system, user) pairs it was called
+  with.
+  """
   inner = _scripted_backend(replies)
   seen = []
 

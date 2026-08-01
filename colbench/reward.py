@@ -1,28 +1,34 @@
-"""Functional-equivalence reward for ColBench, via the EXISTING code-exec sidecar.
+"""Functional-equivalence reward for ColBench, via the EXISTING code-exec
+sidecar.
 
-ColBench grades a submitted function against a hidden ground-truth function by CALLING both
-on the same argument tuples and comparing return values with Python ``==`` (sweet_rl's
-``code_utils.check_correctness``). We reuse the ``codecontest`` sandbox sidecar UNCHANGED
-rather than exec'ing untrusted code in the trainer:
+ColBench grades a submitted function against a hidden ground-truth function by
+CALLING both on the same argument tuples and comparing return values with Python
+``==`` (sweet_rl's ``code_utils.check_correctness``). We reuse the
+``codecontest`` sandbox sidecar UNCHANGED rather than exec'ing untrusted code in
+the trainer:
 
-  * We build a self-contained COMPARISON HARNESS script that embeds the GT and candidate
-    sources (base64, so arbitrary source -- quotes, triple-quotes -- round-trips cleanly),
-    reads ONE call-string from stdin, evaluates it in two separate namespaces, and prints
-    ``repr(gt_out == cand_out and gt_out is not None)`` -- with the candidate's own stdout
-    suppressed so the sole stdout line is that boolean.
+  * We build a self-contained COMPARISON HARNESS script that embeds the GT and
+    candidate sources (base64, so arbitrary source -- quotes, triple-quotes --
+    round-trips cleanly), reads ONE call-string from stdin, evaluates it in two
+    separate namespaces, and prints ``repr(gt_out == cand_out and gt_out is not
+    None)`` -- with the candidate's own stdout suppressed so the sole stdout
+    line is that boolean.
   * We hand the harness to ``exec_client.eval_code_on_tests(code=harness,
-    test_input=<call-strings>, test_output=["True", ...])``. The sidecar runs the harness
-    once per call-string (each in its own RLIMIT/cgroup-bounded child), and the returned
-    ``per_case`` bools ARE the per-test-case pass/fail. ``pass_rate = mean(per_case)`` is the
-    reward (fractional, matching sweet_rl's stored reward); ``all_pass`` is a diagnostic.
+    test_input=<call-strings>, test_output=["True", ...])``. The sidecar runs
+    the harness once per call-string (each in its own RLIMIT/cgroup-bounded
+    child), and the returned ``per_case`` bools ARE the per-test-case pass/fail.
+    ``pass_rate = mean(per_case)`` is the reward (fractional, matching
+    sweet_rl's stored reward); ``all_pass`` is a diagnostic.
 
-The compare happens INSIDE the sandboxed child (no live objects cross the process boundary),
-so we keep sweet_rl's faithful ``==``-on-return-values semantics while reusing all existing
-isolation + concurrency + retry. No sidecar/server change.
+The compare happens INSIDE the sandboxed child (no live objects cross the
+process boundary), so we keep sweet_rl's faithful ``==``-on-return-values
+semantics while reusing all existing isolation + concurrency + retry. No
+sidecar/server change.
 
-Call-strings are base64-encoded onto stdin: ``local_exec.normalise`` rewrites ``\\n`` -> real
-newline on every ``test_input``, which would corrupt a call whose args contain string
-literals with ``\\n``. base64 (no backslashes) passes through ``normalise`` untouched.
+Call-strings are base64-encoded onto stdin: ``local_exec.normalise`` rewrites
+``\\n`` -> real newline on every ``test_input``, which would corrupt a call
+whose args contain string literals with ``\\n``. base64 (no backslashes) passes
+through ``normalise`` untouched.
 """
 
 import base64
@@ -42,15 +48,17 @@ def _b64(s: str) -> str:
 def build_harness(ground_truth_src: str, candidate_src: str) -> str:
   """Build the stdin-driven comparison harness (see module docstring).
 
-  The harness reads a base64-encoded call-string from stdin, evaluates it in a GT namespace
-  and a candidate namespace (each ``exec``'d fresh), and prints the boolean equivalence for
-  that one call. Both sources are embedded base64 so any source text round-trips.
+  The harness reads a base64-encoded call-string from stdin, evaluates it in a
+  GT namespace and a candidate namespace (each ``exec``'d fresh), and prints the
+  boolean equivalence for that one call. Both sources are embedded base64 so any
+  source text round-trips.
   """
   gt_b64 = _b64(ground_truth_src)
   cand_b64 = _b64(candidate_src)
-  # NOTE: ``{{}}`` -> literal ``{}`` under .format-free f-string; the only interpolations are
-  # the two base64 blobs. Everything the candidate prints is captured into _buf and dropped;
-  # only the final repr(bool) reaches real stdout, which the sidecar compares to "True".
+  # NOTE: ``{{}}`` -> literal ``{}`` under .format-free f-string; the only
+  #       interpolations are the two base64 blobs. Everything the candidate
+  #       prints is captured into _buf and dropped; only the final repr(bool)
+  #       reaches real stdout, which the sidecar compares to "True".
   return f"""import sys, base64, contextlib, io
 
 _GT_SRC = base64.b64decode("{gt_b64}").decode("utf-8")
@@ -83,7 +91,8 @@ def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
   """Grade ``candidate_code`` against ``ground_truth_src`` on ``test_calls``.
 
   Args:
-      candidate_code: the solver's submitted function source (already fence-stripped).
+      candidate_code: the solver's submitted function source (already
+                      fence-stripped).
       ground_truth_src: the hidden GT function source.
       test_calls: list of call-strings, e.g. ``"f(1969, 140, 500)"``.
       time_limit: per-case wall-clock timeout (seconds), passed to the sidecar.
@@ -93,9 +102,11 @@ def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
       ``per_case`` (list[bool]), and ``n`` (cases executed). A missing candidate / no test
       cases / an unreachable sidecar all yield ``pass_rate=0.0`` (never raises).
   """
-  # Defensive: the parquet stores test_cases as list<string> and verl (HF datasets) hands
-  # us a plain list, but a pandas reader returns np.ndarray -- so avoid `test_calls or []`
-  # (bool() on a multi-element array raises "truth value is ambiguous") and use is-None.
+  # Defensive: the parquet stores test_cases as list<string> and verl (HF
+  #            datasets) hands us a plain list, but a pandas reader returns
+  #            np.ndarray -- so avoid `test_calls or []` (bool() on a
+  #            multi-element array raises "truth value is ambiguous") and use
+  #            is-None.
   _calls_iter = test_calls if test_calls is not None else []
   calls = [str(c) for c in _calls_iter if c is not None and str(c) != ""]
   if not candidate_code or not calls:
@@ -104,8 +115,9 @@ def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
   harness = build_harness(ground_truth_src, candidate_code)
   test_input = [_b64(c) for c in calls]
   test_output = ["True"] * len(calls)
-  # max_gt_test = len(calls): grade EVERY case so the fraction denominator matches sweet_rl
-  # (which divides by len(test_cases)); the default cap of 20 would silently drop cases.
+  # max_gt_test = len(calls): grade EVERY case so the fraction denominator
+  # matches sweet_rl (which divides by len(test_cases)); the default cap of 20
+  # would silently drop cases.
   all_pass, per_case, _failures = exec_client.eval_code_on_tests(
       harness,
       test_input,

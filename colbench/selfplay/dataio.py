@@ -1,10 +1,11 @@
 """Shared row reading + JSONL cache helpers for the Phase-0 spec scripts.
 
-``read_tasks`` normalizes a ColBench parquet row (either the raw InfoPO source schema or our
-preprocessed schema) into ``{index, problem_description, ground_truth, test_cases}`` -- the
-minimal task payload both ``generate_specs`` and ``diagnose_specs`` need. Test-case extraction
-for the raw schema mirrors ``colbench.preprocess_colbench._extract_test_cases`` (inlined below
-so this Phase-0 subpackage stays free of that module's absl CLI dependency).
+``read_tasks`` normalizes a ColBench parquet row (either the raw InfoPO source
+schema or our preprocessed schema) into ``{index, problem_description,
+ground_truth, test_cases}`` -- the minimal task payload both ``generate_specs``
+and ``diagnose_specs`` need. Test-case extraction for the raw schema mirrors
+``colbench.preprocess_colbench._extract_test_cases`` (inlined below so this
+Phase-0 subpackage stays free of that module's absl CLI dependency).
 """
 
 import json
@@ -17,8 +18,9 @@ import pandas as pd
 def _extract_test_cases(extra_info: dict) -> list:
   """Non-None call-strings from the raw InfoPO nested tools_kwargs payload.
 
-  Kept byte-identical to ``colbench.preprocess_colbench._extract_test_cases``; duplicated
-  here only to avoid importing that module (its top-level absl import is CLI-only).
+  Kept byte-identical to ``colbench.preprocess_colbench._extract_test_cases``;
+  duplicated here only to avoid importing that module (its top-level absl import
+  is CLI-only).
   """
   tools_kwargs = (extra_info or {}).get("tools_kwargs", {}) or {}
   create_kwargs = (tools_kwargs.get("interact_with_env", {}) or {}).get(
@@ -33,9 +35,10 @@ def _resolve_gt(row) -> dict:
   """Return the task ground_truth dict from either schema.
 
   Preprocessed rows carry a ready dict at ``extra_info.ground_truth`` /
-  ``reward_model.ground_truth`` (with ``problem_description``, ``ground_truth`` source, and
-  ``test_cases``). Raw InfoPO rows carry ``reward_model.{problem_description, ground_truth}``
-  and nest test_cases under ``extra_info.tools_kwargs`` -- extracted here.
+  ``reward_model.ground_truth`` (with ``problem_description``, ``ground_truth``
+  source, and ``test_cases``). Raw InfoPO rows carry
+  ``reward_model.{problem_description, ground_truth}`` and nest test_cases under
+  ``extra_info.tools_kwargs`` -- extracted here.
   """
   extra_info = row.get("extra_info", {}) or {}
   rm = row.get("reward_model", {}) or {}
@@ -62,7 +65,9 @@ def _resolve_gt(row) -> dict:
 
 
 def read_tasks(data_file: str, max_rows: Optional[int] = None) -> list[dict]:
-  """Load tasks from a parquet, normalized to the minimal payload. Index = row position."""
+  """Load tasks from a parquet, normalized to the minimal payload. Index = row
+  position.
+  """
   df = pd.read_parquet(os.path.expanduser(data_file))
   if max_rows is not None:
     df = df.iloc[:max_rows]
@@ -75,7 +80,9 @@ def read_tasks(data_file: str, max_rows: Optional[int] = None) -> list[dict]:
 
 
 def read_jsonl(path: str) -> list[dict]:
-  """Read a JSONL file into a list of dicts (empty list if the file does not exist)."""
+  """Read a JSONL file into a list of dicts (empty list if the file does not
+  exist).
+  """
   path = os.path.expanduser(path)
   if not os.path.exists(path):
     return []

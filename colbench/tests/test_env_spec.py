@@ -1,11 +1,14 @@
-"""CPU tests for the SPEC path: colbench.env_spec + the spec templates helpers (mocked sim).
+"""CPU tests for the SPEC path: colbench.env_spec + the spec templates helpers
+(mocked sim).
 
-Covers the leak invariant (GT source NEVER enters the spec sim prompt -- only the spec does),
-grading parity with the GT env, the spec-specific templates helpers
-(``sim_terminated``/``contains_code``/``extract_last_code``/``build_spec_sim_messages``), and the
-USER-DRIVEN termination state machine via an inline driver that mirrors the plan's loop -- so the
-contract is pinned before ``colbench_spec_agent`` / ``validate_colbench_spec`` implement it.
-Grading uses the in-process exec fallback.
+Covers the leak invariant (GT source NEVER enters the spec sim prompt -- only
+the spec does), grading parity with the GT env, the spec-specific templates
+helpers
+(``sim_terminated``/``contains_code``/``extract_last_code``/``build_spec_sim_messages``),
+and the USER-DRIVEN termination state machine via an inline driver that mirrors
+the plan's loop -- so the contract is pinned before ``colbench_spec_agent`` /
+``validate_colbench_spec`` implement it. Grading uses the in-process exec
+fallback.
 """
 
 import os
@@ -16,7 +19,10 @@ os.environ.pop("CODECONTEST_EXEC_URL", None)
 from colbench import templates  # pylint: disable=g-import-not-at-top,wrong-import-position
 from colbench.env_spec import ColBenchSpecUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
 
-GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
+GT = (
+    "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
+    "       return x - y\n"
+)
 WRONG = "def f(x, y):\n    return x + y\n"  # ignores the x<10 branch -> 0.5 pass-rate
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Write a function f(x, y) with some personalized behavior."
@@ -28,8 +34,14 @@ SPEC = {
         "communication_style": "brief",
     },
     "scenario": "Needs a small helper for a report.",
-    "requirements": "The user wants f(x,y): if x is at least 10 return x+y, otherwise x-y.",
-    "plot": "The user reveals the threshold of 10 only if the assistant asks about the cutoff.",
+    "requirements": (
+        "The user wants f(x,y): if x is at least 10 return x+y, otherwise "
+        "x-y."
+    ),
+    "plot": (
+        "The user reveals the threshold of 10 only if the assistant asks "
+        "about the cutoff."
+    ),
 }
 
 
@@ -139,7 +151,7 @@ def test_extract_last_code_none_when_no_code():
   )
 
 
-# ── sim code fidelity: detection, stripping, and rejection sampling ────────────
+# ── sim code fidelity: detection, stripping, and rejection sampling ───────────
 
 
 def test_sim_wrote_code_detects_fence():
@@ -212,11 +224,13 @@ def test_score_full_and_partial():
 
 
 def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
-  """Replicate the spec agent loop's termination state machine (the pinned contract).
+  """Replicate the spec agent loop's termination state machine (the pinned
+  contract).
 
-  ``colbench_spec_agent`` / ``validate_colbench_spec`` MUST mirror this: solver turn -> track
-  last code / count proposals -> turn cap -> code cap -> else sim reply -> [TERMINATE]. Grades
-  the last shown function; reward 0 (and terminated_by 'no_code') if none was ever shown.
+  ``colbench_spec_agent`` / ``validate_colbench_spec`` MUST mirror this: solver
+  turn -> track last code / count proposals -> turn cap -> code cap -> else sim
+  reply -> [TERMINATE]. Grades the last shown function; reward 0 (and
+  terminated_by 'no_code') if none was ever shown.
   """
   sim_dialogue = [{"role": "user", "content": env.problem_description}]
   last_code, code_proposals, terminated_by = "", 0, None
@@ -369,8 +383,9 @@ def test_grounded_prompt_has_gt_and_plot_not_requirements():
 
 
 def test_spec_mode_unchanged_when_not_grounded():
-  # Regression guard for the default path: grounded=False must still put NO GT in either message
-  # (pairs with test_spec_prompt_has_no_gt, which predates the flag).
+  # Regression guard for the default path: grounded=False must still put NO GT
+  # in either message (pairs with test_spec_prompt_has_no_gt, which predates the
+  # flag).
   backend, seen = _capturing_backend()
   e = _env(sim_backend=backend, grounded=False)
   e.generate_user_turn([{"role": "user", "content": PROBLEM}])

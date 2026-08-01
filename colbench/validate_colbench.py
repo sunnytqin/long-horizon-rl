@@ -1,25 +1,30 @@
-"""Standalone multi-turn validation / inspection harness for the ColBench solver.
+"""Standalone multi-turn validation / inspection harness for the ColBench
+solver.
 
-Runs the SAME solver<->frozen-simulator conversation as training on the validation/test
-set, but as an *offline* SGLang batch job with freely tunable inference hyper-parameters
-(temperature, number of turns, per-turn token budget, ...). The point is to manually examine
-what a trained checkpoint actually does, so a random sample of trajectories is dumped in
-human-readable "conversation" form to a JSON file.
+Runs the SAME solver<->frozen-simulator conversation as training on the
+validation/test set, but as an *offline* SGLang batch job with freely tunable
+inference hyper-parameters (temperature, number of turns, per-turn token budget,
+...). The point is to manually examine what a trained checkpoint actually does,
+so a random sample of trajectories is dumped in human-readable "conversation"
+form to a JSON file.
 
-The rollout logic is reused VERBATIM from the training path -- this harness drives the exact
-same env seams the agent loop (``colbench.colbench_agent.ColBenchAgentLoop``) drives:
+The rollout logic is reused VERBATIM from the training path -- this harness
+drives the exact same env seams the agent loop
+(``colbench.colbench_agent.ColBenchAgentLoop``) drives:
   - ``colbench.env.ColBenchUserSimEnv.is_answer``          -- did the solver submit this turn?
-  - ``colbench.env.ColBenchUserSimEnv.generate_user_turn`` -- the frozen sim's next reply
-    (HTTP to the sim server via OPENAI_BASE_URL / MULTITURN_MODEL_NAME); the hidden GT is
-    passed ONLY inside this call and never enters the solver's message list.
+  - ``colbench.env.ColBenchUserSimEnv.generate_user_turn`` -- the frozen sim's
+    next reply (HTTP to the sim server via OPENAI_BASE_URL /
+    MULTITURN_MODEL_NAME); the hidden GT is passed ONLY inside this call and
+    never enters the solver's message list.
   - ``colbench.env.ColBenchUserSimEnv.score``              -- fractional GT pass-rate reward.
 So prompts, marker/code extraction (``colbench.templates``), sim prompt, and grading
 (``colbench.reward``) are byte-identical to training.
 
-Uses SGLang's offline ``Engine`` for the SOLVER (same inference backend as the training
-rollout), so it runs in the very same SGLang container as training -- no vLLM dependency.
-The frozen user simulator is a SEPARATE SGLang OpenAI server (the entrypoint brings it up and
-exports OPENAI_BASE_URL), exactly as in training.
+Uses SGLang's offline ``Engine`` for the SOLVER (same inference backend as the
+training rollout), so it runs in the very same SGLang container as training --
+no vLLM dependency. The frozen user simulator is a SEPARATE SGLang OpenAI server
+(the entrypoint brings it up and exports OPENAI_BASE_URL), exactly as in
+training.
 
 The one intentional difference vs the RL loop (shared with
 codecontest/validate_codecontest.py): we re-render the full message list with
@@ -27,12 +32,14 @@ the chat template each turn (clean, inspectable conversations) instead of
 appending raw token ids. The model sees an equivalent prompt; there are no
 train-time masks to keep aligned here.
 
-Reward convention: the trajectory reward is the final submission's FRACTIONAL pass-rate in
-[0, 1] (mean per-case functional equivalence vs the hidden GT), matching training.
+Reward convention: the trajectory reward is the final submission's FRACTIONAL
+pass-rate in [0, 1] (mean per-case functional equivalence vs the hidden GT),
+matching training.
 
 Grading backend (identical semantics to training):
   - Sidecar sandbox: export CODECONTEST_EXEC_URL=http://host:8088   (preferred)
-  - In-process fallback (dev/smoke, no sidecar): export CODECONTEST_ALLOW_INPROCESS=1
+  - In-process fallback (dev/smoke, no sidecar): export
+    CODECONTEST_ALLOW_INPROCESS=1
 
 Example (inside the verl SGLang container, run from the repo root, sim server already up):
     export CODECONTEST_ALLOW_INPROCESS=1                 # or CODECONTEST_EXEC_URL=...
@@ -67,10 +74,12 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 CTX_MARGIN = 8
 
 
-# ----------------------------------------------------------------------------- #
-# Per-trajectory state. One of these per (problem, sample) pair; it carries the growing
-# solver conversation, the separate GT-free sim dialogue, its env, and token bookkeeping.
-# ----------------------------------------------------------------------------- #
+# -----------------------------------------------------------------------------
+# # Per-trajectory state. One of these per (problem, sample) pair; it carries
+# the growing solver conversation, the separate GT-free sim dialogue, its env,
+# and token bookkeeping.
+# -----------------------------------------------------------------------------
+# #
 class Trajectory:
 
   def __init__(
@@ -153,8 +162,8 @@ class Trajectory:
 def build_trajectories(val_df, n_samples, args, sim_backend=None):
   """Expand each validation row into ``n_samples`` independent trajectories.
 
-  ``sim_backend`` is injectable (default None -> the real HTTP frozen-sim backend); CPU
-  tests pass a stub so no server / openai SDK is needed.
+  ``sim_backend`` is injectable (default None -> the real HTTP frozen-sim
+  backend); CPU tests pass a stub so no server / openai SDK is needed.
   """
   trajs = []
   for row_index, row in val_df.iterrows():
@@ -202,9 +211,9 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
 def eval_tagged_path(
     base_out, turns, n_samples, temperature, sim_reject_max_tries=0
 ):
-  """Insert a '_turns<N>_n<K>_t<temp>[_reject<R>]' tag before the extension so each eval
-  config gets its own self-documenting file (and can never clobber a different
-  config).
+  """Insert a '_turns<N>_n<K>_t<temp>[_reject<R>]' tag before the extension so
+  each eval config gets its own self-documenting file (and can never clobber a
+  different config).
 
   ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced to 1), so
   the tag faithfully records what was run. A '_reject<R>' suffix is added ONLY when
@@ -223,7 +232,8 @@ def eval_tagged_path(
 
 
 def _solver_template_kwargs():
-  """Resolve apply_chat_template kwargs for the SOLVER from SOLVER_ENABLE_THINKING.
+  """Resolve apply_chat_template kwargs for the SOLVER from
+  SOLVER_ENABLE_THINKING.
 
   The solver-side mirror of env._sim_extra_body, and the eval counterpart of
   training's data.apply_chat_template_kwargs (set from the same env by
@@ -257,17 +267,20 @@ def run_eval(
 ):
   """Run the full multi-turn eval at a single temperature and dump one JSON.
 
-  The (expensive) SGLang engine is loaded once by the caller and shared across every
-  temperature; only the per-request sampling params and the fresh trajectory state differ
-  between calls. ``n_samples`` is the (possibly temperature-adjusted) number of trajectories
-  per problem -- greedy decoding (temperature 0) is forced to 1 sample.
+  The (expensive) SGLang engine is loaded once by the caller and shared across
+  every temperature; only the per-request sampling params and the fresh
+  trajectory state differ between calls. ``n_samples`` is the (possibly
+  temperature-adjusted) number of trajectories per problem -- greedy decoding
+  (temperature 0) is forced to 1 sample.
 
-  ``llm`` needs a ``.generate(prompt=[...], sampling_params=[...])`` method returning, per
-  request, a dict with ``"text"`` and ``"meta_info"["completion_tokens"]`` -- i.e. an
-  ``sgl.Engine`` (or a test stub). ``sim_backend`` is forwarded to each env (None = real).
+  ``llm`` needs a ``.generate(prompt=[...], sampling_params=[...])`` method
+  returning, per request, a dict with ``"text"`` and
+  ``"meta_info"["completion_tokens"]`` -- i.e. an ``sgl.Engine`` (or a test
+  stub). ``sim_backend`` is forwarded to each env (None = real).
   """
-  # SGLang sampling params (dict, applied to every request in a batch). Note the name is
-  # ``max_new_tokens`` here, and top_k=-1 means "use the whole vocabulary".
+  # SGLang sampling params (dict, applied to every request in a batch). Note the
+  # name is ``max_new_tokens`` here, and top_k=-1 means "use the whole
+  # vocabulary".
   sampling_params = {
       "temperature": temperature,
       "top_p": args.top_p,
@@ -285,9 +298,9 @@ def run_eval(
   solver_template_kwargs = _solver_template_kwargs()
 
   t0 = time.time()
-  # ---- multi-turn loop: every turn generates for ALL still-active trajectories as one
-  #      SGLang batch, then grades / advances the sim in parallel. Mirrors the per-turn
-  #      structure of ColBenchAgentLoop.run. ----
+  # ---- multi-turn loop: every turn generates for ALL still-active trajectories
+  # as one SGLang batch, then grades / advances the sim in parallel. Mirrors the
+  # per-turn structure of ColBenchAgentLoop.run. ----
   for turn in range(args.max_assistant_turns):
     active = [t for t in trajs if not t.done]
     if not active:
@@ -336,7 +349,8 @@ def run_eval(
         if sp["max_new_tokens"] < args.max_new_tokens_per_turn
     )
     print(
-        f"[validate] t={temperature:g} turn {turn}: generating for {len(kept)} active trajectories"
+        f"[validate] t={temperature:g} turn {turn}: generating for {len(kept)} "
+        f"active trajectories"
         f" ({clamped} with context-clamped max_new_tokens)"
     )
     outputs = llm.generate(prompt=prompts, sampling_params=per_req_params)
@@ -370,7 +384,8 @@ def run_eval(
       else:
         pending.append(t)
 
-    # ---- Grade every answered trajectory in parallel (blocking exec sidecar). ----
+    # ---- Grade every answered trajectory in parallel (blocking exec sidecar).
+    # ----
     to_grade = [t for t in kept if getattr(t, "_grade_pending", False)]
 
     def _grade(t):
@@ -383,10 +398,10 @@ def run_eval(
       t.num_test_cases = int(result.get("n", 0))
       t.done = True
 
-    # ---- Advance the frozen simulator for each still-open trajectory (blocking HTTP,
-    #      in parallel). With --sim_reject_max_tries>0 we REJECTION-SAMPLE the sim reply
-    #      (resample until it contains no leaked code); otherwise it's the single-shot
-    #      turn byte-identical to training via env.generate_user_turn.
+    # ---- Advance the frozen simulator for each still-open trajectory (blocking
+    # HTTP, in parallel). With --sim_reject_max_tries>0 we REJECTION-SAMPLE the
+    # sim reply (resample until it contains no leaked code); otherwise it's the
+    # single-shot turn byte-identical to training via env.generate_user_turn.
     def _sim(t):
       if reject:
         return t, t.env.generate_user_turn_checked(
@@ -438,11 +453,12 @@ def run_eval(
   pool.shutdown(wait=True)
   elapsed = time.time() - t0
 
-  # ---- aggregate metrics ----
-  # Simulation failures (sim never produced a code-free reply within the rejection budget)
-  # are a THIRD outcome: they are excluded from the pass-rate denominator so a bad frozen sim
-  # is never scored as a solver failure. With rejection off there are none, so `valid` ==
-  # `trajs` and every metric below is byte-identical to the pre-rejection behavior.
+  # ---- aggregate metrics ---- Simulation failures (sim never produced a
+  # code-free reply within the rejection budget) are a THIRD outcome: they are
+  # excluded from the pass-rate denominator so a bad frozen sim is never scored
+  # as a solver failure. With rejection off there are none, so `valid` ==
+  # `trajs` and every metric below is byte-identical to the pre-rejection
+  # behavior.
   n_traj = len(trajs)
   valid = [t for t in trajs if not t.sim_failed]
   n_valid = len(valid)
@@ -543,8 +559,9 @@ def run_eval(
   print(f"[validate] summary (t={temperature:g}):")
   print(json.dumps(summary, indent=2))
 
-  # ---- Save a RANDOM sample of full conversations (storage-bounded); metrics above are
-  #      over ALL trajectories. Seeded so the selection is reproducible. ----
+  # ---- Save a RANDOM sample of full conversations (storage-bounded); metrics
+  # above are over ALL trajectories. Seeded so the selection is reproducible.
+  # ----
   rng = random.Random(args.seed)
   if args.max_saved_convos is not None and 0 <= args.max_saved_convos < n_traj:
     saved = rng.sample(trajs, args.max_saved_convos)
@@ -570,7 +587,9 @@ def run_eval(
 
 
 def _load_engine(args, max_model_len):
-  """Load the SGLang solver engine (imported lazily so CPU tests never need sglang)."""
+  """Load the SGLang solver engine (imported lazily so CPU tests never need
+  sglang).
+  """
   import sglang as sgl
   from transformers import AutoTokenizer
 
@@ -625,7 +644,8 @@ def main():
       "--max_saved_convos",
       type=int,
       default=1000,
-      help="Cap on how many (randomly sampled) full conversations are written to "
+      help="Cap on how many (randomly sampled) full conversations are written "
+      "to "
       "JSON (each carries its per-turn sim_reject_events audit). Metrics are "
       "still computed over ALL trajectories. <0 = save all.",
   )
@@ -638,7 +658,8 @@ def main():
       "--sim_reject_max_tries",
       type=int,
       default=0,
-      help="Max sim resamples per user turn (0 disables rejection sampling). On "
+      help="Max sim resamples per user turn (0 disables rejection sampling). "
+      "On "
       "exhaustion the conversation is marked a 'simulation failure' (a third "
       "outcome, excluded from the pass-rate denominator).",
   )
@@ -646,15 +667,19 @@ def main():
       "--sim_reject_ngram_n",
       type=int,
       default=0,
-      help="Detector (D): reject if a symbol-aware n-gram of this length is shared "
-      "with the hidden GT source (and contains >= --sim_reject_min_ops operators). "
-      "0 (default) DISABLES (D) -- held as a future consideration; A/B still run.",
+      help="Detector (D): reject if a symbol-aware n-gram of this length is "
+      "shared "
+      "with the hidden GT source (and contains >= --sim_reject_min_ops "
+      "operators). "
+      "0 (default) DISABLES (D) -- held as a future consideration; A/B "
+      "still run.",
   )
   ap.add_argument(
       "--sim_reject_min_ops",
       type=int,
       default=2,
-      help="Detector (D): min code operators required within the matched n-gram, so "
+      help="Detector (D): min code operators required within the matched n-gram, "
+      "so "
       "it fires on copied EXPRESSIONS, not prose that shares identifiers.",
   )
 
@@ -664,14 +689,18 @@ def main():
       "--temperature",
       type=float,
       default=0.6,
-      help="Single sampling temperature (used only when --temperatures is not given).",
+      help=(
+          "Single sampling temperature (used only when --temperatures is "
+          "not given)."
+      ),
   )
   ap.add_argument(
       "--temperatures",
       type=float,
       nargs="+",
       default=None,
-      help="Sweep several temperatures in ONE submission (engine loaded once). Each "
+      help="Sweep several temperatures in ONE submission (engine loaded once). "
+      "Each "
       "writes its own JSON tagged '<out_stem>_turns<N>_n<K>_t<temp>.json'. "
       "Overrides --temperature. Example: --temperatures 0.0 0.6",
   )
@@ -694,7 +723,8 @@ def main():
       "--max_response_length",
       type=int,
       default=14336,
-      help="Cumulative response-token budget (solver turns + injected sim replies) "
+      help="Cumulative response-token budget (solver turns + injected sim "
+      "replies) "
       "before overflow stop. Default 14336 matches MAX_RESPONSE_LENGTH in "
       "run_colbench_grpo.sh.",
   )
@@ -702,7 +732,10 @@ def main():
       "--max_prompt_length",
       type=int,
       default=2048,
-      help="Initial-prompt cap; with --max_response_length sets the engine context.",
+      help=(
+          "Initial-prompt cap; with --max_response_length sets the engine "
+          "context."
+      ),
   )
   ap.add_argument(
       "--reward_time_limit",
@@ -721,7 +754,10 @@ def main():
       "--gpu_memory_utilization",
       type=float,
       default=0.85,
-      help="SGLang mem_fraction_static (fraction of GPU mem for weights+KV cache).",
+      help=(
+          "SGLang mem_fraction_static (fraction of GPU mem for weights+KV "
+          "cache)."
+      ),
   )
   ap.add_argument("--dtype", default="bfloat16")
   ap.add_argument("--trust_remote_code", action="store_true")
@@ -729,7 +765,10 @@ def main():
       "--grade_concurrency",
       type=int,
       default=int(os.getenv("CODECONTEST_EXEC_CONCURRENCY", "32")),
-      help="Threads for the blocking env calls (grading + sim HTTP turns) per turn.",
+      help=(
+          "Threads for the blocking env calls (grading + sim HTTP turns) "
+          "per turn."
+      ),
   )
   args = ap.parse_args()
 
@@ -738,13 +777,17 @@ def main():
       and os.environ.get("CODECONTEST_ALLOW_INPROCESS") != "1"
   ):
     raise SystemExit(
-        "No code-exec backend configured. Set CODECONTEST_EXEC_URL=http://host:8088 (sidecar) "
-        "or CODECONTEST_ALLOW_INPROCESS=1 (in-process dev/smoke) before running."
+        "No code-exec backend configured. Set CODECONTEST_EXEC_URL=http://host:8088 "
+        "(sidecar) "
+        "or CODECONTEST_ALLOW_INPROCESS=1 (in-process dev/smoke) before "
+        "running."
     )
   if not os.environ.get("OPENAI_BASE_URL"):
     print(
-        "[validate] WARNING: OPENAI_BASE_URL is unset; the frozen sim server must be "
-        "reachable for generate_user_turn (multi-turn eval will otherwise degrade to "
+        "[validate] WARNING: OPENAI_BASE_URL is unset; the frozen sim server "
+        "must be "
+        "reachable for generate_user_turn (multi-turn eval will otherwise "
+        "degrade to "
         "'No response.' replies)."
     )
 
@@ -769,7 +812,10 @@ def main():
   _seen = set()
   temps = [t for t in temps if not (t in _seen or _seen.add(t))]
   print(
-      f"[validate] temperature sweep: {temps} (engine loaded once, reused across all)"
+      (
+          f"[validate] temperature sweep: {temps} (engine loaded once, reused "
+          f"across all)"
+      )
   )
 
   results_index = []

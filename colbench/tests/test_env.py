@@ -1,4 +1,5 @@
-"""CPU tests for colbench.env.ColBenchUserSimEnv (mocked simulator; no GPU, no server).
+"""CPU tests for colbench.env.ColBenchUserSimEnv (mocked simulator; no GPU, no
+server).
 
 Covers answer extraction / termination, the leak invariant (GT source never
 enters the solver's message list across a full mocked-sim episode), grading, and
@@ -17,13 +18,17 @@ from colbench import env as env_mod  # pylint: disable=g-import-not-at-top,wrong
 from colbench import templates  # pylint: disable=g-import-not-at-top,wrong-import-position
 from colbench.env import ColBenchUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
 
-GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
+GT = (
+    "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
+    "       return x - y\n"
+)
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Write a function f(x, y) with some personalized behavior."
 
 
 def _sim_stub(reply="The threshold is 10 and below it we subtract."):
-  """A sim backend that records the prompt it received and returns a fixed short reply.
+  """A sim backend that records the prompt it received and returns a fixed short
+  reply.
 
   Crucially the reply contains NO ground-truth source, so if the GT ever shows
   up in a solver-visible message it must have leaked through some other path.
@@ -84,7 +89,10 @@ def test_final_turn_code_like_fallback():
 
 def test_think_block_stripped_before_marker():
   e, _ = _env()
-  text = "<think>the user probably wants a sum</think>I WANT TO ANSWER: def f(x, y): return x + y"
+  text = (
+      "<think>the user probably wants a sum</think>I WANT TO ANSWER: "
+      "def f(x, y): return x + y"
+  )
   has, ans = e.is_answer(text, episode_done=False)
   assert has is True
   assert "<think>" not in ans and "def f" in ans
@@ -110,9 +118,9 @@ def test_user_turn_capped_and_gt_only_in_sim_prompt():
 
 
 def test_sim_char_limit_env_overrides_the_slice(monkeypatch):
-  """SIM_CHAR_LIMIT=0 disables the post-hoc slice, aligning the GT arm's user-turn budget
-  with the SPEC arm's (which has no slice at all and is bounded only by
-  SIM_MAX_TOKENS).
+  """SIM_CHAR_LIMIT=0 disables the post-hoc slice, aligning the GT arm's
+  user-turn budget with the SPEC arm's (which has no slice at all and is bounded
+  only by SIM_MAX_TOKENS).
 
   Without this the GT user delivers <=400 chars/turn while the spec user
   delivers ~700-1000, so a GT-vs-spec result would confound environment quality
@@ -179,7 +187,8 @@ def test_marker_answer_is_graded_as_code_by_the_spec_extractor():
 
 
 def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
-  """Only bullet 3 + the trailing paragraph may diverge from the sweet_rl original.
+  """Only bullet 3 + the trailing paragraph may diverge from the sweet_rl
+  original.
 
   COLBENCH_AGENT_SYSTEM_PROMPT is no longer derived from _AGENT_PROMPT_RAW by
   string surgery, so nothing else stops the two drifting apart. The unchanged
@@ -230,7 +239,8 @@ def test_final_answer_accepts_both_submit_protocols(turn, expected_def):
 @pytest.mark.parametrize(
     "turn",
     [
-        # A bare `def` in PROSE must not force-submit -- this is the one-shot arm.
+        # A bare `def` in PROSE must not force-submit -- this is the one-shot
+        # arm.
         "Sure -- something like def parse(rows), is that right?",
         # A fenced block with no function definition is not a submission either.
         "Like this:\n```python\nprint(total)\n```\nDoes that match?",
@@ -243,7 +253,9 @@ def test_final_answer_does_not_submit_mid_clarification(turn):
 
 
 def test_last_turn_fallback_still_submits():
-  """Ran out of turns without a fence or a marker -> the last attempt is still graded."""
+  """Ran out of turns without a fence or a marker -> the last attempt is still
+  graded.
+  """
   has_answer, ans = templates.final_answer(
       "def f(x):\n    return x", episode_done=True
   )
@@ -251,7 +263,8 @@ def test_last_turn_fallback_still_submits():
 
 
 def test_fence_wins_over_a_trailing_marker():
-  """A FENCE, when present, beats the marker -- stripping unconditionally would regress.
+  """A FENCE, when present, beats the marker -- stripping unconditionally would
+  regress.
 
   "```python...``` I WANT TO ANSWER: that's it" splits at the marker to the trailing prose and
   discards the function. The marker strip is therefore gated on there being no fence at all.
@@ -277,7 +290,8 @@ def test_fence_wins_over_a_trailing_marker():
 
 
 def test_leak_invariant_full_episode():
-  """Drive a full mocked episode and assert the GT never enters solver-visible messages.
+  """Drive a full mocked episode and assert the GT never enters solver-visible
+  messages.
 
   Mirrors colbench_agent's message handling: the solver sees [system, problem,
   then alternating assistant/user-reply]; the sim's dialogue view is separate.
@@ -360,7 +374,10 @@ def test_detect_python_fence():
 def test_detect_ngram_expression_leak():
   # An inline formula copied from the GT (operator-dense) -> caught by (D).
   gt = "def f(a, b, c):\n    return (a * b) + (c * b) - (a * c) + (b * b) - a\n"
-  reply = "The result is computed as (a * b) + (c * b) - (a * c) + (b * b) - a exactly."
+  reply = (
+      "The result is computed as (a * b) + (c * b) - (a * c) + (b * b) "
+      "- a exactly."
+  )
   assert templates.detect_code_leak(reply, gt) == "ngram"
 
 
@@ -373,7 +390,10 @@ def test_detect_prose_spec_not_flagged():
       "    if platform == 'Linux' and version in ['10.0', '10.1']:\n"
       "        return True\n"
   )
-  reply = "For Linux with versions 10.0 or 10.1 the playback is paused, otherwise it is not."
+  reply = (
+      "For Linux with versions 10.0 or 10.1 the playback is paused, otherwise "
+      "it is not."
+  )
   assert templates.detect_code_leak(reply, gt) is None
 
 

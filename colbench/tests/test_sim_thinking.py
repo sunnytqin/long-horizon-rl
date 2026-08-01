@@ -6,14 +6,15 @@ Confirmed against the running SGLang sim on 2026-07-30:
     top-level    enable_thinking: false         -> reply opens `<think>`   ACCEPTED + IGNORED
     chat_template_kwargs: {enable_thinking:...} -> "Four."                 works
 
-The nesting is required because a hybrid Qwen3 disables reasoning in its JINJA TEMPLATE (which
-pre-fills an empty `<think></think>`), so the flag must reach the template renderer -- not the
-sampler. Two things follow, and both are pinned here:
+The nesting is required because a hybrid Qwen3 disables reasoning in its JINJA
+TEMPLATE (which pre-fills an empty `<think></think>`), so the flag must reach
+the template renderer -- not the sampler. Two things follow, and both are pinned
+here:
 
   1. The HTTP paths (SGLang / vLLM `extra_body`) MUST nest it.
-  2. The TOKENIZER paths (`tokenizer.apply_chat_template(**kwargs)`) must NOT -- there
-     `enable_thinking` is a direct kwarg, and wrapping it would re-break thinking suppression in
-     eval while looking like a fix.
+  2. The TOKENIZER paths (`tokenizer.apply_chat_template(**kwargs)`) must NOT --
+     there `enable_thinking` is a direct kwarg, and wrapping it would re-break
+     thinking suppression in eval while looking like a fix.
 """
 
 import pytest
@@ -22,9 +23,11 @@ from colbench.env import _sim_extra_body
 from colbench.templates import strip_think
 
 
-# ── 1. HTTP path: the flag must be NESTED ────────────────────────────────────────────────────
+# ── 1. HTTP path: the flag must be NESTED ─────────────────────────────────────
 def _sim_extra_body_payload(monkeypatch, value):
-  """Rebuild the extra_body exactly as openai_sim_backend does, without a server."""
+  """Rebuild the extra_body exactly as openai_sim_backend does, without a
+  server.
+  """
   monkeypatch.setenv("SIM_ENABLE_THINKING", value)
   from colbench.env import _sim_sampling
 
@@ -54,7 +57,9 @@ def test_unset_sends_no_thinking_kwarg_at_all(monkeypatch):
 
 
 def test_real_backend_payload_nests_it(monkeypatch):
-  """End-to-end through openai_sim_backend: inspect the kwargs actually sent to the SDK."""
+  """End-to-end through openai_sim_backend: inspect the kwargs actually sent to
+  the SDK.
+  """
   import sys
   import types
 
@@ -122,7 +127,8 @@ def test_real_backend_payload_nests_it(monkeypatch):
     ],
 )
 def test_tokenizer_kwargs_stay_flat(monkeypatch, mod_name, fn_name):
-  """These feed tokenizer.apply_chat_template(**kwargs), which takes enable_thinking DIRECTLY.
+  """These feed tokenizer.apply_chat_template(**kwargs), which takes
+  enable_thinking DIRECTLY.
 
   Wrapping them in chat_template_kwargs would pass the tokenizer an unknown
   argument and silently stop suppressing thinking in eval -- the same bug, newly
@@ -138,7 +144,7 @@ def test_tokenizer_kwargs_stay_flat(monkeypatch, mod_name, fn_name):
   assert fn() == {}, "unset must send nothing (safe for non-hybrid models)"
 
 
-# ── 3. strip_think must not fail open on a TRUNCATED block ───────────────────────────────────
+# ── 3. strip_think must not fail open on a TRUNCATED block ────────────────────
 def test_strip_think_closed_block():
   assert strip_think("<think>reasoning</think>Four.") == "Four."
   assert strip_think("no reasoning here") == "no reasoning here"
@@ -146,12 +152,16 @@ def test_strip_think_closed_block():
 
 
 def test_strip_think_truncated_block_is_removed():
-  """SIM_MAX_TOKENS=256 cannot fit a hybrid Qwen3's reasoning, so `</think>` never arrives.
+  """SIM_MAX_TOKENS=256 cannot fit a hybrid Qwen3's reasoning, so `</think>`
+  never arrives.
 
   Before the fix the regex required a closing tag, so the raw monologue was
   injected into the conversation as the user's turn.
   """
-  truncated = "<think>Okay, the user is asking about a CSV parser. Let me consider whether they"
+  truncated = (
+      "<think>Okay, the user is asking about a CSV parser. Let me consider "
+      "whether they"
+  )
   assert (
       strip_think(truncated) == ""
   ), "unterminated reasoning must not reach the dialogue"

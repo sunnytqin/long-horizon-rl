@@ -1,15 +1,18 @@
-"""Phase-0, Deliverable 1: author one natural-language spec per ColBench task, OFFLINE.
+"""Phase-0, Deliverable 1: author one natural-language spec per ColBench task,
+OFFLINE.
 
-For each task the spec author sees the public (under-specified) problem AND the hidden GT code,
-and writes a persona + scenario + complete requirements spec (see ``spec_templates``). The
-author is any OpenAI-compatible endpoint:
+For each task the spec author sees the public (under-specified) problem AND the
+hidden GT code, and writes a persona + scenario + complete requirements spec
+(see ``spec_templates``). The author is any OpenAI-compatible endpoint:
 
   * ``--backend strong``   -- an external teacher model (faithfulness ceiling).
-  * ``--backend selfplay`` -- the trained model's FROZEN BASE checkpoint (no external model).
+  * ``--backend selfplay`` -- the trained model's FROZEN BASE checkpoint (no
+    external model).
 
-``--backend`` is a label recorded on every row and, by default, embedded in the output path so
-the strong / self-gen caches never collide. Generation is concurrent and RESUMABLE: rows
-already present in the output JSONL are skipped, so re-running continues where it left off.
+``--backend`` is a label recorded on every row and, by default, embedded in the
+output path so the strong / self-gen caches never collide. Generation is
+concurrent and RESUMABLE: rows already present in the output JSONL are skipped,
+so re-running continues where it left off.
 
 Example (self-play against a served frozen base):
     python -m colbench.selfplay.generate_specs \
@@ -37,12 +40,14 @@ from colbench.selfplay.llm_client import ChatEndpoint
 def _author_one(
     endpoint: ChatEndpoint, task: dict, backend_label: str, mode: str = "static"
 ) -> dict:
-  """Author a spec for one task; returns a JSONL record (always, even on failure).
+  """Author a spec for one task; returns a JSONL record (always, even on
+  failure).
 
-  ``mode="static"``  -> persona/scenario/requirements (the complete-requirements spec).
-  ``mode="plot"`` -> persona/scenario/requirements (the full intent the simulator must convey)
-  plus ``plot`` (a tailored, high-level direction for how this conversation naturally unfolds;
-  the simulator improvises the actual turns from it -- it is NOT a turn-by-turn script).
+  ``mode="static"``  -> persona/scenario/requirements (the complete-requirements
+  spec). ``mode="plot"`` -> persona/scenario/requirements (the full intent the
+  simulator must convey) plus ``plot`` (a tailored, high-level direction for how
+  this conversation naturally unfolds; the simulator improvises the actual turns
+  from it -- it is NOT a turn-by-turn script).
   """
   rec = {
       "index": task["index"],
@@ -137,13 +142,19 @@ def main():
   ap.add_argument(
       "--gen_api_key_file",
       default=os.environ.get("GEN_API_KEY_FILE", ""),
-      help="Read the API key from this file (keeps it out of argv/logs). Overrides --gen_api_key.",
+      help=(
+          "Read the API key from this file (keeps it out of argv/logs). Overrides "
+          "--gen_api_key."
+      ),
   )
   ap.add_argument(
       "--gen_vendor",
       choices=["vllm", "openai"],
       default=os.environ.get("GEN_VENDOR", "vllm"),
-      help="'vllm' local server (top_k/min_p extras) or 'openai' vanilla API (no extras).",
+      help=(
+          "'vllm' local server (top_k/min_p extras) or 'openai' vanilla API "
+          "(no extras)."
+      ),
   )
   ap.add_argument(
       "--temperature",
@@ -179,7 +190,8 @@ def main():
   done = existing_indices(out)
   todo = [t for t in tasks if t["index"] not in done]
   print(
-      f"[generate_specs] mode={args.mode} {len(tasks)} tasks, {len(done)} already done, "
+      f"[generate_specs] mode={args.mode} {len(tasks)} tasks, {len(done)} "
+      f"already done, "
       f"{len(todo)} to author -> {out}"
   )
   if not todo:
@@ -221,12 +233,18 @@ def main():
         buf = []
       if n_done % args.flush_every == 0:
         print(
-            f"[generate_specs] {n_done}/{len(todo)} authored ({n_ok} parsed ok) in {time.time() - t0:.0f}s"
+            (
+                f"[generate_specs] {n_done}/{len(todo)} authored ({n_ok} parsed "
+                f"ok) in {time.time() - t0:.0f}s"
+            )
         )
   if buf:
     append_jsonl(out, buf)
   print(
-      f"[generate_specs] DONE {n_done} authored, {n_ok} parsed ok, {time.time() - t0:.0f}s -> {out}"
+      (
+          f"[generate_specs] DONE {n_done} authored, {n_ok} parsed ok, {time.time() - t0:.0f}s "
+          f"-> {out}"
+      )
   )
 
 

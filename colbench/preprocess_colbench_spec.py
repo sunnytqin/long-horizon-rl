@@ -1,21 +1,25 @@
 """Preprocess the SPEC-path ColBench dataset into our VERL RL schema (Phase 1).
 
-Sibling of ``colbench.preprocess_colbench`` for the spec setting. Joins the Phase-0 authored
-specs (``.../colbench_specs/specs/train.selfplay.plot.jsonl``; ``index`` = row position in the
-raw InfoPO parquet) back to the raw parquet to recover the GT code + ``test_cases`` for grading,
-and attaches the spec to each row's ``extra_info`` so the spec sim can condition on it.
+Sibling of ``colbench.preprocess_colbench`` for the spec setting. Joins the
+Phase-0 authored specs (``.../colbench_specs/specs/train.selfplay.plot.jsonl``;
+``index`` = row position in the raw InfoPO parquet) back to the raw parquet to
+recover the GT code + ``test_cases`` for grading, and attaches the spec to each
+row's ``extra_info`` so the spec sim can condition on it.
 
 Each output row carries:
-  - ``reward_model.ground_truth`` and ``extra_info.ground_truth`` -- {problem, GT source,
-    test_cases}, the UNCHANGED grading payload (same as the GT preprocess), and
-  - ``extra_info.spec = {persona, scenario, requirements, plot}`` -- read by the spec agent loop /
-    spec sim env. The GT code is NEVER placed in ``spec``.
-  - ``extra_info.agent_name = "colbench_spec_agent"`` and the spec solver system prompt
-    (``COLBENCH_SPEC_AGENT_SYSTEM_PROMPT``, no "I WANT TO ANSWER:" marker).
+  - ``reward_model.ground_truth`` and ``extra_info.ground_truth`` -- {problem,
+    GT source, test_cases}, the UNCHANGED grading payload (same as the GT
+    preprocess), and
+  - ``extra_info.spec = {persona, scenario, requirements, plot}`` -- read by the
+    spec agent loop / spec sim env. The GT code is NEVER placed in ``spec``.
+  - ``extra_info.agent_name = "colbench_spec_agent"`` and the spec solver system
+    prompt (``COLBENCH_SPEC_AGENT_SYSTEM_PROMPT``, no "I WANT TO ANSWER:"
+    marker).
 
-Only rows that have a usable spec (parsed ``ok`` with non-empty requirements + plot) are emitted;
-this is the ~1k spec set that is the eval set for bringing Phase 1 up (train/val split for RL is
-deferred). Reuses ``selfplay.dataio`` for the raw-parquet load + GT resolution + jsonl reader.
+Only rows that have a usable spec (parsed ``ok`` with non-empty requirements +
+plot) are emitted; this is the ~1k spec set that is the eval set for bringing
+Phase 1 up (train/val split for RL is deferred). Reuses ``selfplay.dataio`` for
+the raw-parquet load + GT resolution + jsonl reader.
 
 Usage:
     python colbench/preprocess_colbench_spec.py \
@@ -36,7 +40,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import datasets
 
 from colbench.selfplay import dataio
-from colbench.templates import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT, build_initial_user_message
+from colbench.templates import (
+    COLBENCH_SPEC_AGENT_SYSTEM_PROMPT,
+    build_initial_user_message,
+)
 
 DATA_SOURCE = (
     "colbench_spec_local"  # routes nowhere special; reward comes from the loop
@@ -46,7 +53,8 @@ _SPEC_KEYS = ("persona", "scenario", "requirements", "plot")
 
 
 def _usable(spec_row: dict) -> bool:
-  """A spec row is usable iff it parsed ok and has non-empty requirements + plot.
+  """A spec row is usable iff it parsed ok and has non-empty requirements +
+  plot.
 
   Guards against the ~3/1000 rows that failed to parse (empty spec) and any row
   missing the two fields the sim actually needs to behave (the substance + the
@@ -60,7 +68,9 @@ def _usable(spec_row: dict) -> bool:
 
 
 def build_rows(raw_parquet: str, specs_jsonl: str, split: str) -> list[dict]:
-  """Join specs (by ``index``) to the raw parquet's resolved GT and build VERL-schema rows."""
+  """Join specs (by ``index``) to the raw parquet's resolved GT and build
+  VERL-schema rows.
+  """
   tasks = dataio.read_tasks(
       raw_parquet
   )  # tasks[i]["index"] == i (raw row position)
@@ -108,7 +118,8 @@ def build_rows(raw_parquet: str, specs_jsonl: str, split: str) -> list[dict]:
     )
   print(
       f"[preprocess_spec] {len(rows)} usable rows "
-      f"(skipped {skipped_unusable} unusable, {skipped_oob} out-of-range) from {len(specs)} specs"
+      f"(skipped {skipped_unusable} unusable, {skipped_oob} out-of-range) "
+      f"from {len(specs)} specs"
   )
   return rows
 
@@ -120,12 +131,18 @@ def main():
   ap.add_argument(
       "--raw_parquet",
       default="InfoPO/data/colbench_code/train.parquet",
-      help="Raw InfoPO parquet the specs' `index` points into (GT source + test_cases).",
+      help=(
+          "Raw InfoPO parquet the specs' `index` points into (GT source + "
+          "test_cases)."
+      ),
   )
   ap.add_argument(
       "--specs_jsonl",
       required=True,
-      help="Phase-0 specs JSONL (e.g. train.selfplay.plot.jsonl or the cond30 subset).",
+      help=(
+          "Phase-0 specs JSONL (e.g. train.selfplay.plot.jsonl or the cond30 "
+          "subset)."
+      ),
   )
   ap.add_argument(
       "--out", required=True, help="Output parquet path (VERL schema)."

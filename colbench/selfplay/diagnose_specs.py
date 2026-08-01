@@ -1,14 +1,16 @@
 """Phase-0, Deliverable 2: the full-spec solve-rate diagnostic.
 
-Hand a solver the ENTIRE authored spec in a SINGLE turn (no clarification dialogue), extract
-the code, and grade it against the UNCHANGED GT ``test_cases`` via the existing exec sidecar
-(``colbench.reward.grade``). Run it on one or more spec files (e.g. strong-gen and self-gen)
-and it prints a solve rate per file -- the ceiling the Phase-1 dialogue rollout could reach.
+Hand a solver the ENTIRE authored spec in a SINGLE turn (no clarification
+dialogue), extract the code, and grade it against the UNCHANGED GT
+``test_cases`` via the existing exec sidecar (``colbench.reward.grade``). Run it
+on one or more spec files (e.g. strong-gen and self-gen) and it prints a solve
+rate per file -- the ceiling the Phase-1 dialogue rollout could reach.
 
 Interpretation: a low self-gen number that TRACKS a low strong-gen number => the
-solver/task is the bottleneck (the spec is fine); a self-gen number well BELOW
-strong-gen => self-authored spec quality is the bottleneck. This is a
-diagnostic, not a filter: nothing is dropped.
+                solver/task is the bottleneck (the spec is fine); a self-gen
+                number well BELOW strong-gen => self-authored spec quality is
+                the bottleneck. This is a diagnostic, not a filter: nothing is
+                dropped.
 
 Example:
     python -m colbench.selfplay.diagnose_specs \
@@ -38,7 +40,8 @@ from colbench.selfplay.llm_client import ChatEndpoint
 def _solve_and_grade(
     endpoint: ChatEndpoint, task: dict, spec: dict, reward_time_limit: float
 ) -> dict:
-  """One sample: the authored ``requirements`` -> solver code -> grade against GT test_cases.
+  """One sample: the authored ``requirements`` -> solver code -> grade against
+  GT test_cases.
 
   This is the full-spec faithfulness check: can a solver reconstruct GT behavior
   from the authored requirements alone. (The plot only shapes the Phase-1
@@ -103,7 +106,8 @@ def diagnose_specs_file(
     reward_time_limit: float,
     concurrency: int,
 ) -> dict:
-  """Run the requirements full-spec diagnostic for one spec file. Returns {label, metrics,
+  """Run the requirements full-spec diagnostic for one spec file. Returns
+  {label, metrics,
   rows}. Specs with no ``requirements`` text are skipped (counted)."""
   specs = read_jsonl(specs_path)
   backend = (
@@ -232,7 +236,8 @@ def main():
     m = r["metrics"]
     print(
         f"[diagnose] {r['label']:<20} tasks={m['n_tasks']:<5} "
-        f"solve_rate={m['solve_rate']:.3f}  pass@{args.n_samples}={m['pass_at_n']:.3f}  "
+        f"solve_rate={m['solve_rate']:.3f}  pass@{args.n_samples}={m['pass_at_n']:.3f} "
+        f" "
         f"mean_pass_rate={m['mean_pass_rate']:.3f}  (missing_field={r['n_missing_field']})"
     )
 
@@ -240,7 +245,10 @@ def main():
   print("\n=== full-spec solve-rate diagnostic ===")
   for r in results:
     print(
-        f"  {r['label']:<20} solve_rate={r['metrics']['solve_rate']:.3f}  ({r['path']})"
+        (
+            f"  {r['label']:<20} solve_rate={r['metrics']['solve_rate']:.3f} "
+            f" ({r['path']})"
+        )
     )
 
   if args.out:

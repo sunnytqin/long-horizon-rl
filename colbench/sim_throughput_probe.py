@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Standalone throughput/health smoke test for the frozen ColBench user-simulator server.
+"""Standalone throughput/health smoke test for the frozen ColBench
+user-simulator server.
 
 Invoked by xcloud_setup/entrypoint_colbench.sh in SIM_SERVER_ONLY +
 SIM_SMOKE=True mode, AFTER the SGLang server is healthy. It fires a concurrency
@@ -8,9 +9,10 @@ sweep of chat-completion requests at the LOCAL server (127.0.0.1, network-free
 + per-request latency percentiles. Use it to size a large sim (e.g.
 Qwen3-235B-A22B vs Llama-3.3-70B) BEFORE committing to a full training run.
 
-Deliberately depends only on `openai` (already a colbench dependency) + stdlib, so it runs in the
-training container without extra installs and without importing sglang. Non-fatal by contract:
-the entrypoint tolerates a non-zero exit and leaves the server up for manual inspection.
+Deliberately depends only on `openai` (already a colbench dependency) + stdlib,
+so it runs in the training container without extra installs and without
+importing sglang. Non-fatal by contract: the entrypoint tolerates a non-zero
+exit and leaves the server up for manual inspection.
 """
 
 import argparse
@@ -95,16 +97,22 @@ async def _run_level(
 
 
 def _thinking_check():
-  """Assert the sim actually answers WITHOUT a <think> block, via the REAL sim code path.
+  """Assert the sim actually answers WITHOUT a <think> block, via the REAL sim
+  code path.
 
-  Uses ``env.openai_sim_backend`` rather than a hand-written request, so this exercises the
-  exact payload the rollouts send -- the point is to catch a payload-construction bug, and a
-  bespoke curl in the probe would test the curl, not the product.
+  Uses ``env.openai_sim_backend`` rather than a hand-written request, so this
+  exercises the exact payload the rollouts send -- the point is to catch a
+  payload-construction bug, and a bespoke curl in the probe would test the curl,
+  not the product.
 
-  Background (2026-07-30): SGLang ACCEPTS AND IGNORES a top-level ``enable_thinking``; only
-  ``chat_template_kwargs: {enable_thinking: false}`` reaches the Qwen3 template. While that was
-  broken every hybrid sim replied with reasoning, and at SIM_MAX_TOKENS=256 the block never even
-  closed, so truncated chain-of-thought was injected as the user's dialogue turn.
+  Background (2026-07-30): SGLang ACCEPTS AND IGNORES a top-level
+                           ``enable_thinking``; only ``chat_template_kwargs:
+                           {enable_thinking: false}`` reaches the Qwen3
+                           template. While that was broken every hybrid sim
+                           replied with reasoning, and at SIM_MAX_TOKENS=256 the
+                           block never even closed, so truncated
+                           chain-of-thought was injected as the user's dialogue
+                           turn.
   """
   from colbench.env import _sim_extra_body, openai_sim_backend
   from colbench.templates import strip_think
@@ -127,14 +135,18 @@ def _thinking_check():
   )
   if want_off and has_think:
     print(
-        "  RESULT: *** FAIL *** thinking is ON despite SIM_ENABLE_THINKING=false -- the flag "
-        "is not reaching the chat template (check chat_template_kwargs nesting)."
+        "  RESULT: *** FAIL *** thinking is ON despite SIM_ENABLE_THINKING=false "
+        "-- the flag "
+        "is not reaching the chat template (check chat_template_kwargs "
+        "nesting)."
     )
     return False
   if want_off and not stripped:
     print(
-        "  RESULT: *** FAIL *** reply is empty after stripping -- the sim produced only "
-        "reasoning, so it would inject nothing (or a fragment) as the user turn."
+        "  RESULT: *** FAIL *** reply is empty after stripping -- the sim "
+        "produced only "
+        "reasoning, so it would inject nothing (or a fragment) as the user "
+        "turn."
     )
     return False
   print("  RESULT: PASS")
@@ -159,10 +171,16 @@ async def _main_async(args):
   print("=" * 78)
   print(f"Sim throughput probe -> {base_url} (model={model})")
   print(
-      f"input~{args.input_tokens} tok, output={args.output_tokens} tok, temp={args.temperature}"
+      (
+          f"input~{args.input_tokens} tok, output={args.output_tokens} tok, "
+          f"temp={args.temperature}"
+      )
   )
   print("=" * 78)
-  header = f"{'conc':>5} {'ok':>5} {'err':>4} {'wall_s':>8} {'out_tok/s':>10} {'req/s':>7} {'p50_ms':>9} {'p95_ms':>9}"
+  header = (
+      f"{'conc':>5} {'ok':>5} {'err':>4} {'wall_s':>8} {'out_tok/s':>10} "
+      f"{'req/s':>7} {'p50_ms':>9} {'p95_ms':>9}"
+  )
   print(header)
   print("-" * len(header))
   for concurrency in args.concurrency:
@@ -179,11 +197,15 @@ async def _main_async(args):
     if r.get("ok"):
       print(
           f"{r['concurrency']:>5} {r['ok']:>5} {r['errors']:>4} {r['wall']:>8.1f} "
-          f"{r['out_toks_per_s']:>10.1f} {r['req_per_s']:>7.2f} {r['p50_ms']:>9.0f} {r['p95_ms']:>9.0f}"
+          f"{r['out_toks_per_s']:>10.1f} {r['req_per_s']:>7.2f} {r['p50_ms']:>9.0f} "
+          f"{r['p95_ms']:>9.0f}"
       )
     else:
       print(
-          f"{r['concurrency']:>5} {'0':>5} {r['errors']:>4} {r['wall']:>8.1f}  (all failed)"
+          (
+              f"{r['concurrency']:>5} {'0':>5} {r['errors']:>4} {r['wall']:>8.1f} "
+              f" (all failed)"
+          )
       )
   print("=" * 78)
 
@@ -198,7 +220,10 @@ def main():
       "--concurrency",
       type=_parse_int_list,
       default=[1, 8, 32, 64],
-      help="Space/comma-separated concurrency levels to sweep, e.g. '1 8 32 64'.",
+      help=(
+          "Space/comma-separated concurrency levels to sweep, e.g. '1 8 32 "
+          "64'."
+      ),
   )
   p.add_argument(
       "--input-tokens",
