@@ -9,8 +9,9 @@ Ported from ``sweet_rl`` (``prompts/{llm_agent_code_prompt,human_simulator_code_
 
 # The long lines in this file are prompt text inside string literals. Re-wrapping them would
 # change the exact bytes sent to the model and break comparability with completed runs, so
-# E501 is disabled file-wide rather than reflowed.
-# ruff: noqa: E501
+# the line-length limit is disabled file-wide rather than reflowed. A per-line disable is not
+# an option here: the comment would land inside the prompt and be sent to the model.
+# pylint: disable=line-too-long
 
 import re
 from typing import Optional
@@ -128,14 +129,14 @@ _THINK_OPEN_UNCLOSED = re.compile(r"<think>(?!.*</think>).*\Z", re.DOTALL)
 
 
 def strip_think(text: str) -> str:
-    """Remove ``<think>...</think>`` blocks, INCLUDING a trailing unterminated one.
+  """Remove ``<think>...</think>`` blocks, INCLUDING a trailing unterminated one.
 
-    Returns "" when the text is nothing but (truncated) reasoning -- callers treat an empty reply
-    as a failed turn rather than injecting reasoning fragments into the conversation.
-    """
-    out = _THINK_BLOCK.sub("", text or "")
-    out = _THINK_OPEN_UNCLOSED.sub("", out)
-    return out.strip()
+  Returns "" when the text is nothing but (truncated) reasoning -- callers treat an empty reply
+  as a failed turn rather than injecting reasoning fragments into the conversation.
+  """
+  out = _THINK_BLOCK.sub("", text or "")
+  out = _THINK_OPEN_UNCLOSED.sub("", out)
+  return out.strip()
 
 
 # ── Answer-marker extraction (ported from InfoPO run_simulate_api.check_and_extract_answer) ──
@@ -151,24 +152,24 @@ _ANSWER_PATTERNS = [
 
 
 def check_and_extract_answer(response: str) -> tuple[bool, str]:
-    """Return ``(has_answer, answer_text)``.
+  """Return ``(has_answer, answer_text)``.
 
-    ``has_answer`` is True iff any accepted spelling of the answer marker is present; the
-    answer text is everything after the (first-matched) marker, stripped. Byte-identical to
-    InfoPO's ``check_and_extract_answer`` so training and offline eval agree.
-    """
-    if not response:
-        return False, ""
-    response_lower = response.lower()
-    for pattern in _ANSWER_PATTERNS:
-        pattern_lower = pattern.lower()
-        if pattern_lower in response_lower:
-            if pattern in response:
-                idx = response.find(pattern)
-                return True, response[idx + len(pattern) :].strip()
-            idx_lower = response_lower.find(pattern_lower)
-            return True, response[idx_lower + len(pattern) :].strip()
+  ``has_answer`` is True iff any accepted spelling of the answer marker is present; the
+  answer text is everything after the (first-matched) marker, stripped. Byte-identical to
+  InfoPO's ``check_and_extract_answer`` so training and offline eval agree.
+  """
+  if not response:
     return False, ""
+  response_lower = response.lower()
+  for pattern in _ANSWER_PATTERNS:
+    pattern_lower = pattern.lower()
+    if pattern_lower in response_lower:
+      if pattern in response:
+        idx = response.find(pattern)
+        return True, response[idx + len(pattern) :].strip()
+      idx_lower = response_lower.find(pattern_lower)
+      return True, response[idx_lower + len(pattern) :].strip()
+  return False, ""
 
 
 # ── Code fence-strip (ported from sweet_rl code_utils.check_correctness) ──────
@@ -178,38 +179,38 @@ def check_and_extract_answer(response: str) -> tuple[bool, str]:
 # poor-man's substitute for a sandbox because sweet_rl exec'd in-process; our container
 # sidecar supersedes it.
 def extract_code_answer(answer_text: str) -> str:
-    """Strip an answer MARKER and/or a ```python / ``` code fence, returning the code to grade.
+  """Strip an answer MARKER and/or a ```python / ``` code fence, returning the code to grade.
 
-    Mirrors sweet_rl's fence handling: prefer a ```python block, else the first ``` block, else
-    the raw text. Returns the code string to grade (stripped).
+  Mirrors sweet_rl's fence handling: prefer a ```python block, else the first ``` block, else
+  the raw text. Returns the code string to grade (stripped).
 
-    An ``I WANT TO ANSWER:`` marker is stripped ONLY IN THE UNFENCED CASE (no ``` anywhere). On
-    the GT path that is a NO-OP -- ``final_answer`` already split at the marker before calling
-    here. It matters when a policy TRAINED on the GT protocol is graded by the SPEC path, which
-    has no marker convention and grades whatever ``extract_last_code`` finds on the WHOLE
-    assistant turn. The GT solver prompt says "Directly output the raw python code after
-    'I WANT TO ANSWER:'", so such a turn arrives UNFENCED and would reach the sandbox as
-    ``"I WANT TO ANSWER:\\ndef f(...)"`` -- a SyntaxError, i.e. a zero scored for a protocol
-    reason and indistinguishable from a capability result in the cross-arm comparison.
+  An ``I WANT TO ANSWER:`` marker is stripped ONLY IN THE UNFENCED CASE (no ``` anywhere). On
+  the GT path that is a NO-OP -- ``final_answer`` already split at the marker before calling
+  here. It matters when a policy TRAINED on the GT protocol is graded by the SPEC path, which
+  has no marker convention and grades whatever ``extract_last_code`` finds on the WHOLE
+  assistant turn. The GT solver prompt says "Directly output the raw python code after
+  'I WANT TO ANSWER:'", so such a turn arrives UNFENCED and would reach the sandbox as
+  ``"I WANT TO ANSWER:\\ndef f(...)"`` -- a SyntaxError, i.e. a zero scored for a protocol
+  reason and indistinguishable from a capability result in the cross-arm comparison.
 
-    The no-fence guard is load-bearing, not tidiness. Stripping unconditionally REGRESSES a turn
-    that shows a fenced function and mentions the marker AFTERWARDS ("```python...``` I WANT TO
-    ANSWER: that's it"): splitting at the marker discards the fence and grades the trailing prose.
-    A fence, when present, is always the more reliable signal, so it wins outright.
-    """
-    text = answer_text or ""
-    if "```" not in text:
-        has_marker, after_marker = check_and_extract_answer(text)
-        if has_marker:
-            text = after_marker
-    if "```python" in text:
-        text = text.split("```python", 1)[1].split("```", 1)[0]
-    elif "```" in text:
-        # First fenced block (``` ... ```).
-        parts = text.split("```")
-        if len(parts) >= 3:
-            text = parts[1]
-    return text.strip()
+  The no-fence guard is load-bearing, not tidiness. Stripping unconditionally REGRESSES a turn
+  that shows a fenced function and mentions the marker AFTERWARDS ("```python...``` I WANT TO
+  ANSWER: that's it"): splitting at the marker discards the fence and grades the trailing prose.
+  A fence, when present, is always the more reliable signal, so it wins outright.
+  """
+  text = answer_text or ""
+  if "```" not in text:
+    has_marker, after_marker = check_and_extract_answer(text)
+    if has_marker:
+      text = after_marker
+  if "```python" in text:
+    text = text.split("```python", 1)[1].split("```", 1)[0]
+  elif "```" in text:
+    # First fenced block (``` ... ```).
+    parts = text.split("```")
+    if len(parts) >= 3:
+      text = parts[1]
+  return text.strip()
 
 
 # ── Code-leak detection (for the eval user-simulator rejection sampling) ──────
@@ -234,128 +235,144 @@ _CODE_OPERATORS = frozenset("+-*/%()[]=<>")
 
 
 def _code_tokens(text: str) -> list:
-    """Symbol-aware tokenizer: each word OR each individual operator/punctuation char.
+  """Symbol-aware tokenizer: each word OR each individual operator/punctuation char.
 
-    Unlike a word-only (``\\w+``) split this preserves operators, so a matched n-gram can be
-    required to contain them -- the knob that separates a copied CODE expression from a prose
-    behavior description that merely shares identifiers with the GT.
-    """
-    return re.findall(r"\w+|[^\w\s]", text or "")
+  Unlike a word-only (``\\w+``) split this preserves operators, so a matched n-gram can be
+  required to contain them -- the knob that separates a copied CODE expression from a prose
+  behavior description that merely shares identifiers with the GT.
+  """
+  return re.findall(r"\w+|[^\w\s]", text or "")
 
 
-def detect_code_leak(text: str, ground_truth: str, ngram_n: int = 10, min_operators: int = 2) -> Optional[str]:
-    """Return a short reason string if ``text`` leaks code, else ``None``.
+def detect_code_leak(
+    text: str, ground_truth: str, ngram_n: int = 10, min_operators: int = 2
+) -> Optional[str]:
+  """Return a short reason string if ``text`` leaks code, else ``None``.
 
-    ``ground_truth`` is the hidden GT source the simulator sees (n-gram overlap is computed
-    against it, NOT the agent's own output -- that substitution was an offline-study
-    convenience only). Reasons: ``"def"`` / ``"fenced"`` / ``"ngram"`` (see the module comment
-    above). Checked in that order and short-circuits on the first hit.
+  ``ground_truth`` is the hidden GT source the simulator sees (n-gram overlap is computed
+  against it, NOT the agent's own output -- that substitution was an offline-study
+  convenience only). Reasons: ``"def"`` / ``"fenced"`` / ``"ngram"`` (see the module comment
+  above). Checked in that order and short-circuits on the first hit.
 
-    ``ngram_n <= 0`` DISABLES detector (D) (the default in the eval harness for now): the
-    operator-gated n-gram check is a solid idea but held back as a FUTURE CONSIDERATION while
-    we validate on the A/B leaks that dominate. (A)/(B) always run.
-    """
-    if not text:
-        return None
-    if _DEF_SIGNATURE_RE.search(text):
-        return "def"
-    if _PY_FENCE_RE.search(text):
-        return "fenced"
-    if ngram_n <= 0:
-        return None
-    gt_toks = _code_tokens(ground_truth)
-    tx_toks = _code_tokens(text)
-    if len(gt_toks) >= ngram_n and len(tx_toks) >= ngram_n:
-        gt_ngrams = {tuple(gt_toks[i : i + ngram_n]) for i in range(len(gt_toks) - ngram_n + 1)}
-        for i in range(len(tx_toks) - ngram_n + 1):
-            ng = tuple(tx_toks[i : i + ngram_n])
-            if ng in gt_ngrams and sum(tk in _CODE_OPERATORS for tk in ng) >= min_operators:
-                return "ngram"
+  ``ngram_n <= 0`` DISABLES detector (D) (the default in the eval harness for now): the
+  operator-gated n-gram check is a solid idea but held back as a FUTURE CONSIDERATION while
+  we validate on the A/B leaks that dominate. (A)/(B) always run.
+  """
+  if not text:
     return None
+  if _DEF_SIGNATURE_RE.search(text):
+    return "def"
+  if _PY_FENCE_RE.search(text):
+    return "fenced"
+  if ngram_n <= 0:
+    return None
+  gt_toks = _code_tokens(ground_truth)
+  tx_toks = _code_tokens(text)
+  if len(gt_toks) >= ngram_n and len(tx_toks) >= ngram_n:
+    gt_ngrams = {
+        tuple(gt_toks[i : i + ngram_n])
+        for i in range(len(gt_toks) - ngram_n + 1)
+    }
+    for i in range(len(tx_toks) - ngram_n + 1):
+      ng = tuple(tx_toks[i : i + ngram_n])
+      if (
+          ng in gt_ngrams
+          and sum(tk in _CODE_OPERATORS for tk in ng) >= min_operators
+      ):
+        return "ngram"
+  return None
 
 
 # A ```python block, closed or left UNTERMINATED by the per-turn token cap. The solver's
 # max_new_tokens_per_turn is 1024, so a long function can be cut off before its closing fence
 # arrives; requiring the close would make that turn "not a submission", and the sim would then
 # reply to half a function. Same failure shape as the truncated-<think> bug.
-_PY_FENCE_CLOSED_RE = re.compile(r"```python\s*(.*?)```", re.DOTALL | re.IGNORECASE)
-_PY_FENCE_UNCLOSED_RE = re.compile(r"```python\s*(.*)\Z", re.DOTALL | re.IGNORECASE)
+_PY_FENCE_CLOSED_RE = re.compile(
+    r"```python\s*(.*?)```", re.DOTALL | re.IGNORECASE
+)
+_PY_FENCE_UNCLOSED_RE = re.compile(
+    r"```python\s*(.*)\Z", re.DOTALL | re.IGNORECASE
+)
 
 
 def fenced_function(text: str) -> Optional[str]:
-    """Return the body of the first ```python block that DEFINES a function, else ``None``.
+  """Return the body of the first ```python block that DEFINES a function, else ``None``.
 
-    The ``def`` requirement is the whole point: this is the GT path's SUBMIT signal, and a
-    submission ends the episode after a single shot. ``contains_code`` (used on the spec path to
-    pick a grading target) also fires on a bare ``def`` anywhere in prose -- harmless there, since
-    showing code just invites a user reply and there is a 2-proposal budget, but fatal here, where
-    "something like def parse(rows), is that right?" mid-clarification would force-submit the
-    trajectory. Requiring a fenced block that actually contains a definition restores the
-    deliberateness the "I WANT TO ANSWER:" marker used to provide.
-    """
-    for m in _PY_FENCE_CLOSED_RE.finditer(text or ""):
-        body = m.group(1)
-        if _DEF_SIGNATURE_RE.search(body):
-            return body.strip()
-    m = _PY_FENCE_UNCLOSED_RE.search(text or "")
-    if m and _DEF_SIGNATURE_RE.search(m.group(1)):
-        return m.group(1).strip()
-    return None
+  The ``def`` requirement is the whole point: this is the GT path's SUBMIT signal, and a
+  submission ends the episode after a single shot. ``contains_code`` (used on the spec path to
+  pick a grading target) also fires on a bare ``def`` anywhere in prose -- harmless there, since
+  showing code just invites a user reply and there is a 2-proposal budget, but fatal here, where
+  "something like def parse(rows), is that right?" mid-clarification would force-submit the
+  trajectory. Requiring a fenced block that actually contains a definition restores the
+  deliberateness the "I WANT TO ANSWER:" marker used to provide.
+  """
+  for m in _PY_FENCE_CLOSED_RE.finditer(text or ""):
+    body = m.group(1)
+    if _DEF_SIGNATURE_RE.search(body):
+      return body.strip()
+  m = _PY_FENCE_UNCLOSED_RE.search(text or "")
+  if m and _DEF_SIGNATURE_RE.search(m.group(1)):
+    return m.group(1).strip()
+  return None
 
 
 def final_answer(assistant_text: str, episode_done: bool) -> tuple[bool, str]:
-    """Resolve the solver's final answer text from one assistant turn.
+  """Resolve the solver's final answer text from one assistant turn.
 
-    Returns ``(has_answer, answer_text)``:
-      1. A ```python block defining a function -> that block IS the submission (the live protocol;
-         see COLBENCH_AGENT_SYSTEM_PROMPT bullet 3).
-      2. Else the legacy ``I WANT TO ANSWER:`` marker -> the text after it. Still accepted so that
-         checkpoints and parquets predating 2026-07-31 keep working against this code: the marker
-         prompt shipped in the GT dataset for months, and a fence-only detector would leave such a
-         run silently unable to submit, every episode grinding to the turn cap. Accepting BOTH is
-         also why no submit-protocol toggle is needed anywhere in the stack.
-      3. Else, on the FINAL turn (``episode_done``), fall back to the whole response when it looks
-         like code (``def``/``import``/``return``/`=` ...) or is non-trivial, so an episode that
-         ran out of turns still submits the model's last attempt.
-      4. Else no answer yet (keep interacting).
-    ``assistant_text`` should already be ``strip_think``-ed by the caller.
-    """
-    fenced = fenced_function(assistant_text)
-    if fenced is not None:
-        return True, fenced
-    has_marker, answer_text = check_and_extract_answer(assistant_text)
-    if has_marker:
-        return True, answer_text
-    if episode_done:
-        last = (assistant_text or "").strip()
-        if len(last) > 20 and any(k in last for k in ("def ", "import ", "class ", "return ", "=")):
-            return True, last
-        if len(last) > 10:
-            return True, last
-    return False, ""
+  Returns ``(has_answer, answer_text)``:
+    1. A ```python block defining a function -> that block IS the submission (the live protocol;
+       see COLBENCH_AGENT_SYSTEM_PROMPT bullet 3).
+    2. Else the legacy ``I WANT TO ANSWER:`` marker -> the text after it. Still accepted so that
+       checkpoints and parquets predating 2026-07-31 keep working against this code: the marker
+       prompt shipped in the GT dataset for months, and a fence-only detector would leave such a
+       run silently unable to submit, every episode grinding to the turn cap. Accepting BOTH is
+       also why no submit-protocol toggle is needed anywhere in the stack.
+    3. Else, on the FINAL turn (``episode_done``), fall back to the whole response when it looks
+       like code (``def``/``import``/``return``/`=` ...) or is non-trivial, so an episode that
+       ran out of turns still submits the model's last attempt.
+    4. Else no answer yet (keep interacting).
+  ``assistant_text`` should already be ``strip_think``-ed by the caller.
+  """
+  fenced = fenced_function(assistant_text)
+  if fenced is not None:
+    return True, fenced
+  has_marker, answer_text = check_and_extract_answer(assistant_text)
+  if has_marker:
+    return True, answer_text
+  if episode_done:
+    last = (assistant_text or "").strip()
+    if len(last) > 20 and any(
+        k in last for k in ("def ", "import ", "class ", "return ", "=")
+    ):
+      return True, last
+    if len(last) > 10:
+      return True, last
+  return False, ""
 
 
 def str_dialogue_history(messages: list[dict]) -> str:
-    """Render the running dialogue as the sim-prompt ``{dialogue_history}`` string.
+  """Render the running dialogue as the sim-prompt ``{dialogue_history}`` string.
 
-    Byte-identical to sweet_rl HumanInteractionEnv.str_dialogue_history: ``"<role>:<content>"``
-    per turn separated by four newlines, terminated with a trailing ``"agent:"`` cue so the
-    simulator answers as the human to the agent's latest turn.
-    """
-    result = ""
-    for d in messages:
-        result += str(d.get("role")) + ":"
-        result += str(d.get("content")) + "\n\n\n\n"
-    return result + "agent:"
+  Byte-identical to sweet_rl HumanInteractionEnv.str_dialogue_history: ``"<role>:<content>"``
+  per turn separated by four newlines, terminated with a trailing ``"agent:"`` cue so the
+  simulator answers as the human to the agent's latest turn.
+  """
+  result = ""
+  for d in messages:
+    result += str(d.get("role")) + ":"
+    result += str(d.get("content")) + "\n\n\n\n"
+  return result + "agent:"
 
 
-def build_sim_user_message(problem_description: str, hidden_information: str, messages: list[dict]) -> str:
-    """Format the user-simulator prompt for one turn (system stays SIM_SYSTEM_PROMPT)."""
-    return HUMAN_SIMULATOR_PROMPT.format(
-        problem_description=problem_description,
-        hidden_information=hidden_information,
-        dialogue_history=str_dialogue_history(messages),
-    )
+def build_sim_user_message(
+    problem_description: str, hidden_information: str, messages: list[dict]
+) -> str:
+  """Format the user-simulator prompt for one turn (system stays SIM_SYSTEM_PROMPT)."""
+  return HUMAN_SIMULATOR_PROMPT.format(
+      problem_description=problem_description,
+      hidden_information=hidden_information,
+      dialogue_history=str_dialogue_history(messages),
+  )
 
 
 # Injected as the very first solver user turn wrapping the problem statement. ColBench's
@@ -363,7 +380,7 @@ def build_sim_user_message(problem_description: str, hidden_information: str, me
 # so -- matching sweet_rl HumanInteractionEnv.reset, which seeds the dialogue with the raw
 # problem_description as the first user turn -- we pass it through unwrapped.
 def build_initial_user_message(problem_description: str) -> str:
-    return str(problem_description)
+  return str(problem_description)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -462,65 +479,67 @@ Keep every reply very SHORT -- usually one or two sentences. Only use [TERMINATE
 TERMINATE_MARKER = "[TERMINATE]"
 
 
-def build_spec_sim_messages(spec: dict, messages: list[dict]) -> tuple[str, str]:
-    """Build the spec sim's (system, user) messages for one turn.
+def build_spec_sim_messages(
+    spec: dict, messages: list[dict]
+) -> tuple[str, str]:
+  """Build the spec sim's (system, user) messages for one turn.
 
-    ``spec`` carries ``persona{who,domain,python_skill,communication_style}, scenario,
-    requirements, plot``. The system message conditions the sim on that spec (NEVER the GT
-    code); the user message is the running dialogue (``str_dialogue_history``) -- the same
-    seam split as the GT path's ``build_sim_user_message``.
-    """
-    persona = spec.get("persona", {}) or {}
-    system = SPEC_SIM_SYSTEM_PROMPT.format(
-        who=persona.get("who", "a person"),
-        domain=persona.get("domain", ""),
-        python_skill=persona.get("python_skill", ""),
-        communication_style=persona.get("communication_style", ""),
-        scenario=spec.get("scenario", ""),
-        requirements=spec.get("requirements", ""),
-        plot=spec.get("plot", ""),
-    )
-    return system, str_dialogue_history(messages)
+  ``spec`` carries ``persona{who,domain,python_skill,communication_style}, scenario,
+  requirements, plot``. The system message conditions the sim on that spec (NEVER the GT
+  code); the user message is the running dialogue (``str_dialogue_history``) -- the same
+  seam split as the GT path's ``build_sim_user_message``.
+  """
+  persona = spec.get("persona", {}) or {}
+  system = SPEC_SIM_SYSTEM_PROMPT.format(
+      who=persona.get("who", "a person"),
+      domain=persona.get("domain", ""),
+      python_skill=persona.get("python_skill", ""),
+      communication_style=persona.get("communication_style", ""),
+      scenario=spec.get("scenario", ""),
+      requirements=spec.get("requirements", ""),
+      plot=spec.get("plot", ""),
+  )
+  return system, str_dialogue_history(messages)
 
 
 def build_grounded_sim_messages(
     problem_description: str, ground_truth: str, plot: str, messages: list[dict]
 ) -> tuple[str, str]:
-    """Build the GROUNDED sim's (system, user) messages for one turn.
+  """Build the GROUNDED sim's (system, user) messages for one turn.
 
-    Same seam split as ``build_spec_sim_messages`` (spec -> system, dialogue -> user), but the sim
-    is conditioned on the hidden GT function source + the plot instead of the authored spec's
-    persona/scenario/requirements. Kept as a SEPARATE function rather than a flag on
-    ``build_spec_sim_messages`` so the pure-spec path stays branch-free and byte-identical.
+  Same seam split as ``build_spec_sim_messages`` (spec -> system, dialogue -> user), but the sim
+  is conditioned on the hidden GT function source + the plot instead of the authored spec's
+  persona/scenario/requirements. Kept as a SEPARATE function rather than a flag on
+  ``build_spec_sim_messages`` so the pure-spec path stays branch-free and byte-identical.
 
-    NB: this is the ONE place the GT source enters a sim prompt on the spec path -- the leak
-    invariant (GT never reaches the solver's message list) is enforced downstream by the env's
-    ``sim_wrote_code`` rejection sampling, not by construction as in the spec mode.
-    """
-    system = GROUNDED_SIM_SYSTEM_PROMPT.format(
-        problem_description=problem_description,
-        ground_truth=ground_truth,
-        plot=plot or "",
-    )
-    return system, str_dialogue_history(messages)
+  NB: this is the ONE place the GT source enters a sim prompt on the spec path -- the leak
+  invariant (GT never reaches the solver's message list) is enforced downstream by the env's
+  ``sim_wrote_code`` rejection sampling, not by construction as in the spec mode.
+  """
+  system = GROUNDED_SIM_SYSTEM_PROMPT.format(
+      problem_description=problem_description,
+      ground_truth=ground_truth,
+      plot=plot or "",
+  )
+  return system, str_dialogue_history(messages)
 
 
 def sim_terminated(reply: str) -> bool:
-    """True iff the (``<think>``-stripped) sim reply contains the ``[TERMINATE]`` sentinel.
+  """True iff the (``<think>``-stripped) sim reply contains the ``[TERMINATE]`` sentinel.
 
-    Case-insensitive so a stray lowercasing by the sim still ends the episode.
-    """
-    return TERMINATE_MARKER.lower() in strip_think(reply).lower()
+  Case-insensitive so a stray lowercasing by the sim still ends the episode.
+  """
+  return TERMINATE_MARKER.lower() in strip_think(reply).lower()
 
 
 def contains_code(text: str) -> bool:
-    """True iff ``text`` looks like it proposes a function (a ```python fence or a ``def`` sig).
+  """True iff ``text`` looks like it proposes a function (a ```python fence or a ``def`` sig).
 
-    Reuses the same signals as the leak detector's (A)/(B); here they mark the solver's OWN
-    proposed code (the grading target), not a sim leak.
-    """
-    clean = strip_think(text)
-    return bool(_PY_FENCE_RE.search(clean) or _DEF_SIGNATURE_RE.search(clean))
+  Reuses the same signals as the leak detector's (A)/(B); here they mark the solver's OWN
+  proposed code (the grading target), not a sim leak.
+  """
+  clean = strip_think(text)
+  return bool(_PY_FENCE_RE.search(clean) or _DEF_SIGNATURE_RE.search(clean))
 
 
 # Any triple-backtick fence -- an ordinary user speaking never wraps a reply in a code block, so
@@ -530,24 +549,24 @@ _ANY_FENCE_RE = re.compile(r"```")
 
 
 def sim_wrote_code(reply: str) -> bool:
-    """True iff the (``<think>``-stripped) sim reply contains a fenced code block.
+  """True iff the (``<think>``-stripped) sim reply contains a fenced code block.
 
-    The spec sim is an ordinary user: it must describe things in words, never paste code. A strong
-    coder model (e.g. GPT-5) will sometimes "correct" the solver by writing the function itself,
-    which spoon-feeds structure and breaks character. We reject-sample on this signal in the spec
-    env. Keyed on a triple-backtick fence (``` / ```python) -- normal prose never contains one.
-    """
-    return bool(_ANY_FENCE_RE.search(strip_think(reply)))
+  The spec sim is an ordinary user: it must describe things in words, never paste code. A strong
+  coder model (e.g. GPT-5) will sometimes "correct" the solver by writing the function itself,
+  which spoon-feeds structure and breaks character. We reject-sample on this signal in the spec
+  env. Keyed on a triple-backtick fence (``` / ```python) -- normal prose never contains one.
+  """
+  return bool(_ANY_FENCE_RE.search(strip_think(reply)))
 
 
 def extract_last_code(messages: list[dict]) -> str:
-    """Return the code from the most recent assistant turn that proposed a function, else ``""``.
+  """Return the code from the most recent assistant turn that proposed a function, else ``""``.
 
-    Scans ``messages`` newest-first for an assistant turn with ``contains_code`` and returns
-    ``extract_code_answer`` of it -- the "last function the solver showed", which the spec path
-    grades on termination.
-    """
-    for m in reversed(messages):
-        if m.get("role") == "assistant" and contains_code(m.get("content", "")):
-            return extract_code_answer(strip_think(m.get("content", "")))
-    return ""
+  Scans ``messages`` newest-first for an assistant turn with ``contains_code`` and returns
+  ``extract_code_answer`` of it -- the "last function the solver showed", which the spec path
+  grades on termination.
+  """
+  for m in reversed(messages):
+    if m.get("role") == "assistant" and contains_code(m.get("content", "")):
+      return extract_code_answer(strip_think(m.get("content", "")))
+  return ""

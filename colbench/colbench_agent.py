@@ -63,402 +63,472 @@ _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
 @register("colbench_agent")
 class ColBenchAgentLoop(AgentLoopBase):
-    """Solver rollout against a frozen ColBench user simulator (fractional GT reward)."""
+  """Solver rollout against a frozen ColBench user simulator (fractional GT reward)."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.prompt_length = self.rollout_config.prompt_length
-        self.response_length = self.rollout_config.response_length
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.prompt_length = self.rollout_config.prompt_length
+    self.response_length = self.rollout_config.response_length
 
-        # Total solver turns (clarify + submit). ColBench default 10 (sweet_rl max_steps).
-        self.max_assistant_turns = self.rollout_config.multi_turn.max_assistant_turns or 10
+    # Total solver turns (clarify + submit). ColBench default 10 (sweet_rl max_steps).
+    self.max_assistant_turns = (
+        self.rollout_config.multi_turn.max_assistant_turns or 10
+    )
 
-        # Optional `colbench` config block (add via `+colbench.key=value`); minimal knobs,
-        # reusing the solver sampling_params + per-turn cap rather than adding many.
-        cc = {}
-        try:
-            cc = self.config.get("colbench", {}) or {}
-        except Exception:  # noqa: BLE001 - config may not define the block
-            cc = {}
-        # Per-turn solver generation cap (tokens). None -> use remaining response budget.
-        self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
-        # Hard wall (seconds) on a single blocking env call (sim HTTP turn or final grading).
-        self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
-        # Per-case exec timeout for the final GT grading.
-        self.reward_time_limit = float(cc.get("reward_time_limit", 6.0))
-        # SET 2 gradient-masking arm (shared with codecontest): "all" or "final_only". The
-        # masked simulator turns are unaffected (already mask=0).
-        self.train_turns = cc.get("train_turns", "all")
-        if self.train_turns not in TRAIN_TURNS_MODES:
-            raise ValueError(f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}")
-        # User-sim rejection sampling: resample the sim turn up to N times until it contains no
-        # code leak. 0 (default) = off, and the rollout is byte-identical to before. On
-        # exhaustion the trajectory terminates with reward 0 -- see the loop below.
-        self.sim_reject_max_tries = int(cc.get("sim_reject_max_tries", 0) or 0)
-        # LIVE-weights simulator: generate the user turn on the TRAINING rollout engine instead
-        # of calling the separate frozen server, i.e. keep ONE copy of the weights for the whole
-        # run. False = the frozen-server baseline (byte-identical rollout to before).
-        self.sim_live = str(cc.get("sim_live", False)).lower() in ("true", "1")
+    # Optional `colbench` config block (add via `+colbench.key=value`); minimal knobs,
+    # reusing the solver sampling_params + per-turn cap rather than adding many.
+    cc = {}
+    try:
+      cc = self.config.get("colbench", {}) or {}
+    except Exception:  # noqa: BLE001 - config may not define the block
+      cc = {}
+    # Per-turn solver generation cap (tokens). None -> use remaining response budget.
+    self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
+    # Hard wall (seconds) on a single blocking env call (sim HTTP turn or final grading).
+    self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
+    # Per-case exec timeout for the final GT grading.
+    self.reward_time_limit = float(cc.get("reward_time_limit", 6.0))
+    # SET 2 gradient-masking arm (shared with codecontest): "all" or "final_only". The
+    # masked simulator turns are unaffected (already mask=0).
+    self.train_turns = cc.get("train_turns", "all")
+    if self.train_turns not in TRAIN_TURNS_MODES:
+      raise ValueError(
+          f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}"
+      )
+    # User-sim rejection sampling: resample the sim turn up to N times until it contains no
+    # code leak. 0 (default) = off, and the rollout is byte-identical to before. On
+    # exhaustion the trajectory terminates with reward 0 -- see the loop below.
+    self.sim_reject_max_tries = int(cc.get("sim_reject_max_tries", 0) or 0)
+    # LIVE-weights simulator: generate the user turn on the TRAINING rollout engine instead
+    # of calling the separate frozen server, i.e. keep ONE copy of the weights for the whole
+    # run. False = the frozen-server baseline (byte-identical rollout to before).
+    self.sim_live = str(cc.get("sim_live", False)).lower() in ("true", "1")
 
-    def _make_live_sim_backend(self):
-        """Async sim backend that generates the user turn on the TRAINING rollout engine.
+  def _make_live_sim_backend(self):
+    """Async sim backend that generates the user turn on the TRAINING rollout engine.
 
-        The simulator therefore speaks with the CURRENT policy weights (verl syncs FSDP -> the
-        rollout engine every step) -- one copy of the weights for both roles, no frozen anchor.
-        Three invariants keep this a pure swap of *who answers*:
+    The simulator therefore speaks with the CURRENT policy weights (verl syncs FSDP -> the
+    rollout engine every step) -- one copy of the weights for both roles, no frozen anchor.
+    Three invariants keep this a pure swap of *who answers*:
 
-          * FRESH ``request_id`` per sim call. The solver's turns deliberately share one
-            request_id to reuse their KV prefix; the sim prompt is a different sequence (it
-            contains the hidden GT), so it must not be appended to that session.
-          * The sim's generated TOKENS are dropped after decoding. Only the <=400-char TEXT
-            re-enters the solver's context with mask=0, exactly as on the frozen-server path, so
-            the leak invariant and the trajectory's token/mask bookkeeping are untouched.
-          * ``min/max_global_steps`` from the sim's output are IGNORED: the trainer's staleness
-            bookkeeping must describe the trained (solver) turns only.
+      * FRESH ``request_id`` per sim call. The solver's turns deliberately share one
+        request_id to reuse their KV prefix; the sim prompt is a different sequence (it
+        contains the hidden GT), so it must not be appended to that session.
+      * The sim's generated TOKENS are dropped after decoding. Only the <=400-char TEXT
+        re-enters the solver's context with mask=0, exactly as on the frozen-server path, so
+        the leak invariant and the trajectory's token/mask bookkeeping are untouched.
+      * ``min/max_global_steps`` from the sim's output are IGNORED: the trainer's staleness
+        bookkeeping must describe the trained (solver) turns only.
 
-        Prompting matches the frozen path byte-for-byte (env._build_sim_prompt) and reuses the
-        same SIM_TEMPERATURE / SIM_TOP_P / SIM_TOP_K / SIM_MAX_TOKENS envs, so the two arms
-        differ ONLY in which weights answer. NB the chat template here is the SOLVER's (same
-        tokenizer, incl. data.apply_chat_template_kwargs) -- true by construction now that the
-        sim IS the solver.
-        """
-        temperature, top_p, top_k, _min_p = _sim_sampling()
-        sim_sampling_params = {
-            "temperature": temperature,
-            "top_p": top_p,
-            "top_k": top_k,
-            # Same default as env.openai_sim_backend so the frozen and live arms are comparable.
-            "max_new_tokens": int(os.environ.get("SIM_MAX_TOKENS", "4096") or "4096"),
-        }
+    Prompting matches the frozen path byte-for-byte (env._build_sim_prompt) and reuses the
+    same SIM_TEMPERATURE / SIM_TOP_P / SIM_TOP_K / SIM_MAX_TOKENS envs, so the two arms
+    differ ONLY in which weights answer. NB the chat template here is the SOLVER's (same
+    tokenizer, incl. data.apply_chat_template_kwargs) -- true by construction now that the
+    sim IS the solver.
+    """
+    temperature, top_p, top_k, _min_p = _sim_sampling()
+    sim_sampling_params = {
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        # Same default as env.openai_sim_backend so the frozen and live arms are comparable.
+        "max_new_tokens": int(
+            os.environ.get("SIM_MAX_TOKENS", "4096") or "4096"
+        ),
+    }
 
-        async def _live_sim_backend(system_content: str, user_content: str) -> str:
-            # NOT self.apply_chat_template: that caps the prompt at rollout.prompt_length (2048),
-            # which would silently truncate a sim prompt (problem + hidden GT + full dialogue).
-            messages = [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": user_content},
-            ]
-            prompt_ids = await self.loop.run_in_executor(
-                None,
-                lambda: normalize_token_ids(
-                    _apply_chat_template(
-                        self.tokenizer,
-                        messages,
-                        tools=None,
-                        add_generation_prompt=True,
-                        tokenize=True,
-                        **self.apply_chat_template_kwargs,
-                    )
-                ),
-            )
-            out: TokenOutput = await self.server_manager.generate(
-                request_id=uuid4().hex,
-                prompt_ids=prompt_ids,
-                sampling_params=sim_sampling_params,
-                image_data=None,
-                video_data=None,
-                audio_data=None,
-            )
-            return self.tokenizer.decode(out.token_ids, skip_special_tokens=True)
+    async def _live_sim_backend(system_content: str, user_content: str) -> str:
+      # NOT self.apply_chat_template: that caps the prompt at rollout.prompt_length (2048),
+      # which would silently truncate a sim prompt (problem + hidden GT + full dialogue).
+      messages = [
+          {"role": "system", "content": system_content},
+          {"role": "user", "content": user_content},
+      ]
+      prompt_ids = await self.loop.run_in_executor(
+          None,
+          lambda: normalize_token_ids(
+              _apply_chat_template(
+                  self.tokenizer,
+                  messages,
+                  tools=None,
+                  add_generation_prompt=True,
+                  tokenize=True,
+                  **self.apply_chat_template_kwargs,
+              )
+          ),
+      )
+      out: TokenOutput = await self.server_manager.generate(
+          request_id=uuid4().hex,
+          prompt_ids=prompt_ids,
+          sampling_params=sim_sampling_params,
+          image_data=None,
+          video_data=None,
+          audio_data=None,
+      )
+      return self.tokenizer.decode(out.token_ids, skip_special_tokens=True)
 
-        return _live_sim_backend
+    return _live_sim_backend
 
-    @rollout_trace_op
-    async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
-        messages = list(kwargs["raw_prompt"])
-        extra_info = kwargs.get("extra_info", {}) or {}
-        index = int(kwargs.get("index", 0))
+  @rollout_trace_op
+  async def run(
+      self, sampling_params: dict[str, Any], **kwargs
+  ) -> AgentLoopOutput:
+    messages = list(kwargs["raw_prompt"])
+    extra_info = kwargs.get("extra_info", {}) or {}
+    index = int(kwargs.get("index", 0))
 
-        # The initial (public) problem turn = the last user message of the prompt. It seeds
-        # the simulator's dialogue history (sweet_rl reset()) -- it carries NO ground truth.
-        problem_text = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+    # The initial (public) problem turn = the last user message of the prompt. It seeds
+    # the simulator's dialogue history (sweet_rl reset()) -- it carries NO ground truth.
+    problem_text = next(
+        (m["content"] for m in reversed(messages) if m.get("role") == "user"),
+        "",
+    )
 
-        # Task payload: prefer extra_info.ground_truth, fall back to reward_model.ground_truth.
-        gt = extra_info.get("ground_truth")
-        if gt is None:
-            gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
-        # verl (HF datasets) hands test_cases as a plain list; a pandas reader would give an
-        # np.ndarray. Convert via an explicit None check to stay safe under both (`x or []`
-        # would call bool() on an ndarray and raise).
-        _tc = gt.get("test_cases")
-        env = ColBenchUserSimEnv(
-            problem_description=gt.get("problem_description", problem_text),
-            ground_truth=gt["ground_truth"],
-            test_cases=list(_tc) if _tc is not None else [],
-            max_steps=self.max_assistant_turns,
-            reward_time_limit=self.reward_time_limit,
+    # Task payload: prefer extra_info.ground_truth, fall back to reward_model.ground_truth.
+    gt = extra_info.get("ground_truth")
+    if gt is None:
+      gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
+    # verl (HF datasets) hands test_cases as a plain list; a pandas reader would give an
+    # np.ndarray. Convert via an explicit None check to stay safe under both (`x or []`
+    # would call bool() on an ndarray and raise).
+    _tc = gt.get("test_cases")
+    env = ColBenchUserSimEnv(
+        problem_description=gt.get("problem_description", problem_text),
+        ground_truth=gt["ground_truth"],
+        test_cases=list(_tc) if _tc is not None else [],
+        max_steps=self.max_assistant_turns,
+        reward_time_limit=self.reward_time_limit,
+    )
+    if self.sim_live:
+      env.asim_backend = self._make_live_sim_backend()
+
+    request_id = uuid4().hex
+    metrics: dict[str, Any] = {}
+
+    prompt_ids = await self.apply_chat_template(messages)
+    response_mask: list[int] = []
+    response_logprobs: list[float] = []
+    track_logprobs = True
+
+    # Running dialogue for the SIMULATOR prompt (problem + solver turns + user replies).
+    # Contains no GT; the GT is injected only inside env.generate_user_turn.
+    sim_dialogue: list[dict] = [{"role": "user", "content": problem_text}]
+
+    assistant_turns = 0
+    user_turns = 0
+    answered = False
+    overflow = False
+    sim_failed = False
+    sim_failure_turn = -1
+    sim_reject_tries = 0
+    sim_reply_chars: list[int] = []
+    sim_leaks = 0
+    # Sim LATENCY + timeout, surfaced via reward_extra_info because AgentLoopOutput.metrics is
+    # a fixed-field pydantic model (generate_sequences/tool_calls/compute_score/num_preempted)
+    # with extra='ignore' -- anything else put in `metrics` is silently DROPPED at validation
+    # and never reaches TensorBoard. Under sim_live the sim shares the rollout engine's queue,
+    # so `sim_seconds` is the leading indicator and `sim_turn_timeout` the damage: a timeout
+    # BREAKS the episode, and an unanswered episode then trains at reward 0 -- an
+    # infrastructure artifact that GRPO cannot tell from a genuine failure, biased toward LONG
+    # dialogues (more sim calls = more chances to trip). Watch it before trusting any
+    # "live sim hurts multi-turn behavior" conclusion.
+    sim_seconds: list[float] = []
+    sim_turn_timeout = 0
+    env_score_timeout = 0
+    answered_at_turn = -1
+    reward = 0.0
+    result: dict[str, Any] = {}
+    answer_text = ""
+    solver_turn_lengths: list[int] = []
+    solver_turn_spans: list[tuple[int, int]] = []
+
+    # Off-policy staleness bookkeeping the trainer requires. Only the solver turns update
+    # this -- the simulator turns are masked, so their weights-version is irrelevant.
+    min_global_steps = None
+    max_global_steps = None
+
+    for turn in range(self.max_assistant_turns):
+      remaining = self.response_length - len(response_mask)
+      if remaining <= 0:
+        overflow = True
+        break
+
+      cap = (
+          remaining
+          if self.max_new_tokens_per_turn is None
+          else min(self.max_new_tokens_per_turn, remaining)
+      )
+      turn_sampling_params = {**sampling_params, "max_new_tokens": cap}
+
+      with simple_timer("generate_sequences", metrics):
+        output: TokenOutput = await self.server_manager.generate(
+            request_id=request_id,
+            prompt_ids=prompt_ids,
+            sampling_params=turn_sampling_params,
+            image_data=None,
+            video_data=None,
+            audio_data=None,
         )
-        if self.sim_live:
-            env.asim_backend = self._make_live_sim_backend()
-
-        request_id = uuid4().hex
-        metrics: dict[str, Any] = {}
-
-        prompt_ids = await self.apply_chat_template(messages)
-        response_mask: list[int] = []
-        response_logprobs: list[float] = []
-        track_logprobs = True
-
-        # Running dialogue for the SIMULATOR prompt (problem + solver turns + user replies).
-        # Contains no GT; the GT is injected only inside env.generate_user_turn.
-        sim_dialogue: list[dict] = [{"role": "user", "content": problem_text}]
-
-        assistant_turns = 0
-        user_turns = 0
-        answered = False
-        overflow = False
-        sim_failed = False
-        sim_failure_turn = -1
-        sim_reject_tries = 0
-        sim_reply_chars: list[int] = []
-        sim_leaks = 0
-        # Sim LATENCY + timeout, surfaced via reward_extra_info because AgentLoopOutput.metrics is
-        # a fixed-field pydantic model (generate_sequences/tool_calls/compute_score/num_preempted)
-        # with extra='ignore' -- anything else put in `metrics` is silently DROPPED at validation
-        # and never reaches TensorBoard. Under sim_live the sim shares the rollout engine's queue,
-        # so `sim_seconds` is the leading indicator and `sim_turn_timeout` the damage: a timeout
-        # BREAKS the episode, and an unanswered episode then trains at reward 0 -- an
-        # infrastructure artifact that GRPO cannot tell from a genuine failure, biased toward LONG
-        # dialogues (more sim calls = more chances to trip). Watch it before trusting any
-        # "live sim hurts multi-turn behavior" conclusion.
-        sim_seconds: list[float] = []
-        sim_turn_timeout = 0
-        env_score_timeout = 0
-        answered_at_turn = -1
-        reward = 0.0
-        result: dict[str, Any] = {}
-        answer_text = ""
-        solver_turn_lengths: list[int] = []
-        solver_turn_spans: list[tuple[int, int]] = []
-
-        # Off-policy staleness bookkeeping the trainer requires. Only the solver turns update
-        # this -- the simulator turns are masked, so their weights-version is irrelevant.
-        min_global_steps = None
-        max_global_steps = None
-
-        for turn in range(self.max_assistant_turns):
-            remaining = self.response_length - len(response_mask)
-            if remaining <= 0:
-                overflow = True
-                break
-
-            cap = remaining if self.max_new_tokens_per_turn is None else min(self.max_new_tokens_per_turn, remaining)
-            turn_sampling_params = {**sampling_params, "max_new_tokens": cap}
-
-            with simple_timer("generate_sequences", metrics):
-                output: TokenOutput = await self.server_manager.generate(
-                    request_id=request_id,
-                    prompt_ids=prompt_ids,
-                    sampling_params=turn_sampling_params,
-                    image_data=None,
-                    video_data=None,
-                    audio_data=None,
-                )
-            if metrics.get("num_preempted") is None:
-                metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
-
-            turn_min = output.extra_fields.get("min_global_steps")
-            turn_max = output.extra_fields.get("max_global_steps")
-            if turn_min is not None and min_global_steps is None:
-                min_global_steps = turn_min
-            if turn_max is not None:
-                max_global_steps = turn_max
-
-            resp_ids = output.token_ids
-            prompt_ids += resp_ids
-            seg_start = len(response_mask)
-            response_mask += [1] * len(resp_ids)
-            solver_turn_spans.append((seg_start, len(response_mask)))
-            solver_turn_lengths.append(len(resp_ids))
-            if track_logprobs and output.log_probs:
-                response_logprobs += output.log_probs
-            else:
-                track_logprobs = False
-
-            assistant_turns += 1
-
-            assistant_text = self.tokenizer.decode(resp_ids, skip_special_tokens=True)
-            sim_dialogue.append({"role": "assistant", "content": assistant_text})
-
-            is_last = turn == self.max_assistant_turns - 1
-            has_answer, ans = env.is_answer(assistant_text, episode_done=is_last)
-
-            if has_answer:
-                answered = True
-                answered_at_turn = turn
-                answer_text = ans
-                with simple_timer("env_score", metrics):
-                    try:
-                        result = await asyncio.wait_for(
-                            self.loop.run_in_executor(None, env.score, ans),
-                            timeout=self.env_step_timeout,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("env.score exceeded %.0fs; grading as 0", self.env_step_timeout)
-                        env_score_timeout = 1
-                        result = {"pass_rate": 0.0, "all_pass": False, "per_case": [], "n": 0}
-                reward = float(result.get("pass_rate", 0.0))
-                break
-
-            # No answer yet. On the last allowed turn, stop without injecting a reply we can't
-            # act on (reward stays 0 -- the solver never submitted anything usable).
-            if is_last:
-                break
-
-            # ── The user (simulator) turn. THE sim seam. sim_live=True awaits the rollout engine
-            # ── directly (already async); the frozen path is blocking HTTP -> executor. Both get
-            # ── the same hard timeout so a hung/queued sim can't stall the rollout forever.
-            # ── NB under sim_live the sim shares the engine with the solver rollouts, so a busy
-            # ── step queues; raise ENV_STEP_TIMEOUT if `sim_turn_timeout` starts firing.
-            _sim_t0 = self.loop.time()
-            with simple_timer("generate_user_turn", metrics):
-                try:
-                    if self.sim_reject_max_tries > 0:
-                        # ngram_n=0 disables detector (D); (A) def-regex + (B) ```python fence
-                        # always run. Matches the eval default (SIM_REJECT_NGRAM_N=0).
-                        if self.sim_live:
-                            coro = env.agenerate_user_turn_checked(
-                                list(sim_dialogue), max_tries=self.sim_reject_max_tries, ngram_n=0
-                            )
-                        else:
-                            coro = self.loop.run_in_executor(
-                                None,
-                                partial(
-                                    env.generate_user_turn_checked,
-                                    list(sim_dialogue),
-                                    max_tries=self.sim_reject_max_tries,
-                                    ngram_n=0,
-                                ),
-                            )
-                        res = await asyncio.wait_for(coro, timeout=self.env_step_timeout)
-                    else:
-                        if self.sim_live:
-                            coro = env.agenerate_user_turn(list(sim_dialogue))
-                        else:
-                            coro = self.loop.run_in_executor(None, env.generate_user_turn, list(sim_dialogue))
-                        reply = await asyncio.wait_for(coro, timeout=self.env_step_timeout)
-                        res = {"reply": reply, "tries": 1, "accepted": True}
-                except asyncio.TimeoutError:
-                    logger.warning("generate_user_turn exceeded %.0fs; ending trajectory", self.env_step_timeout)
-                    sim_turn_timeout = 1
-                    sim_seconds.append(self.loop.time() - _sim_t0)
-                    break
-
-            sim_seconds.append(self.loop.time() - _sim_t0)
-            sim_reject_tries += res["tries"]
-            if not res["accepted"]:
-                # Exhausted: every sample leaked code, i.e. the solver asked something the
-                # simulator can only answer WITH the solution ("just give me the final
-                # function"). End the conversation here. reward stays 0.0 -- the same outcome
-                # as running out of turns without submitting -- and the trajectory STAYS in the
-                # batch, so its solver turns take the group-relative negative advantage. That
-                # gradient is the point: it is what makes this differ from discarding.
-                sim_failed = True
-                sim_failure_turn = turn
-                break
-            user_content = res["reply"]
-            # ── Sim-DRIFT instrumentation (the point of the sim_live study). With a frozen sim
-            # ── these are constants of the environment; with a live sim they move WITH the policy,
-            # ── so a trend here is the coupling we are trying to measure. `sim_leaks` is a MONITOR
-            # ── on the ACCEPTED reply: with sim_reject_max_tries=0 it is the honest leak rate; with
-            # ── rejection on it should sit at ~0 and `sim_reject_tries` carries the signal instead.
-            sim_reply_chars.append(len(user_content))
-            if templates.detect_code_leak(user_content, env.ground_truth, 0) is not None:
-                sim_leaks += 1
-            sim_dialogue.append({"role": "user", "content": user_content})
-
-            feedback_ids = await self.apply_chat_template(
-                [{"role": "user", "content": user_content}],
-                remove_system_prompt=True,
-            )
-            # Need room for the user turn AND at least one response token next turn.
-            if len(response_mask) + len(feedback_ids) >= self.response_length:
-                overflow = True
-                break
-            prompt_ids += feedback_ids
-            response_mask += [0] * len(feedback_ids)
-            if track_logprobs:
-                response_logprobs += [0.0] * len(feedback_ids)
-            user_turns += 1
-
-        # SET 2: restrict the loss to the selected solver turns ("all" default = no-op).
-        apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
-
-        if _DEBUG_CONVO and index < _DEBUG_CONVO_N:
-            self._dump_conversation(index, problem_text, sim_dialogue, answered, answer_text, reward, result)
-
-        response_ids = prompt_ids[-len(response_mask) :]
-        prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]
-
-        output = AgentLoopOutput(
-            prompt_ids=prompt_ids_out,
-            response_ids=response_ids[: self.response_length],
-            response_mask=response_mask[: self.response_length],
-            response_logprobs=response_logprobs[: self.response_length]
-            if track_logprobs and response_logprobs
-            else None,
-            reward_score=reward,
-            num_turns=assistant_turns + user_turns + 1,
-            metrics=metrics,
-            extra_fields={
-                "turn_scores": [],
-                "tool_rewards": [],
-                "min_global_steps": min_global_steps,
-                "max_global_steps": max_global_steps,
-                # `overflow` is consumed at top-level by verl core (-> val-aux/solve/overflow_rate).
-                "overflow": overflow,
-                # Outcome diagnostics. verl does NOT log arbitrary top-level extra_fields keys --
-                # compute_data_metrics only aggregates a hardcoded whitelist. The one supported
-                # channel is the nested `reward_extra_info` dict: verl means every key here into
-                # val-core/val-aux metrics (per test_freq) and per-step rollout_data_dir dumps.
-                # So every scalar we want on the dashboards MUST live here. Keys must be identical
-                # across all rollouts (verl reads the key set from the first sample).
-                "reward_extra_info": {
-                    "answered": float(answered),
-                    "answered_at_turn": float(answered_at_turn),
-                    "sim_failed": float(sim_failed),
-                    "sim_failure_turn": float(sim_failure_turn),
-                    "sim_reject_tries": float(sim_reject_tries),
-                    # Sim drift (see the call site). Keys are emitted on EVERY rollout -- verl
-                    # reads the reward_extra_info key set from the FIRST sample, so a key missing
-                    # on the no-sim-turn path would break logging for the whole run.
-                    "sim_live": float(self.sim_live),
-                    "sim_reply_chars": (sum(sim_reply_chars) / len(sim_reply_chars) if sim_reply_chars else 0.0),
-                    "sim_leak_frac": (sim_leaks / len(sim_reply_chars)) if sim_reply_chars else 0.0,
-                    # Contention watch (see the declarations above). sim_seconds = MEAN wall time
-                    # per sim call incl. rejection resamples; sim_turn_timeout meaned over the
-                    # batch = fraction of trajectories KILLED by a slow sim (each of which trains
-                    # at reward 0 if the solver had not submitted yet).
-                    "sim_seconds": (sum(sim_seconds) / len(sim_seconds) if sim_seconds else 0.0),
-                    "sim_seconds_max": (max(sim_seconds) if sim_seconds else 0.0),
-                    "sim_turn_timeout": float(sim_turn_timeout),
-                    "env_score_timeout": float(env_score_timeout),
-                    "pass_rate": float(reward),
-                    "all_pass": float(bool(result.get("all_pass", False))),
-                    "num_test_cases": float(result.get("n", 0)),
-                    "num_assistant_turns": float(assistant_turns),
-                    "solver_resp_len_mean": (
-                        sum(solver_turn_lengths) / len(solver_turn_lengths) if solver_turn_lengths else 0.0
-                    ),
-                },
-            },
+      if metrics.get("num_preempted") is None:
+        metrics["num_preempted"] = (
+            output.num_preempted if output.num_preempted is not None else -1
         )
-        return output
 
-    def _dump_conversation(self, index, problem_text, sim_dialogue, answered, answer_text, reward, result):
-        """Dump one full trajectory for manual inspection (COLBENCH_DEBUG_CONVO)."""
-        n = _DEBUG_PREVIEW
-        logger.warning("[COLBENCH_CONVO] ===== trajectory index=%d =====", index)
-        logger.warning("[COLBENCH_CONVO] problem[:%d]=%r", n, str(problem_text)[:n])
-        for i, m in enumerate(sim_dialogue):
+      turn_min = output.extra_fields.get("min_global_steps")
+      turn_max = output.extra_fields.get("max_global_steps")
+      if turn_min is not None and min_global_steps is None:
+        min_global_steps = turn_min
+      if turn_max is not None:
+        max_global_steps = turn_max
+
+      resp_ids = output.token_ids
+      prompt_ids += resp_ids
+      seg_start = len(response_mask)
+      response_mask += [1] * len(resp_ids)
+      solver_turn_spans.append((seg_start, len(response_mask)))
+      solver_turn_lengths.append(len(resp_ids))
+      if track_logprobs and output.log_probs:
+        response_logprobs += output.log_probs
+      else:
+        track_logprobs = False
+
+      assistant_turns += 1
+
+      assistant_text = self.tokenizer.decode(resp_ids, skip_special_tokens=True)
+      sim_dialogue.append({"role": "assistant", "content": assistant_text})
+
+      is_last = turn == self.max_assistant_turns - 1
+      has_answer, ans = env.is_answer(assistant_text, episode_done=is_last)
+
+      if has_answer:
+        answered = True
+        answered_at_turn = turn
+        answer_text = ans
+        with simple_timer("env_score", metrics):
+          try:
+            result = await asyncio.wait_for(
+                self.loop.run_in_executor(None, env.score, ans),
+                timeout=self.env_step_timeout,
+            )
+          except asyncio.TimeoutError:
             logger.warning(
-                "[COLBENCH_CONVO] turn=%d role=%s content[:%d]=%r", i, m.get("role"), n, str(m.get("content"))[:n]
+                "env.score exceeded %.0fs; grading as 0", self.env_step_timeout
             )
-        logger.warning("[COLBENCH_CONVO] answered=%s answer[:%d]=%r", answered, n, str(answer_text)[:n])
-        logger.warning(
-            "[COLBENCH_CONVO] pass_rate=%.3f all_pass=%s per_case=%s n=%d",
-            reward,
-            result.get("all_pass"),
-            result.get("per_case"),
-            result.get("n", 0),
-        )
+            env_score_timeout = 1
+            result = {
+                "pass_rate": 0.0,
+                "all_pass": False,
+                "per_case": [],
+                "n": 0,
+            }
+        reward = float(result.get("pass_rate", 0.0))
+        break
+
+      # No answer yet. On the last allowed turn, stop without injecting a reply we can't
+      # act on (reward stays 0 -- the solver never submitted anything usable).
+      if is_last:
+        break
+
+      # ── The user (simulator) turn. THE sim seam. sim_live=True awaits the rollout engine
+      # ── directly (already async); the frozen path is blocking HTTP -> executor. Both get
+      # ── the same hard timeout so a hung/queued sim can't stall the rollout forever.
+      # ── NB under sim_live the sim shares the engine with the solver rollouts, so a busy
+      # ── step queues; raise ENV_STEP_TIMEOUT if `sim_turn_timeout` starts firing.
+      _sim_t0 = self.loop.time()
+      with simple_timer("generate_user_turn", metrics):
+        try:
+          if self.sim_reject_max_tries > 0:
+            # ngram_n=0 disables detector (D); (A) def-regex + (B) ```python fence
+            # always run. Matches the eval default (SIM_REJECT_NGRAM_N=0).
+            if self.sim_live:
+              coro = env.agenerate_user_turn_checked(
+                  list(sim_dialogue),
+                  max_tries=self.sim_reject_max_tries,
+                  ngram_n=0,
+              )
+            else:
+              coro = self.loop.run_in_executor(
+                  None,
+                  partial(
+                      env.generate_user_turn_checked,
+                      list(sim_dialogue),
+                      max_tries=self.sim_reject_max_tries,
+                      ngram_n=0,
+                  ),
+              )
+            res = await asyncio.wait_for(coro, timeout=self.env_step_timeout)
+          else:
+            if self.sim_live:
+              coro = env.agenerate_user_turn(list(sim_dialogue))
+            else:
+              coro = self.loop.run_in_executor(
+                  None, env.generate_user_turn, list(sim_dialogue)
+              )
+            reply = await asyncio.wait_for(coro, timeout=self.env_step_timeout)
+            res = {"reply": reply, "tries": 1, "accepted": True}
+        except asyncio.TimeoutError:
+          logger.warning(
+              "generate_user_turn exceeded %.0fs; ending trajectory",
+              self.env_step_timeout,
+          )
+          sim_turn_timeout = 1
+          sim_seconds.append(self.loop.time() - _sim_t0)
+          break
+
+      sim_seconds.append(self.loop.time() - _sim_t0)
+      sim_reject_tries += res["tries"]
+      if not res["accepted"]:
+        # Exhausted: every sample leaked code, i.e. the solver asked something the
+        # simulator can only answer WITH the solution ("just give me the final
+        # function"). End the conversation here. reward stays 0.0 -- the same outcome
+        # as running out of turns without submitting -- and the trajectory STAYS in the
+        # batch, so its solver turns take the group-relative negative advantage. That
+        # gradient is the point: it is what makes this differ from discarding.
+        sim_failed = True
+        sim_failure_turn = turn
+        break
+      user_content = res["reply"]
+      # ── Sim-DRIFT instrumentation (the point of the sim_live study). With a frozen sim
+      # ── these are constants of the environment; with a live sim they move WITH the policy,
+      # ── so a trend here is the coupling we are trying to measure. `sim_leaks` is a MONITOR
+      # ── on the ACCEPTED reply: with sim_reject_max_tries=0 it is the honest leak rate; with
+      # ── rejection on it should sit at ~0 and `sim_reject_tries` carries the signal instead.
+      sim_reply_chars.append(len(user_content))
+      if (
+          templates.detect_code_leak(user_content, env.ground_truth, 0)
+          is not None
+      ):
+        sim_leaks += 1
+      sim_dialogue.append({"role": "user", "content": user_content})
+
+      feedback_ids = await self.apply_chat_template(
+          [{"role": "user", "content": user_content}],
+          remove_system_prompt=True,
+      )
+      # Need room for the user turn AND at least one response token next turn.
+      if len(response_mask) + len(feedback_ids) >= self.response_length:
+        overflow = True
+        break
+      prompt_ids += feedback_ids
+      response_mask += [0] * len(feedback_ids)
+      if track_logprobs:
+        response_logprobs += [0.0] * len(feedback_ids)
+      user_turns += 1
+
+    # SET 2: restrict the loss to the selected solver turns ("all" default = no-op).
+    apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
+
+    if _DEBUG_CONVO and index < _DEBUG_CONVO_N:
+      self._dump_conversation(
+          index,
+          problem_text,
+          sim_dialogue,
+          answered,
+          answer_text,
+          reward,
+          result,
+      )
+
+    response_ids = prompt_ids[-len(response_mask) :]
+    prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]
+
+    output = AgentLoopOutput(
+        prompt_ids=prompt_ids_out,
+        response_ids=response_ids[: self.response_length],
+        response_mask=response_mask[: self.response_length],
+        response_logprobs=response_logprobs[: self.response_length]
+        if track_logprobs and response_logprobs
+        else None,
+        reward_score=reward,
+        num_turns=assistant_turns + user_turns + 1,
+        metrics=metrics,
+        extra_fields={
+            "turn_scores": [],
+            "tool_rewards": [],
+            "min_global_steps": min_global_steps,
+            "max_global_steps": max_global_steps,
+            # `overflow` is consumed at top-level by verl core (-> val-aux/solve/overflow_rate).
+            "overflow": overflow,
+            # Outcome diagnostics. verl does NOT log arbitrary top-level extra_fields keys --
+            # compute_data_metrics only aggregates a hardcoded whitelist. The one supported
+            # channel is the nested `reward_extra_info` dict: verl means every key here into
+            # val-core/val-aux metrics (per test_freq) and per-step rollout_data_dir dumps.
+            # So every scalar we want on the dashboards MUST live here. Keys must be identical
+            # across all rollouts (verl reads the key set from the first sample).
+            "reward_extra_info": {
+                "answered": float(answered),
+                "answered_at_turn": float(answered_at_turn),
+                "sim_failed": float(sim_failed),
+                "sim_failure_turn": float(sim_failure_turn),
+                "sim_reject_tries": float(sim_reject_tries),
+                # Sim drift (see the call site). Keys are emitted on EVERY rollout -- verl
+                # reads the reward_extra_info key set from the FIRST sample, so a key missing
+                # on the no-sim-turn path would break logging for the whole run.
+                "sim_live": float(self.sim_live),
+                "sim_reply_chars": (
+                    sum(sim_reply_chars) / len(sim_reply_chars)
+                    if sim_reply_chars
+                    else 0.0
+                ),
+                "sim_leak_frac": (sim_leaks / len(sim_reply_chars))
+                if sim_reply_chars
+                else 0.0,
+                # Contention watch (see the declarations above). sim_seconds = MEAN wall time
+                # per sim call incl. rejection resamples; sim_turn_timeout meaned over the
+                # batch = fraction of trajectories KILLED by a slow sim (each of which trains
+                # at reward 0 if the solver had not submitted yet).
+                "sim_seconds": (
+                    sum(sim_seconds) / len(sim_seconds) if sim_seconds else 0.0
+                ),
+                "sim_seconds_max": (max(sim_seconds) if sim_seconds else 0.0),
+                "sim_turn_timeout": float(sim_turn_timeout),
+                "env_score_timeout": float(env_score_timeout),
+                "pass_rate": float(reward),
+                "all_pass": float(bool(result.get("all_pass", False))),
+                "num_test_cases": float(result.get("n", 0)),
+                "num_assistant_turns": float(assistant_turns),
+                "solver_resp_len_mean": (
+                    sum(solver_turn_lengths) / len(solver_turn_lengths)
+                    if solver_turn_lengths
+                    else 0.0
+                ),
+            },
+        },
+    )
+    return output
+
+  def _dump_conversation(
+      self,
+      index,
+      problem_text,
+      sim_dialogue,
+      answered,
+      answer_text,
+      reward,
+      result,
+  ):
+    """Dump one full trajectory for manual inspection (COLBENCH_DEBUG_CONVO)."""
+    n = _DEBUG_PREVIEW
+    logger.warning("[COLBENCH_CONVO] ===== trajectory index=%d =====", index)
+    logger.warning("[COLBENCH_CONVO] problem[:%d]=%r", n, str(problem_text)[:n])
+    for i, m in enumerate(sim_dialogue):
+      logger.warning(
+          "[COLBENCH_CONVO] turn=%d role=%s content[:%d]=%r",
+          i,
+          m.get("role"),
+          n,
+          str(m.get("content"))[:n],
+      )
+    logger.warning(
+        "[COLBENCH_CONVO] answered=%s answer[:%d]=%r",
+        answered,
+        n,
+        str(answer_text)[:n],
+    )
+    logger.warning(
+        "[COLBENCH_CONVO] pass_rate=%.3f all_pass=%s per_case=%s n=%d",
+        reward,
+        result.get("all_pass"),
+        result.get("per_case"),
+        result.get("n", 0),
+    )

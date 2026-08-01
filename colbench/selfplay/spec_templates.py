@@ -211,120 +211,143 @@ _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _persona_to_text(persona: Any) -> str:
-    """Render the persona field (object or string) to a one-line human description."""
-    if isinstance(persona, dict):
-        who = str(persona.get("who", "")).strip()
-        domain = str(persona.get("domain", "")).strip()
-        skill = str(persona.get("python_skill", "")).strip()
-        style = str(persona.get("communication_style", "")).strip()
-        bits = [
-            b
-            for b in [
-                who,
-                f"domain: {domain}" if domain else "",
-                f"Python skill: {skill}" if skill else "",
-                f"style: {style}" if style else "",
-            ]
-            if b
+  """Render the persona field (object or string) to a one-line human description."""
+  if isinstance(persona, dict):
+    who = str(persona.get("who", "")).strip()
+    domain = str(persona.get("domain", "")).strip()
+    skill = str(persona.get("python_skill", "")).strip()
+    style = str(persona.get("communication_style", "")).strip()
+    bits = [
+        b
+        for b in [
+            who,
+            f"domain: {domain}" if domain else "",
+            f"Python skill: {skill}" if skill else "",
+            f"style: {style}" if style else "",
         ]
-        return "; ".join(bits)
-    return str(persona or "").strip()
+        if b
+    ]
+    return "; ".join(bits)
+  return str(persona or "").strip()
 
 
 def parse_spec(raw: str) -> dict:
-    """Parse an author model's reply into ``{persona, scenario, requirements, raw, ok}``.
+  """Parse an author model's reply into ``{persona, scenario, requirements, raw, ok}``.
 
-    Tolerant: strips prose/fences around the JSON object. If no JSON parses, we fall back to
-    treating the whole reply as free-text requirements (``ok=False``) so a malformed generation
-    is still usable/inspectable rather than lost. ``persona`` is kept as-authored (dict or str);
-    use ``_persona_to_text`` when composing prompt text.
-    """
-    text = (raw or "").strip()
-    obj = None
-    m = _JSON_OBJ_RE.search(text)
-    if m:
-        try:
-            obj = json.loads(m.group(0))
-        except Exception:  # noqa: BLE001 - tolerate malformed JSON, fall through to raw
-            obj = None
-    if isinstance(obj, dict):
-        return {
-            "persona": obj.get("persona", ""),
-            "scenario": str(obj.get("scenario", "") or "").strip(),
-            "requirements": str(obj.get("requirements", "") or "").strip(),
-            "raw": raw,
-            "ok": bool(str(obj.get("requirements", "")).strip()),
-        }
-    return {"persona": "", "scenario": "", "requirements": text, "raw": raw, "ok": False}
-
-
-def build_author_messages(problem_description: str, ground_truth: str) -> list[dict]:
-    """Chat messages for the spec-author call."""
-    return [
-        {"role": "system", "content": SPEC_AUTHOR_SYSTEM},
-        {
-            "role": "user",
-            "content": SPEC_AUTHOR_USER.format(problem_description=problem_description, ground_truth=ground_truth),
-        },
-    ]
+  Tolerant: strips prose/fences around the JSON object. If no JSON parses, we fall back to
+  treating the whole reply as free-text requirements (``ok=False``) so a malformed generation
+  is still usable/inspectable rather than lost. ``persona`` is kept as-authored (dict or str);
+  use ``_persona_to_text`` when composing prompt text.
+  """
+  text = (raw or "").strip()
+  obj = None
+  m = _JSON_OBJ_RE.search(text)
+  if m:
+    try:
+      obj = json.loads(m.group(0))
+    except Exception:  # noqa: BLE001 - tolerate malformed JSON, fall through to raw
+      obj = None
+  if isinstance(obj, dict):
+    return {
+        "persona": obj.get("persona", ""),
+        "scenario": str(obj.get("scenario", "") or "").strip(),
+        "requirements": str(obj.get("requirements", "") or "").strip(),
+        "raw": raw,
+        "ok": bool(str(obj.get("requirements", "")).strip()),
+    }
+  return {
+      "persona": "",
+      "scenario": "",
+      "requirements": text,
+      "raw": raw,
+      "ok": False,
+  }
 
 
-def build_full_spec_solver_messages(problem_description: str, spec: dict) -> list[dict]:
-    """Chat messages for the full-spec diagnostic solver call.
+def build_author_messages(
+    problem_description: str, ground_truth: str
+) -> list[dict]:
+  """Chat messages for the spec-author call."""
+  return [
+      {"role": "system", "content": SPEC_AUTHOR_SYSTEM},
+      {
+          "role": "user",
+          "content": SPEC_AUTHOR_USER.format(
+              problem_description=problem_description, ground_truth=ground_truth
+          ),
+      },
+  ]
 
-    Includes the public request (for the exact signature/name) plus the full authored spec.
-    ``spec`` is a parsed dict from ``parse_spec``.
-    """
-    return [
-        {"role": "system", "content": FULL_SPEC_SOLVER_SYSTEM},
-        {
-            "role": "user",
-            "content": FULL_SPEC_SOLVER_USER.format(
-                problem_description=problem_description,
-                persona=_persona_to_text(spec.get("persona", "")),
-                scenario=spec.get("scenario", "") or "(not specified)",
-                requirements=spec.get("requirements", ""),
-            ),
-        },
-    ]
+
+def build_full_spec_solver_messages(
+    problem_description: str, spec: dict
+) -> list[dict]:
+  """Chat messages for the full-spec diagnostic solver call.
+
+  Includes the public request (for the exact signature/name) plus the full authored spec.
+  ``spec`` is a parsed dict from ``parse_spec``.
+  """
+  return [
+      {"role": "system", "content": FULL_SPEC_SOLVER_SYSTEM},
+      {
+          "role": "user",
+          "content": FULL_SPEC_SOLVER_USER.format(
+              problem_description=problem_description,
+              persona=_persona_to_text(spec.get("persona", "")),
+              scenario=spec.get("scenario", "") or "(not specified)",
+              requirements=spec.get("requirements", ""),
+          ),
+      },
+  ]
 
 
 def parse_plot_spec(raw: str) -> dict:
-    """Parse a plot author reply into ``{persona, scenario, requirements, plot, raw, ok}``.
+  """Parse a plot author reply into ``{persona, scenario, requirements, plot, raw, ok}``.
 
-    ``requirements`` is the full intent the simulator must eventually convey; ``plot`` is the
-    tailored, high-level direction for how this conversation naturally unfolds (NOT a script).
-    Tolerant like ``parse_spec``: ``ok`` requires BOTH ``requirements`` and ``plot``. On
-    malformed JSON the whole reply becomes free-text requirements with ``ok=False``.
-    """
-    text = (raw or "").strip()
-    obj = None
-    m = _JSON_OBJ_RE.search(text)
-    if m:
-        try:
-            obj = json.loads(m.group(0))
-        except Exception:  # noqa: BLE001 - tolerate malformed JSON, fall through to raw
-            obj = None
-    if isinstance(obj, dict):
-        requirements = str(obj.get("requirements", "") or "").strip()
-        plot = str(obj.get("plot", "") or "").strip()
-        return {
-            "persona": obj.get("persona", ""),
-            "scenario": str(obj.get("scenario", "") or "").strip(),
-            "requirements": requirements,
-            "plot": plot,
-            "raw": raw,
-            "ok": bool(requirements and plot),
-        }
-    return {"persona": "", "scenario": "", "requirements": text, "plot": "", "raw": raw, "ok": False}
+  ``requirements`` is the full intent the simulator must eventually convey; ``plot`` is the
+  tailored, high-level direction for how this conversation naturally unfolds (NOT a script).
+  Tolerant like ``parse_spec``: ``ok`` requires BOTH ``requirements`` and ``plot``. On
+  malformed JSON the whole reply becomes free-text requirements with ``ok=False``.
+  """
+  text = (raw or "").strip()
+  obj = None
+  m = _JSON_OBJ_RE.search(text)
+  if m:
+    try:
+      obj = json.loads(m.group(0))
+    except Exception:  # noqa: BLE001 - tolerate malformed JSON, fall through to raw
+      obj = None
+  if isinstance(obj, dict):
+    requirements = str(obj.get("requirements", "") or "").strip()
+    plot = str(obj.get("plot", "") or "").strip()
+    return {
+        "persona": obj.get("persona", ""),
+        "scenario": str(obj.get("scenario", "") or "").strip(),
+        "requirements": requirements,
+        "plot": plot,
+        "raw": raw,
+        "ok": bool(requirements and plot),
+    }
+  return {
+      "persona": "",
+      "scenario": "",
+      "requirements": text,
+      "plot": "",
+      "raw": raw,
+      "ok": False,
+  }
 
 
-def build_plot_author_messages(problem_description: str, ground_truth: str) -> list[dict]:
-    """Chat messages for the plot spec-author call."""
-    return [
-        {"role": "system", "content": PLOT_AUTHOR_SYSTEM},
-        {
-            "role": "user",
-            "content": PLOT_AUTHOR_USER.format(problem_description=problem_description, ground_truth=ground_truth),
-        },
-    ]
+def build_plot_author_messages(
+    problem_description: str, ground_truth: str
+) -> list[dict]:
+  """Chat messages for the plot spec-author call."""
+  return [
+      {"role": "system", "content": PLOT_AUTHOR_SYSTEM},
+      {
+          "role": "user",
+          "content": PLOT_AUTHOR_USER.format(
+              problem_description=problem_description, ground_truth=ground_truth
+          ),
+      },
+  ]

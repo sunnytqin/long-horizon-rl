@@ -36,22 +36,22 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 def _b64(s: str) -> str:
-    return base64.b64encode((s or "").encode("utf-8")).decode("ascii")
+  return base64.b64encode((s or "").encode("utf-8")).decode("ascii")
 
 
 def build_harness(ground_truth_src: str, candidate_src: str) -> str:
-    """Build the stdin-driven comparison harness (see module docstring).
+  """Build the stdin-driven comparison harness (see module docstring).
 
-    The harness reads a base64-encoded call-string from stdin, evaluates it in a GT namespace
-    and a candidate namespace (each ``exec``'d fresh), and prints the boolean equivalence for
-    that one call. Both sources are embedded base64 so any source text round-trips.
-    """
-    gt_b64 = _b64(ground_truth_src)
-    cand_b64 = _b64(candidate_src)
-    # NOTE: ``{{}}`` -> literal ``{}`` under .format-free f-string; the only interpolations are
-    # the two base64 blobs. Everything the candidate prints is captured into _buf and dropped;
-    # only the final repr(bool) reaches real stdout, which the sidecar compares to "True".
-    return f'''import sys, base64, contextlib, io
+  The harness reads a base64-encoded call-string from stdin, evaluates it in a GT namespace
+  and a candidate namespace (each ``exec``'d fresh), and prints the boolean equivalence for
+  that one call. Both sources are embedded base64 so any source text round-trips.
+  """
+  gt_b64 = _b64(ground_truth_src)
+  cand_b64 = _b64(candidate_src)
+  # NOTE: ``{{}}`` -> literal ``{}`` under .format-free f-string; the only interpolations are
+  # the two base64 blobs. Everything the candidate prints is captured into _buf and dropped;
+  # only the final repr(bool) reaches real stdout, which the sidecar compares to "True".
+  return f"""import sys, base64, contextlib, io
 
 _GT_SRC = base64.b64decode("{gt_b64}").decode("utf-8")
 _CAND_SRC = base64.b64decode("{cand_b64}").decode("utf-8")
@@ -76,43 +76,48 @@ with contextlib.redirect_stdout(_buf):
     except Exception:
         _ok = False
 print(repr(_ok))
-'''
+"""
 
 
 def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
-    """Grade ``candidate_code`` against ``ground_truth_src`` on ``test_calls``.
+  """Grade ``candidate_code`` against ``ground_truth_src`` on ``test_calls``.
 
-    Args:
-        candidate_code: the solver's submitted function source (already fence-stripped).
-        ground_truth_src: the hidden GT function source.
-        test_calls: list of call-strings, e.g. ``"f(1969, 140, 500)"``.
-        time_limit: per-case wall-clock timeout (seconds), passed to the sidecar.
+  Args:
+      candidate_code: the solver's submitted function source (already fence-stripped).
+      ground_truth_src: the hidden GT function source.
+      test_calls: list of call-strings, e.g. ``"f(1969, 140, 500)"``.
+      time_limit: per-case wall-clock timeout (seconds), passed to the sidecar.
 
-    Returns:
-        dict with ``pass_rate`` (float in [0,1] -- the reward), ``all_pass`` (bool),
-        ``per_case`` (list[bool]), and ``n`` (cases executed). A missing candidate / no test
-        cases / an unreachable sidecar all yield ``pass_rate=0.0`` (never raises).
-    """
-    # Defensive: the parquet stores test_cases as list<string> and verl (HF datasets) hands
-    # us a plain list, but a pandas reader returns np.ndarray -- so avoid `test_calls or []`
-    # (bool() on a multi-element array raises "truth value is ambiguous") and use is-None.
-    _calls_iter = test_calls if test_calls is not None else []
-    calls = [str(c) for c in _calls_iter if c is not None and str(c) != ""]
-    if not candidate_code or not calls:
-        return {"pass_rate": 0.0, "all_pass": False, "per_case": [], "n": 0}
+  Returns:
+      dict with ``pass_rate`` (float in [0,1] -- the reward), ``all_pass`` (bool),
+      ``per_case`` (list[bool]), and ``n`` (cases executed). A missing candidate / no test
+      cases / an unreachable sidecar all yield ``pass_rate=0.0`` (never raises).
+  """
+  # Defensive: the parquet stores test_cases as list<string> and verl (HF datasets) hands
+  # us a plain list, but a pandas reader returns np.ndarray -- so avoid `test_calls or []`
+  # (bool() on a multi-element array raises "truth value is ambiguous") and use is-None.
+  _calls_iter = test_calls if test_calls is not None else []
+  calls = [str(c) for c in _calls_iter if c is not None and str(c) != ""]
+  if not candidate_code or not calls:
+    return {"pass_rate": 0.0, "all_pass": False, "per_case": [], "n": 0}
 
-    harness = build_harness(ground_truth_src, candidate_code)
-    test_input = [_b64(c) for c in calls]
-    test_output = ["True"] * len(calls)
-    # max_gt_test = len(calls): grade EVERY case so the fraction denominator matches sweet_rl
-    # (which divides by len(test_cases)); the default cap of 20 would silently drop cases.
-    all_pass, per_case, _failures = exec_client.eval_code_on_tests(
-        harness,
-        test_input,
-        test_output,
-        time_limit=time_limit,
-        max_gt_test=len(calls),
-    )
-    n = len(per_case)
-    pass_rate = (sum(1 for p in per_case if p) / n) if n else 0.0
-    return {"pass_rate": pass_rate, "all_pass": bool(all_pass), "per_case": per_case, "n": n}
+  harness = build_harness(ground_truth_src, candidate_code)
+  test_input = [_b64(c) for c in calls]
+  test_output = ["True"] * len(calls)
+  # max_gt_test = len(calls): grade EVERY case so the fraction denominator matches sweet_rl
+  # (which divides by len(test_cases)); the default cap of 20 would silently drop cases.
+  all_pass, per_case, _failures = exec_client.eval_code_on_tests(
+      harness,
+      test_input,
+      test_output,
+      time_limit=time_limit,
+      max_gt_test=len(calls),
+  )
+  n = len(per_case)
+  pass_rate = (sum(1 for p in per_case if p) / n) if n else 0.0
+  return {
+      "pass_rate": pass_rate,
+      "all_pass": bool(all_pass),
+      "per_case": per_case,
+      "n": n,
+  }

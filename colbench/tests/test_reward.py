@@ -17,70 +17,77 @@ from colbench import reward  # noqa: E402
 
 # A GT with a hidden branch (x >= 10) so a "sum only" candidate matches PART of the cases.
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
-CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]  # 2 take the else branch, 2 the if branch
+CALLS = [
+    "f(1, 2)",
+    "f(20, 5)",
+    "f(15, 15)",
+    "f(3, 4)",
+]  # 2 take the else branch, 2 the if branch
 
 
 def test_exact_copy_scores_full():
-    res = reward.grade(GT, GT, CALLS)
-    assert res["pass_rate"] == 1.0
-    assert res["all_pass"] is True
-    assert res["n"] == 4
+  res = reward.grade(GT, GT, CALLS)
+  assert res["pass_rate"] == 1.0
+  assert res["all_pass"] is True
+  assert res["n"] == 4
 
 
 def test_partial_impl_scores_fraction():
-    # Misses the hidden else branch: matches only the 2 cases where x >= 10.
-    candidate = "def f(x, y):\n    return x + y\n"
-    res = reward.grade(candidate, GT, CALLS)
-    assert res["pass_rate"] == 0.5
-    assert res["all_pass"] is False
-    assert sum(res["per_case"]) == 2
+  # Misses the hidden else branch: matches only the 2 cases where x >= 10.
+  candidate = "def f(x, y):\n    return x + y\n"
+  res = reward.grade(candidate, GT, CALLS)
+  assert res["pass_rate"] == 0.5
+  assert res["all_pass"] is False
+  assert sum(res["per_case"]) == 2
 
 
 def test_wrong_impl_scores_zero():
-    candidate = "def f(x, y):\n    return 0\n"
-    res = reward.grade(candidate, GT, CALLS)
-    assert res["pass_rate"] == 0.0
-    assert res["all_pass"] is False
+  candidate = "def f(x, y):\n    return 0\n"
+  res = reward.grade(candidate, GT, CALLS)
+  assert res["pass_rate"] == 0.0
+  assert res["all_pass"] is False
 
 
 def test_candidate_stdout_is_suppressed():
-    # A correct impl that ALSO prints must still score 1.0 -- the harness suppresses candidate
-    # stdout so the sole harness output stays the boolean the sidecar compares to "True".
-    candidate = "def f(x, y):\n    print('noisy candidate output')\n    return x + y if x >= 10 else x - y\n"
-    res = reward.grade(candidate, GT, CALLS)
-    assert res["pass_rate"] == 1.0
+  # A correct impl that ALSO prints must still score 1.0 -- the harness suppresses candidate
+  # stdout so the sole harness output stays the boolean the sidecar compares to "True".
+  candidate = "def f(x, y):\n    print('noisy candidate output')\n    return x + y if x >= 10 else x - y\n"
+  res = reward.grade(candidate, GT, CALLS)
+  assert res["pass_rate"] == 1.0
 
 
 def test_call_string_with_escaped_newline_not_corrupted():
-    # base64-on-stdin must survive local_exec.normalise's `\n`->newline rewrite. A call whose
-    # arg is a string literal containing \n would break if passed raw; here GT==candidate so a
-    # correct decode yields a match, a corrupted decode raises -> 0.
-    gt = "def g(s):\n    return s.count(chr(10))\n"
-    calls = ['g("a\\nb\\nc")']  # the literal 4-char sequences a \n b ...
-    res = reward.grade(gt, gt, calls)
-    assert res["pass_rate"] == 1.0
+  # base64-on-stdin must survive local_exec.normalise's `\n`->newline rewrite. A call whose
+  # arg is a string literal containing \n would break if passed raw; here GT==candidate so a
+  # correct decode yields a match, a corrupted decode raises -> 0.
+  gt = "def g(s):\n    return s.count(chr(10))\n"
+  calls = ['g("a\\nb\\nc")']  # the literal 4-char sequences a \n b ...
+  res = reward.grade(gt, gt, calls)
+  assert res["pass_rate"] == 1.0
 
 
 def test_numpy_array_test_cases():
-    # Defensive: verl (HF datasets) gives a list, but a pandas reader returns an ndarray.
-    # grade() must NOT do `x or []` on it (bool() on a multi-element array raises). Assert it
-    # iterates cleanly either way.
-    np = pytest.importorskip("numpy")
-    calls = np.array(CALLS, dtype=object)
-    res = reward.grade(GT, GT, calls)
-    assert res["pass_rate"] == 1.0
-    assert res["n"] == 4
+  # Defensive: verl (HF datasets) gives a list, but a pandas reader returns an ndarray.
+  # grade() must NOT do `x or []` on it (bool() on a multi-element array raises). Assert it
+  # iterates cleanly either way.
+  np = pytest.importorskip("numpy")
+  calls = np.array(CALLS, dtype=object)
+  res = reward.grade(GT, GT, calls)
+  assert res["pass_rate"] == 1.0
+  assert res["n"] == 4
 
 
 def test_missing_candidate_or_no_cases_scores_zero():
-    assert reward.grade("", GT, CALLS)["pass_rate"] == 0.0
-    assert reward.grade(GT, GT, [])["pass_rate"] == 0.0
-    assert reward.grade(GT, GT, [None])["pass_rate"] == 0.0  # None-only cases filtered out
+  assert reward.grade("", GT, CALLS)["pass_rate"] == 0.0
+  assert reward.grade(GT, GT, [])["pass_rate"] == 0.0
+  assert (
+      reward.grade(GT, GT, [None])["pass_rate"] == 0.0
+  )  # None-only cases filtered out
 
 
 if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"PASS {name}")
-    print("all reward tests passed")
+  for name, fn in sorted(globals().items()):
+    if name.startswith("test_") and callable(fn):
+      fn()
+      print(f"PASS {name}")
+  print("all reward tests passed")

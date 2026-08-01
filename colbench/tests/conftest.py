@@ -12,10 +12,11 @@ import os
 
 if not hasattr(enum, "StrEnum"):
 
-    class StrEnum(str, enum.Enum):
-        def __str__(self):
-            return str(self.value)
+  class StrEnum(str, enum.Enum):
 
-    enum.StrEnum = StrEnum
+    def __str__(self):
+      return str(self.value)
+
+  enum.StrEnum = StrEnum
 
 os.environ.setdefault("CODECONTEST_ALLOW_INPROCESS", "1")
