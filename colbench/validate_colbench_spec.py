@@ -46,12 +46,12 @@ Example (conda env, base Qwen3-4B on both roles, one vLLM server on :30000):
 # rest of verl is written; call sites read on the bare name throughout.
 # pylint: disable=g-importing-member
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import random
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

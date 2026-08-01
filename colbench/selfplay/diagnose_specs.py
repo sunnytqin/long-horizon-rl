@@ -26,12 +26,12 @@ Example:
 # rest of verl is written; call sites read on the bare name throughout.
 # pylint: disable=g-importing-member
 import argparse
+from concurrent.futures import as_completed
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import as_completed
 from typing import Any
 
 sys.path.append(

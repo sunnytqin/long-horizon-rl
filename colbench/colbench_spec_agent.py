@@ -53,8 +53,8 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from codecontest.masking import TRAIN_TURNS_MODES
 from codecontest.masking import apply_train_turns_mask
+from codecontest.masking import TRAIN_TURNS_MODES
 from colbench import templates
 from colbench.env_spec import ColBenchSpecUserSimEnv
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase
@@ -581,9 +581,11 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 ),
                 # Mean chars per injected sim reply (0 if the sim never got to
                 # speak).
-                "sim_reply_chars": float(sim_reply_chars_total / user_turns)
-                if user_turns
-                else 0.0,
+                "sim_reply_chars": (
+                    float(sim_reply_chars_total / user_turns)
+                    if user_turns
+                    else 0.0
+                ),
             },
         },
     )

@@ -31,10 +31,10 @@ influence on grading.
 # ColBenchUserSimEnv``) rather than the enclosing module, matching how the
 # rest of verl is written; call sites read on the bare name throughout.
 # pylint: disable=g-importing-member
-import logging
-import os
 from dataclasses import dataclass
 from dataclasses import field
+import logging
+import os
 from typing import Any
 from typing import Awaitable
 from typing import Callable
@@ -217,6 +217,8 @@ class ColBenchUserSimEnv:
       agent loop generates the user turn on the training rollout engine, so the
       simulator IS the current policy (no frozen copy). ``sim_backend`` is left
       untouched, so the sync path (offline eval, tests) keeps working.
+    last_sim_reply: the reply from the last ``generate_user_turn`` call, kept
+      for the agent loop's debug dump.
   """
 
   problem_description: str
@@ -226,8 +228,6 @@ class ColBenchUserSimEnv:
   reward_time_limit: float = 6.0
   sim_backend: Optional[SimBackend] = None
   asim_backend: Optional[AsyncSimBackend] = None
-  # Populated on the last generate_user_turn call, for the agent loop's debug
-  # dump.
   last_sim_reply: str = field(default="", repr=False)
 
   def __post_init__(self):

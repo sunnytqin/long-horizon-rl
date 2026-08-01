@@ -10,9 +10,9 @@ cover ALL trajectories, and that the hidden GT never leaks into a saved
 (solver-visible) message. Mirrors the stub style of test_env.py.
 """
 
+from argparse import Namespace
 import json
 import os
-from argparse import Namespace
 
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)

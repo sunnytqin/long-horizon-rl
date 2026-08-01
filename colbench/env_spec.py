@@ -37,10 +37,10 @@ via ``templates.contains_code`` / ``templates.extract_last_code``.
 # ColBenchUserSimEnv``) rather than the enclosing module, matching how the
 # rest of verl is written; call sites read on the bare name throughout.
 # pylint: disable=g-importing-member
-import logging
-import os
 from dataclasses import dataclass
 from dataclasses import field
+import logging
+import os
 from typing import Any
 from typing import Optional
 
@@ -50,10 +50,10 @@ from colbench import templates
 # Reuse the GT env's frozen-sim HTTP backend + sampling resolution verbatim --
 # only the PROMPT built here differs (spec vs GT source). Keeps sim sampling /
 # thinking-kwarg behavior identical.
-from colbench.env import SimBackend  # pylint: disable=unused-import
 from colbench.env import _sim_extra_body  # pylint: disable=unused-import
 from colbench.env import _sim_sampling  # pylint: disable=unused-import
 from colbench.env import openai_sim_backend  # pylint: disable=unused-import
+from colbench.env import SimBackend  # pylint: disable=unused-import
 
 
 def make_openai_sim_backend(
@@ -177,6 +177,28 @@ class ColBenchSpecUserSimEnv:
     reward_time_limit: per-case exec timeout (seconds) for grading.
     sim_backend: (system, user) -> raw reply. Defaults to the frozen-server HTTP
       call; tests / Phase-2 inject their own.
+    sim_max_tries: reject-sampling budget. The sim is re-queried up to this many
+      times if it writes code (an ordinary user describes in words, never pastes
+      a function); if ALL tries still contain a code fence the loop aborts the
+      episode (see ``last_sim_code_reject_exhausted``) rather than injecting or
+      stripping a bad reply.
+    grounded: GROUNDED mode (``+colbench.grounded_sim``) -- condition the sim on
+      the hidden GT function source + ``spec["plot"]`` instead of
+      persona/scenario/requirements. Everything else about this env is
+      unchanged. When True the GT IS in the sim's prompt, so the
+      ``sim_max_tries`` rejection above becomes the load-bearing leak defense
+      rather than a character guard.
+    last_sim_reply: the reply from the last ``generate_user_turn`` call, kept
+      for the loop's debug dump / audit.
+    last_sim_raw: the most recent RAW (uncapped, but ``<think>``-stripped) sim
+      reply, so the loop can string-match ``[TERMINATE]`` on the sim's true
+      output before the injected turn is char-capped.
+    last_sim_code_rejected: how many code-writing sim replies were discarded on
+      the last ``generate_user_turn`` (diagnostic).
+    last_sim_code_reject_exhausted: True iff EVERY try on the last
+      ``generate_user_turn`` still wrote code -> the loop should abort this
+      conversation (``terminated_by`` "sim_code_reject") so it can be read, NOT
+      inject a bad turn.
   """
 
   problem_description: str
@@ -186,30 +208,11 @@ class ColBenchSpecUserSimEnv:
   max_steps: int = 10
   reward_time_limit: float = 6.0
   sim_backend: Optional[SimBackend] = None
-  # Reject-sample the sim if it writes code (an ordinary user describes in
-  # words, never pastes a function). Re-query up to this many times; if ALL
-  # still contain a code fence, the loop aborts the episode (see
-  # last_sim_code_reject_exhausted) rather than injecting/stripping a bad reply.
   sim_max_tries: int = 8
-  # GROUNDED mode (+colbench.grounded_sim): condition the sim on the hidden GT
-  # function source + spec["plot"] instead of persona/scenario/requirements.
-  # Everything else about this env is unchanged. When True the GT IS in the
-  # sim's prompt, so the sim_wrote_code rejection above becomes the load-bearing
-  # leak defense rather than a character guard.
   grounded: bool = False
-  # Populated on the last generate_user_turn call, for the loop's debug dump /
-  # audit.
   last_sim_reply: str = field(default="", repr=False)
-  # The most recent RAW (uncapped, but <think>-stripped) sim reply, so the loop
-  # can string-match [TERMINATE] on the sim's true output before the injected
-  # turn is char-capped.
   last_sim_raw: str = field(default="", repr=False)
-  # How many code-writing sim replies were discarded on the last
-  # generate_user_turn (diagnostic).
   last_sim_code_rejected: int = field(default=0, repr=False)
-  # True iff EVERY try on the last generate_user_turn still wrote code -> the
-  # loop should abort this conversation (terminated_by "sim_code_reject") so it
-  # can be read, NOT inject a bad turn.
   last_sim_code_reject_exhausted: bool = field(default=False, repr=False)
 
   def __post_init__(self):

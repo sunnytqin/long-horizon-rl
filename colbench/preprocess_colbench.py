@@ -31,17 +31,17 @@ import os
 import sys
 from typing import Any
 
-import datasets
-import pandas as pd
 from absl import app
 from absl import flags
+import datasets
+import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The module-level setup above (env vars, sys.path) has to run
 # before these imports resolve, so they cannot sit at the top.
 # pylint: disable=g-import-not-at-top,wrong-import-position
-from colbench.templates import COLBENCH_AGENT_SYSTEM_PROMPT
 from colbench.templates import build_initial_user_message
+from colbench.templates import COLBENCH_AGENT_SYSTEM_PROMPT
 
 DATA_SOURCE = (
     "colbench_code_local"  # routes nowhere special; reward comes from the loop

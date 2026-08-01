@@ -46,8 +46,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import datasets
 
 from colbench.selfplay import dataio
-from colbench.templates import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT
 from colbench.templates import build_initial_user_message
+from colbench.templates import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT
 
 DATA_SOURCE = (
     "colbench_spec_local"  # routes nowhere special; reward comes from the loop

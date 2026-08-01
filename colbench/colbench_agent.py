@@ -46,17 +46,17 @@ leak the GT).
 # rest of verl is written; call sites read on the bare name throughout.
 # pylint: disable=g-importing-member
 import asyncio
+from functools import partial
 import logging
 import os
-from functools import partial
 from typing import Any
 from uuid import uuid4
 
-from codecontest.masking import TRAIN_TURNS_MODES
 from codecontest.masking import apply_train_turns_mask
+from codecontest.masking import TRAIN_TURNS_MODES
 from colbench import templates
-from colbench.env import ColBenchUserSimEnv
 from colbench.env import _sim_sampling
+from colbench.env import ColBenchUserSimEnv
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase
 from verl.experimental.agent_loop.agent_loop import AgentLoopOutput
 from verl.experimental.agent_loop.agent_loop import register
@@ -530,9 +530,9 @@ class ColBenchAgentLoop(AgentLoopBase):
                     if sim_reply_chars
                     else 0.0
                 ),
-                "sim_leak_frac": (sim_leaks / len(sim_reply_chars))
-                if sim_reply_chars
-                else 0.0,
+                "sim_leak_frac": (
+                    sim_leaks / len(sim_reply_chars) if sim_reply_chars else 0.0
+                ),
                 # Contention watch (see the declarations above). sim_seconds =
                 # MEAN wall time per sim call incl. rejection resamples;
                 # sim_turn_timeout meaned over the batch = fraction of

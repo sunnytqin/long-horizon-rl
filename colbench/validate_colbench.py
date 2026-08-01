@@ -60,11 +60,11 @@ already up):
 # rest of verl is written; call sites read on the bare name throughout.
 # pylint: disable=g-importing-member
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
