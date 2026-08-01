@@ -46,9 +46,9 @@ from colbench.selfplay import spec_templates
 from colbench.selfplay.dataio import append_jsonl
 from colbench.selfplay.dataio import existing_indices
 from colbench.selfplay.dataio import read_tasks
-from colbench.selfplay.llm_client import ChatCallFailed
-from colbench.selfplay.llm_client import ChatCallFatal
-from colbench.selfplay.llm_client import ChatCallRefused
+from colbench.selfplay.llm_client import ChatCallFailedError
+from colbench.selfplay.llm_client import ChatCallFatalError
+from colbench.selfplay.llm_client import ChatCallRefusedError
 from colbench.selfplay.llm_client import ChatEndpoint
 
 
@@ -375,17 +375,17 @@ def main():
       for fut in as_completed(futs):
         try:
           rec = fut.result()
-        except ChatCallFatal as e:
+        except ChatCallFatalError as e:
           # Bad key / no model access: every remaining row would fail the same
           # way.
           fatal = e
           for f in futs:
             f.cancel()
           break
-        except ChatCallFailed:
+        except ChatCallFailedError:
           n_defer += 1  # deliberately unwritten -> retried on the next resume
           continue
-        except ChatCallRefused as e:
+        except ChatCallRefusedError as e:
           # Content-safety refusal of this specific prompt: permanent, so RECORD
           # it (ok=False) rather than deferring. A deferred row is retried on
           # every resume, which would stop the run from ever converging.

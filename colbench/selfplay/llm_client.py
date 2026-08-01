@@ -38,7 +38,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 ChatBackend = Callable[[list], str]
 
 
-class ChatCallFailed(RuntimeError):
+class ChatCallFailedError(RuntimeError):
   """Every retry was exhausted without a reply.
 
   Transient: rate limit, 5xx or timeout.
@@ -50,7 +50,7 @@ class ChatCallFailed(RuntimeError):
   """
 
 
-class ChatCallFatal(RuntimeError):
+class ChatCallFatalError(RuntimeError):
   """A non-retryable error (bad key, no access to the model, malformed request).
 
   Aborts the whole batch immediately rather than repeating a doomed call 10k
@@ -58,7 +58,7 @@ class ChatCallFatal(RuntimeError):
   """
 
 
-class ChatCallRefused(RuntimeError):
+class ChatCallRefusedError(RuntimeError):
   """The provider refused THIS prompt on content-safety grounds.
 
   Reported as ``invalid_prompt``.
@@ -216,7 +216,32 @@ class ChatEndpoint:
       model would think and emit ``<think>`` blocks the spec parser cannot use)
       -> it must go through ``chat_template_kwargs``.
     retries: per-call retry budget.
-    timeout: socket timeout in seconds.
+    timeout: socket timeout in seconds. On a METERED API a client timeout is
+      the most expensive possible failure -- the server still generated (and
+      billed) the completion, we throw it away, and then we pay to redo it.
+      Waiting is strictly cheaper than abandoning, so this must be generous:
+      far above the slowest expected generation, not a "responsiveness" value.
+    backoff_base: base of the exponential backoff (with full jitter) between
+      attempts. A server-sent ``Retry-After`` overrides the computed wait. Only
+      matters for a metered API.
+    backoff_cap: ceiling on that computed wait, in seconds.
+    raise_on_exhausted: raise ``ChatCallFailedError`` instead of returning
+      ``""`` when the retries run out, so a PAID caller can decline to persist
+      the row and retry it on resume instead.
+    usage: optional shared dict for SERVER-REPORTED token usage, accumulated
+      across threads: ``{calls, prompt_tokens, completion_tokens,
+      reasoning_tokens, cached_tokens}``. Without it a metered run has no idea
+      what it actually spent -- counting the visible reply text undercounts a
+      reasoning model, whose hidden thinking is billed as output.
+    service_tier: OpenAI service tier. ``"flex"`` trades latency for ~half
+      price, which suits offline authoring; NB flex returns 429
+      ``resource_unavailable`` when capacity is short, which is TRANSIENT
+      (retry with backoff) and NOT the quota exhaustion that aborts a run, and
+      it needs a generous timeout.
+    vendor: ``"vllm"``/``"sglang"`` local server (sends ``top_k``/``min_p`` via
+      ``extra_body``) or ``"openai"`` vanilla API (no vendor extras; some
+      models reject custom sampling, so params are tried progressively-minimal
+      -- see ``_param_sets``).
     backend: injectable raw backend (tests). None -> the lazy OpenAI HTTP call.
   """
 
@@ -230,37 +255,13 @@ class ChatEndpoint:
   max_tokens: int = 4096
   enable_thinking: Optional[bool] = None
   retries: int = 3
-  # On a METERED API a client timeout is the most expensive possible failure:
-  # the server still generated (and billed) the completion, we throw it away,
-  # and then we pay to redo it. Waiting is strictly cheaper than abandoning, so
-  # this must be generous -- far above the slowest expected generation, not a
-  # "responsiveness" value.
   timeout: float = 120.0
-  # Rate-limit handling: exponential backoff with full jitter between attempts,
-  # capped. A server-sent `Retry-After` overrides the computed wait. Only
-  # matters for a metered API.
   backoff_base: float = 2.0
   backoff_cap: float = 60.0
-  # True -> raise ChatCallFailed instead of returning "" when retries run out,
-  # so a PAID caller can decline to persist the row and retry it on resume
-  # instead.
   raise_on_exhausted: bool = False
-  # Optional shared dict for SERVER-REPORTED token usage, accumulated across
-  # threads: {calls, prompt_tokens, completion_tokens, reasoning_tokens,
-  # cached_tokens}. Without this a metered run has no idea what it actually
-  # spent -- counting the visible reply text undercounts a reasoning model,
-  # whose hidden thinking is billed as output.
   usage: Optional[dict[str, Any]] = field(default=None, repr=False)
-  # OpenAI service tier: "flex" trades latency for ~half price, which suits
-  # offline authoring. NB flex returns 429 `resource_unavailable` when capacity
-  # is short -- that is TRANSIENT (retry with backoff), NOT the quota exhaustion
-  # that aborts a run, and it needs a generous timeout.
   service_tier: Optional[str] = None
-  vendor: str = (
-      "vllm"  # "vllm"/"sglang" local server (sends top_k/min_p extra_body) or
-  )
-  # "openai" vanilla API (no vendor extras; some models reject custom
-  # sampling, so params are tried progressively-minimal -- see below).
+  vendor: str = "vllm"
   backend: Optional[ChatBackend] = field(default=None, repr=False)
 
   def _extra_body(self) -> dict[str, Any]:
@@ -366,7 +367,19 @@ class ChatEndpoint:
       messages: the chat messages to send.
 
     Returns:
-      The assistant reply text.
+      The assistant reply text, or ``""`` once the retries are spent and
+      ``raise_on_exhausted`` is False.
+
+    Raises:
+      ChatCallFatalError: the error is non-retryable (bad key, unknown model,
+        quota exhausted), so the whole batch should stop rather than repeat a
+        doomed call.
+      ChatCallRefusedError: the provider refused this specific prompt on
+        content-safety grounds; the row is unusable and must be skipped, not
+        retried or deferred.
+      ChatCallFailedError: every retry was exhausted. Only raised when
+        ``raise_on_exhausted`` is True, so a paid caller can avoid persisting
+        the row.
     """
     from openai import OpenAI  # lazy: only the real path needs the SDK
 
@@ -396,11 +409,11 @@ class ChatEndpoint:
           last, kind = e, _classify(e)
           if kind == "fatal":
             # Never retry: it would fail identically for every remaining row.
-            raise ChatCallFatal(f"non-retryable API error: {e!r}") from e
+            raise ChatCallFatalError(f"non-retryable API error: {e!r}") from e
           if kind == "refused":
             # Permanent for THIS prompt only -- surface at once, keep the batch
             # going.
-            raise ChatCallRefused(str(e)) from e
+            raise ChatCallRefusedError(str(e)) from e
           if kind == "invalid":
             continue  # next (more minimal) param set, no sleep
           break  # transient -> stop trying param sets, back off instead
@@ -422,7 +435,7 @@ class ChatEndpoint:
         )
         time.sleep(wait)
     if self.raise_on_exhausted:
-      raise ChatCallFailed(f"exhausted {self.retries} attempts: {last!r}")
+      raise ChatCallFailedError(f"exhausted {self.retries} attempts: {last!r}")
     logger.warning(
         "[selfplay] giving up on %s after %d attempts: %r",
         self.base_url,
