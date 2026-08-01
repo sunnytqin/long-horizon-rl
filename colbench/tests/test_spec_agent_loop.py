@@ -1,6 +1,7 @@
-"""Agent-loop tests for the SPEC path: drive ``ColBenchSpecAgentLoop.run``
-end-to-end with a scripted solver + scripted sim, asserting the same
-``terminated_by`` / reward / masking the pinned
+"""Agent-loop tests for the SPEC path.
+
+Drive ``ColBenchSpecAgentLoop.run`` end-to-end with a scripted solver + scripted
+sim, asserting the same ``terminated_by`` / reward / masking the pinned
 ``tests/test_env_spec.py::drive`` contract produces.
 
 CONTAINER-ONLY: importing ``colbench.colbench_spec_agent`` pulls in
@@ -10,6 +11,10 @@ in the light conda eval env. The whole module is skipped there via
 complements the env-level tests (which run everywhere) by exercising the loop's
 token/mask bookkeeping and extra_fields, not just the env seams.
 """
+
+# These tests pin the behaviour of module-private helpers, so they reach for
+# them directly.
+# pylint: disable=protected-access
 
 import asyncio
 import os
@@ -23,9 +28,12 @@ os.environ.pop("CODECONTEST_EXEC_URL", None)
 # (container only).
 pytest.importorskip("verl.experimental.agent_loop.agent_loop")
 
-from colbench.colbench_spec_agent import ColBenchSpecAgentLoop  # pylint: disable=g-import-not-at-top,wrong-import-position
-from colbench.env_spec import ColBenchSpecUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
-from verl.workers.rollout.replica import TokenOutput  # pylint: disable=g-import-not-at-top,wrong-import-position
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.colbench_spec_agent import ColBenchSpecAgentLoop
+from colbench.env_spec import ColBenchSpecUserSimEnv
+from verl.workers.rollout.replica import TokenOutput
 
 # Reuse the env-level fixtures' shape (kept local to avoid importing a test
 # module).
@@ -72,8 +80,9 @@ def _scripted_backend(replies):
 
 
 class _FakeTokenizer:
-  """UTF-8 byte tokenizer: exact encode/decode roundtrip + realistic token
-  counts.
+  """UTF-8 byte tokenizer.
+
+  Exact encode/decode roundtrip + realistic token counts.
   """
 
   def encode(self, text, add_special_tokens=False):
@@ -84,8 +93,9 @@ class _FakeTokenizer:
 
 
 class _FakeServerManager:
-  """Yields the scripted solver turns as TokenOutput, encoded by the fake
-  tokenizer.
+  """Yields the scripted solver turns as TokenOutput.
+
+  Encoded by the fake tokenizer.
   """
 
   def __init__(self, tokenizer, solver_turns):
@@ -117,8 +127,9 @@ def _make_loop(
     binary_reward=False,
     grounded_sim=False,
 ):
-  """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__, wired
-  to fakes.
+  """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__.
+
+  Wired to fakes.
   """
   obj = object.__new__(ColBenchSpecAgentLoop)
   tok = _FakeTokenizer()
@@ -379,9 +390,7 @@ def test_binary_reward_all_pass_is_one():
 
 
 def _capturing_backend(replies):
-  """Scripted backend that also records the (system, user) pairs it was called
-  with.
-  """
+  """Scripted backend that also records its (system, user) pairs."""
   inner = _scripted_backend(replies)
   seen = []
 

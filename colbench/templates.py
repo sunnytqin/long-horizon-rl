@@ -17,6 +17,7 @@ the offline validator apply byte-identical text handling.
 # pylint: disable=line-too-long
 
 import re
+from typing import Any
 from typing import Optional
 
 # ── Solver (agent) system prompt ──────────────────────────────────────────────
@@ -191,7 +192,7 @@ def check_and_extract_answer(response: str) -> tuple[bool, str]:
 # poor-man's substitute for a sandbox because sweet_rl exec'd in-process; our container
 # sidecar supersedes it.
 def extract_code_answer(answer_text: str) -> str:
-  """Strip an answer MARKER and/or a ```python / ``` code fence, returning the code to grade.
+  r"""Strip an answer MARKER and/or a ```python / ``` code fence, returning the code to grade.
 
   Mirrors sweet_rl's fence handling: prefer a ```python block, else the first ``` block, else
   the raw text. Returns the code string to grade (stripped).
@@ -202,7 +203,7 @@ def extract_code_answer(answer_text: str) -> str:
   has no marker convention and grades whatever ``extract_last_code`` finds on the WHOLE
   assistant turn. The GT solver prompt says "Directly output the raw python code after
   'I WANT TO ANSWER:'", so such a turn arrives UNFENCED and would reach the sandbox as
-  ``"I WANT TO ANSWER:\\ndef f(...)"`` -- a SyntaxError, i.e. a zero scored for a protocol
+  ``"I WANT TO ANSWER:\ndef f(...)"`` -- a SyntaxError, i.e. a zero scored for a protocol
   reason and indistinguishable from a capability result in the cross-arm comparison.
 
   The no-fence guard is load-bearing, not tidiness. Stripping unconditionally REGRESSES a turn
@@ -250,10 +251,10 @@ _PY_FENCE_RE = re.compile(r"```python", re.IGNORECASE)
 _CODE_OPERATORS = frozenset("+-*/%()[]=<>")
 
 
-def _code_tokens(text: str) -> list:
-  """Symbol-aware tokenizer: each word OR each individual operator/punctuation char.
+def _code_tokens(text: str) -> list[str]:
+  r"""Symbol-aware tokenizer: each word OR each individual operator/punctuation char.
 
-  Unlike a word-only (``\\w+``) split this preserves operators, so a matched
+  Unlike a word-only (``\w+``) split this preserves operators, so a matched
   n-gram can be required to contain them -- the knob that separates a copied
   CODE expression from a prose behavior description that merely shares
   identifiers with the GT.
@@ -373,7 +374,7 @@ def final_answer(assistant_text: str, episode_done: bool) -> tuple[bool, str]:
   return False, ""
 
 
-def str_dialogue_history(messages: list[dict]) -> str:
+def str_dialogue_history(messages: list[dict[str, str]]) -> str:
   """Render the running dialogue as the sim-prompt ``{dialogue_history}`` string.
 
   Byte-identical to sweet_rl HumanInteractionEnv.str_dialogue_history:
@@ -389,7 +390,9 @@ def str_dialogue_history(messages: list[dict]) -> str:
 
 
 def build_sim_user_message(
-    problem_description: str, hidden_information: str, messages: list[dict]
+    problem_description: str,
+    hidden_information: str,
+    messages: list[dict[str, str]],
 ) -> str:
   """Format the user-simulator prompt for one turn (system stays SIM_SYSTEM_PROMPT)."""
   return HUMAN_SIMULATOR_PROMPT.format(
@@ -511,7 +514,7 @@ TERMINATE_MARKER = "[TERMINATE]"
 
 
 def build_spec_sim_messages(
-    spec: dict, messages: list[dict]
+    spec: dict[str, Any], messages: list[dict[str, str]]
 ) -> tuple[str, str]:
   """Build the spec sim's (system, user) messages for one turn.
 
@@ -535,7 +538,10 @@ def build_spec_sim_messages(
 
 
 def build_grounded_sim_messages(
-    problem_description: str, ground_truth: str, plot: str, messages: list[dict]
+    problem_description: str,
+    ground_truth: str,
+    plot: str,
+    messages: list[dict[str, str]],
 ) -> tuple[str, str]:
   """Build the GROUNDED sim's (system, user) messages for one turn.
 
@@ -593,7 +599,7 @@ def sim_wrote_code(reply: str) -> bool:
   return bool(_ANY_FENCE_RE.search(strip_think(reply)))
 
 
-def extract_last_code(messages: list[dict]) -> str:
+def extract_last_code(messages: list[dict[str, str]]) -> str:
   """Return the code from the most recent assistant turn that proposed a function, else ``""``.
 
   Scans ``messages`` newest-first for an assistant turn with ``contains_code``

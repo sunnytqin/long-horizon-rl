@@ -1,6 +1,6 @@
-"""Preprocess ColBench (Sweet-RL Backend-Programming) parquet into our VERL RL
-schema.
+"""Preprocess the ColBench parquet into our VERL RL schema.
 
+ColBench here is Sweet-RL Backend-Programming.
 
 Source: InfoPO's ``data/colbench_code/{train,test}.parquet`` (10k train rows).
         Each source row carries:
@@ -31,21 +31,24 @@ import sys
 
 import datasets
 import pandas as pd
-from absl import app, flags
+from absl import app
+from typing import Any
+from absl import flags
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from colbench.templates import (
-    COLBENCH_AGENT_SYSTEM_PROMPT,
-    build_initial_user_message,
-)
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.templates import COLBENCH_AGENT_SYSTEM_PROMPT
+from colbench.templates import build_initial_user_message
 
 DATA_SOURCE = (
     "colbench_code_local"  # routes nowhere special; reward comes from the loop
 )
 
 
-def _extract_test_cases(extra_info: dict) -> list:
-  """Pull the non-None call-strings out of the nested tools_kwargs task payload."""
+def _extract_test_cases(extra_info: dict[str, Any]) -> list[str]:
+  """Pull non-None call-strings from the nested tools_kwargs payload."""
   tools_kwargs = (extra_info or {}).get("tools_kwargs", {}) or {}
   create_kwargs = (tools_kwargs.get("interact_with_env", {}) or {}).get(
       "create_kwargs", {}

@@ -1,10 +1,15 @@
-"""CPU tests for colbench.env.ColBenchUserSimEnv (mocked simulator; no GPU, no
-server).
+"""CPU tests for colbench.env.ColBenchUserSimEnv.
+
+Mocked simulator; no GPU, no server.
 
 Covers answer extraction / termination, the leak invariant (GT source never
 enters the solver's message list across a full mocked-sim episode), grading, and
 the COLBENCH_DEBUG_SIM dump. Grading uses the in-process exec fallback.
 """
+
+# These tests pin the behaviour of module-private helpers, so they reach for
+# them directly.
+# pylint: disable=protected-access
 
 import logging
 import os
@@ -14,9 +19,12 @@ import pytest
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench import env as env_mod  # pylint: disable=g-import-not-at-top,wrong-import-position
-from colbench import templates  # pylint: disable=g-import-not-at-top,wrong-import-position
-from colbench.env import ColBenchUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench import env as env_mod
+from colbench import templates
+from colbench.env import ColBenchUserSimEnv
 
 GT = (
     "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
@@ -27,8 +35,7 @@ PROBLEM = "Write a function f(x, y) with some personalized behavior."
 
 
 def _sim_stub(reply="The threshold is 10 and below it we subtract."):
-  """A sim backend that records the prompt it received and returns a fixed short
-  reply.
+  """A sim backend that records its prompt and returns a fixed reply.
 
   Crucially the reply contains NO ground-truth source, so if the GT ever shows
   up in a solver-visible message it must have leaked through some other path.
@@ -118,9 +125,10 @@ def test_user_turn_capped_and_gt_only_in_sim_prompt():
 
 
 def test_sim_char_limit_env_overrides_the_slice(monkeypatch):
-  """SIM_CHAR_LIMIT=0 disables the post-hoc slice, aligning the GT arm's
-  user-turn budget with the SPEC arm's (which has no slice at all and is bounded
-  only by SIM_MAX_TOKENS).
+  """SIM_CHAR_LIMIT=0 disables the post-hoc slice.
+
+  Aligning the GT arm's user-turn budget with the SPEC arm's (which has no slice
+  at all and is bounded only by SIM_MAX_TOKENS).
 
   Without this the GT user delivers <=400 chars/turn while the spec user
   delivers ~700-1000, so a GT-vs-spec result would confound environment quality
@@ -187,8 +195,9 @@ def test_marker_answer_is_graded_as_code_by_the_spec_extractor():
 
 
 def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
-  """Only bullet 3 + the trailing paragraph may diverge from the sweet_rl
-  original.
+  """Only bullet 3 and the trailing paragraph may diverge.
+
+  Divergence is measured against the sweet_rl original.
 
   COLBENCH_AGENT_SYSTEM_PROMPT is no longer derived from _AGENT_PROMPT_RAW by
   string surgery, so nothing else stops the two drifting apart. The unchanged
@@ -253,8 +262,9 @@ def test_final_answer_does_not_submit_mid_clarification(turn):
 
 
 def test_last_turn_fallback_still_submits():
-  """Ran out of turns without a fence or a marker -> the last attempt is still
-  graded.
+  """Ran out of turns without a fence or a marker.
+
+  The last attempt is still graded.
   """
   has_answer, ans = templates.final_answer(
       "def f(x):\n    return x", episode_done=True
@@ -263,8 +273,9 @@ def test_last_turn_fallback_still_submits():
 
 
 def test_fence_wins_over_a_trailing_marker():
-  """A FENCE, when present, beats the marker -- stripping unconditionally would
-  regress.
+  """A FENCE, when present, beats the marker.
+
+  Stripping unconditionally would regress.
 
   "```python...``` I WANT TO ANSWER: that's it" splits at the marker to the trailing prose and
   discards the function. The marker strip is therefore gated on there being no fence at all.
@@ -290,8 +301,9 @@ def test_fence_wins_over_a_trailing_marker():
 
 
 def test_leak_invariant_full_episode():
-  """Drive a full mocked episode and assert the GT never enters solver-visible
-  messages.
+  """Drive a full mocked episode and assert no GT leak.
+
+  The GT must never enter a solver-visible message.
 
   Mirrors colbench_agent's message handling: the solver sees [system, problem,
   then alternating assistant/user-reply]; the sim's dialogue view is separate.

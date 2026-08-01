@@ -5,6 +5,10 @@ emitted VERL schema + that the None-padded test_cases are filtered to non-empty
 call-strings.
 """
 
+# These tests pin the behaviour of module-private helpers, so they reach for
+# them directly.
+# pylint: disable=protected-access
+
 import os
 
 import pytest

@@ -1,5 +1,6 @@
-"""CPU tests for colbench.validate_colbench.run_eval (no GPU, no SGLang, no sim
-server).
+"""CPU tests for colbench.validate_colbench.run_eval.
+
+No GPU, no SGLang, no sim server.
 
 Drives the offline multi-turn eval loop with a FAKE solver engine (scripted
 turns) + a STUB sim backend + the in-process exec grader, and checks: the
@@ -16,9 +17,12 @@ from argparse import Namespace
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-import pandas as pd  # pylint: disable=g-import-not-at-top,wrong-import-position
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+import pandas as pd
 
-from colbench import validate_colbench as vc  # pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench import validate_colbench as vc
 
 GT = (
     "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
@@ -41,9 +45,10 @@ class FakeTokenizer:
 
 
 class FakeLLM:
-  """Scripted solver engine. Returns turn `i`'s response for every prompt in the
-  batch, advancing the turn counter once per `.generate` call (one call per turn
-  in run_eval).
+  """Scripted solver engine.
+
+  Returns turn `i`'s response for every prompt in the batch, advancing the turn
+  counter once per `.generate` call (one call per turn in run_eval).
   """
 
   def __init__(self, scripts):
@@ -138,7 +143,7 @@ def _run(
       max_model_len=args.max_prompt_length + args.max_response_length,
       sim_backend=sim_backend or _sim_backend,
   )
-  with open(out_path) as f:
+  with open(out_path, encoding="utf-8") as f:
     dump = json.load(f)
   return summary, dump
 
@@ -163,7 +168,7 @@ def test_saved_conversations_bounded_but_metrics_over_all(tmp_path):
 
 
 def _leaking_sim_backend(system_content, user_content):
-  """A frozen-sim stub that always hands over code (a `def`) -> always rejected."""
+  """A frozen-sim stub that always hands over code, so always rejected."""
   return "Sure, here it is: def f(x, y): return x + y if x >= 10 else x - y"
 
 

@@ -1,5 +1,6 @@
-"""ColBench SPEC-path multi-turn agent loop: solver vs. a SPEC-conditioned
-frozen user sim.
+"""ColBench SPEC-path multi-turn agent loop.
+
+Solver vs. a SPEC-conditioned frozen user sim.
 
 Sibling of ``colbench.colbench_agent.ColBenchAgentLoop`` (same budget/overflow
 bookkeeping, weights-version handling, response-mask construction,
@@ -46,14 +47,13 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
+from codecontest.masking import TRAIN_TURNS_MODES
+from codecontest.masking import apply_train_turns_mask
 from colbench import templates
 from colbench.env_spec import ColBenchSpecUserSimEnv
-from verl.experimental.agent_loop.agent_loop import (
-    AgentLoopBase,
-    AgentLoopOutput,
-    register,
-)
+from verl.experimental.agent_loop.agent_loop import AgentLoopBase
+from verl.experimental.agent_loop.agent_loop import AgentLoopOutput
+from verl.experimental.agent_loop.agent_loop import register
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
 from verl.workers.rollout.replica import TokenOutput
@@ -71,8 +71,9 @@ _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
 @register("colbench_spec_agent")
 class ColBenchSpecAgentLoop(AgentLoopBase):
-  """Solver rollout against a SPEC-conditioned frozen ColBench user sim
-  (fractional GT reward).
+  """Solver rollout against a SPEC-conditioned frozen user sim.
+
+  Fractional GT reward.
   """
 
   def __init__(self, *args, **kwargs):
@@ -231,7 +232,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
 
     # Running dialogue for the SIMULATOR prompt (problem + solver turns + user
     # replies). Contains no GT; the GT is used only inside env.score.
-    sim_dialogue: list[dict] = [{"role": "user", "content": problem_text}]
+    sim_dialogue: list[dict[str, str]] = [
+        {"role": "user", "content": problem_text}
+    ]
 
     assistant_turns = 0
     user_turns = 0

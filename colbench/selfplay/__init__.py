@@ -1,5 +1,6 @@
-"""ColBench self-play spec setting (Phase 0: offline spec authoring +
-diagnostic).
+"""ColBench self-play spec setting (Phase 0).
+
+Phase 0 is offline spec authoring plus the diagnostic.
 
 A CLEAN, SELF-CONTAINED alternative to the current GT-code-conditioned
 simulator. Instead of handing the frozen user simulator the hidden ground-truth

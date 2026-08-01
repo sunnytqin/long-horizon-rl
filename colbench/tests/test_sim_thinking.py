@@ -25,10 +25,12 @@ from colbench.templates import strip_think
 
 # ── 1. HTTP path: the flag must be NESTED ─────────────────────────────────────
 def _sim_extra_body_payload(monkeypatch, value):
-  """Rebuild the extra_body exactly as openai_sim_backend does, without a
-  server.
+  """Rebuild the extra_body exactly as openai_sim_backend does.
+
+  Without a server.
   """
   monkeypatch.setenv("SIM_ENABLE_THINKING", value)
+  # pylint: disable=g-import-not-at-top
   from colbench.env import _sim_sampling
 
   _, _, top_k, min_p = _sim_sampling()
@@ -49,7 +51,7 @@ def test_thinking_flag_is_nested_under_chat_template_kwargs(monkeypatch):
 
 
 def test_unset_sends_no_thinking_kwarg_at_all(monkeypatch):
-  """Non-hybrid models (Qwen2.5, Instruct-2507) error or misbehave on the kwarg."""
+  """Non-hybrid models (Qwen2.5, Instruct-2507) misbehave on the kwarg."""
   monkeypatch.delenv("SIM_ENABLE_THINKING", raising=False)
   eb = _sim_extra_body_payload(monkeypatch, "")
   assert "chat_template_kwargs" not in eb
@@ -57,9 +59,11 @@ def test_unset_sends_no_thinking_kwarg_at_all(monkeypatch):
 
 
 def test_real_backend_payload_nests_it(monkeypatch):
-  """End-to-end through openai_sim_backend: inspect the kwargs actually sent to
-  the SDK.
+  """End-to-end through openai_sim_backend.
+
+  Inspect the kwargs actually sent to the SDK.
   """
+  # pylint: disable=g-import-not-at-top
   import sys
   import types
 
@@ -127,8 +131,9 @@ def test_real_backend_payload_nests_it(monkeypatch):
     ],
 )
 def test_tokenizer_kwargs_stay_flat(monkeypatch, mod_name, fn_name):
-  """These feed tokenizer.apply_chat_template(**kwargs), which takes
-  enable_thinking DIRECTLY.
+  """These feed tokenizer.apply_chat_template(**kwargs).
+
+  That call takes enable_thinking DIRECTLY.
 
   Wrapping them in chat_template_kwargs would pass the tokenizer an unknown
   argument and silently stop suppressing thinking in eval -- the same bug, newly
@@ -152,8 +157,9 @@ def test_strip_think_closed_block():
 
 
 def test_strip_think_truncated_block_is_removed():
-  """SIM_MAX_TOKENS=256 cannot fit a hybrid Qwen3's reasoning, so `</think>`
-  never arrives.
+  """SIM_MAX_TOKENS=256 cannot fit a hybrid Qwen3's reasoning.
+
+  The `</think>` marker therefore never arrives.
 
   Before the fix the regex required a closing tag, so the raw monologue was
   injected into the conversation as the user's turn.

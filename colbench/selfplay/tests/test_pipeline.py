@@ -5,20 +5,26 @@ fallback for grading (no sidecar). Run: CODECONTEST_ALLOW_INPROCESS=1 pytest
 colbench/selfplay/tests/test_pipeline.py
 """
 
+# These tests pin the behaviour of module-private helpers, so they reach for
+# them directly.
+# pylint: disable=protected-access
+
 import os
 import tempfile
 
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench.selfplay import diagnose_specs, generate_specs  # pylint: disable=g-import-not-at-top,wrong-import-position
-from colbench.selfplay.dataio import (  # pylint: disable=g-import-not-at-top,wrong-import-position
-    _resolve_gt,
-    append_jsonl,
-    existing_indices,
-    read_jsonl,
-)
-from colbench.selfplay.llm_client import ChatEndpoint  # pylint: disable=g-import-not-at-top,wrong-import-position
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.selfplay import diagnose_specs
+from colbench.selfplay import generate_specs
+from colbench.selfplay.dataio import _resolve_gt
+from colbench.selfplay.dataio import append_jsonl
+from colbench.selfplay.dataio import existing_indices
+from colbench.selfplay.dataio import read_jsonl
+from colbench.selfplay.llm_client import ChatEndpoint
 
 # Same GT/branch as test_reward so the in-process grader is exercised
 # end-to-end.

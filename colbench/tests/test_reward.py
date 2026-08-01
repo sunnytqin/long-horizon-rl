@@ -14,7 +14,10 @@ import pytest
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench import reward  # pylint: disable=g-import-not-at-top,wrong-import-position
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench import reward
 
 # A GT with a hidden branch (x >= 10) so a "sum only" candidate matches PART of
 # the cases.

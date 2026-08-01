@@ -48,14 +48,14 @@ from functools import partial
 from typing import Any
 from uuid import uuid4
 
-from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
+from codecontest.masking import TRAIN_TURNS_MODES
+from codecontest.masking import apply_train_turns_mask
 from colbench import templates
-from colbench.env import ColBenchUserSimEnv, _sim_sampling
-from verl.experimental.agent_loop.agent_loop import (
-    AgentLoopBase,
-    AgentLoopOutput,
-    register,
-)
+from colbench.env import ColBenchUserSimEnv
+from colbench.env import _sim_sampling
+from verl.experimental.agent_loop.agent_loop import AgentLoopBase
+from verl.experimental.agent_loop.agent_loop import AgentLoopOutput
+from verl.experimental.agent_loop.agent_loop import register
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
 from verl.utils.tokenizer import normalize_token_ids
@@ -77,8 +77,9 @@ _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
 @register("colbench_agent")
 class ColBenchAgentLoop(AgentLoopBase):
-  """Solver rollout against a frozen ColBench user simulator (fractional GT
-  reward).
+  """Solver rollout against a frozen ColBench user simulator.
+
+  Fractional GT reward.
   """
 
   def __init__(self, *args, **kwargs):
@@ -127,8 +128,9 @@ class ColBenchAgentLoop(AgentLoopBase):
     self.sim_live = str(cc.get("sim_live", False)).lower() in ("true", "1")
 
   def _make_live_sim_backend(self):
-    """Async sim backend that generates the user turn on the TRAINING rollout
-    engine.
+    """Async sim backend that runs on the TRAINING rollout engine.
+
+    It generates the user turn there rather than on a frozen server.
 
     The simulator therefore speaks with the CURRENT policy weights (verl syncs
     FSDP -> the rollout engine every step) -- one copy of the weights for both
@@ -245,7 +247,9 @@ class ColBenchAgentLoop(AgentLoopBase):
     # Running dialogue for the SIMULATOR prompt (problem + solver turns + user
     # replies). Contains no GT; the GT is injected only inside
     # env.generate_user_turn.
-    sim_dialogue: list[dict] = [{"role": "user", "content": problem_text}]
+    sim_dialogue: list[dict[str, str]] = [
+        {"role": "user", "content": problem_text}
+    ]
 
     assistant_turns = 0
     user_turns = 0

@@ -1,5 +1,6 @@
-"""ColBench (Meta Sweet-RL Collaborative Agent Bench, Backend-Programming)
-multi-turn RL.
+"""Multi-turn RL on ColBench Backend-Programming.
+
+ColBench is Meta's Sweet-RL Collaborative Agent Bench.
 
 Phase-1: train a solver against a FROZEN user simulator. The solver extracts
 hidden requirements from the simulator via clarification dialogue, then submits

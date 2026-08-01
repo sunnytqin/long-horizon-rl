@@ -1,5 +1,6 @@
-"""Environment for the ColBench multi-turn loop: a user simulator + a GT-graded
-reward.
+"""Environment for the ColBench multi-turn loop.
+
+A user simulator + a GT-graded reward.
 
 ``ColBenchUserSimEnv`` is the pluggable "what happens between assistant turns"
 component (the analog of ``codecontest.env.GTOracleEnv``). It holds the problem,
@@ -28,10 +29,15 @@ influence on grading.
 
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Optional
+from dataclasses import dataclass
+from dataclasses import field
+from typing import Any
+from typing import Awaitable
+from typing import Callable
+from typing import Optional
 
-from colbench import reward, templates
+from colbench import reward
+from colbench import templates
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -74,8 +80,9 @@ AsyncSimBackend = Callable[[str, str], Awaitable[str]]
 
 
 def _sim_sampling():
-  """Resolve the sim's sampling params from env, defaulting to Qwen3-Instruct's
-  recommended.
+  """Resolve the sim's sampling params from the environment.
+
+  Defaults to Qwen3-Instruct's recommended values.
 
   IMPORTANT: default temperature is 0.7 (NOT greedy). The Qwen3 family is
              explicitly documented to degrade / repeat under greedy (temp 0)
@@ -94,8 +101,9 @@ def _sim_sampling():
 
 
 def openai_sim_backend(system_content: str, user_content: str) -> str:
-  """Default Phase-1 sim backend: query the FROZEN sim server over the OpenAI
-  API.
+  """Default Phase-1 sim backend: query the FROZEN sim server.
+
+  The server speaks the OpenAI API.
 
   Reads OPENAI_BASE_URL (e.g. http://localhost:<SIM_PORT>/v1), MULTITURN_MODEL_NAME, and
   OPENAI_API_KEY (default "EMPTY"), matching the entrypoint's exported env. Sampling comes
@@ -104,6 +112,7 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
   sweet_rl HumanInteractionEnv.invoke_model / InfoPO APIHumanSimulator.invoke_model.
   ``openai`` is imported lazily so CPU tests (which inject a stub) never need it installed.
   """
+  # pylint: disable=g-import-not-at-top
   from openai import OpenAI  # lazy: only the real sim path needs the SDK
 
   base_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:8000/v1")
@@ -195,7 +204,7 @@ class ColBenchUserSimEnv:
 
   problem_description: str
   ground_truth: str
-  test_cases: list
+  test_cases: list[str]
   max_steps: int = 10
   reward_time_limit: float = 6.0
   sim_backend: Optional[SimBackend] = None
@@ -211,8 +220,9 @@ class ColBenchUserSimEnv:
   def is_answer(
       self, assistant_text: str, episode_done: bool
   ) -> tuple[bool, str]:
-    """Did the solver submit a final answer this turn? Returns (has_answer,
-    answer_text).
+    """Did the solver submit a final answer this turn?
+
+    Returns (has_answer, answer_text).
 
     ``assistant_text`` is <think>-stripped first so a marker inside a reasoning
     block is ignored. On the final turn a code-like response is accepted as the
@@ -221,9 +231,12 @@ class ColBenchUserSimEnv:
     clean = templates.strip_think(assistant_text)
     return templates.final_answer(clean, episode_done)
 
-  def _build_sim_prompt(self, messages: list[dict]) -> tuple[str, str]:
-    """(system_content, user_content) for one sim call. The ONE place the GT is
-    injected.
+  def _build_sim_prompt(
+      self, messages: list[dict[str, str]]
+  ) -> tuple[str, str]:
+    """(system_content, user_content) for one sim call.
+
+    The ONE place the GT is injected.
 
     Kept separate from the sampling so the sync (frozen-server) and async
     (live-weights) paths build a BYTE-IDENTICAL prompt -- the two arms must
@@ -270,9 +283,8 @@ class ColBenchUserSimEnv:
       )
     return reply
 
-  def _sample_user_reply(self, messages: list[dict]) -> str:
-    """One raw sim sample: build the prompt (with hidden GT), call the backend,
-    clean up.
+  def _sample_user_reply(self, messages: list[dict[str, str]]) -> str:
+    """One raw sim sample: prompt (with hidden GT), backend call, cleanup.
 
     The reply is <think>-stripped and hard-capped at 400 chars, so the solver's
     message list only ever receives that short reply. Shared by the single-shot
@@ -283,7 +295,7 @@ class ColBenchUserSimEnv:
     raw = self.sim_backend(system_content, user_content)
     return self._finalize_reply(raw, user_content)
 
-  async def _asample_user_reply(self, messages: list[dict]) -> str:
+  async def _asample_user_reply(self, messages: list[dict[str, str]]) -> str:
     """Async twin of ``_sample_user_reply``, going through ``asim_backend``."""
     if self.asim_backend is None:
       raise RuntimeError(
@@ -295,8 +307,10 @@ class ColBenchUserSimEnv:
     raw = await self.asim_backend(system_content, user_content)
     return self._finalize_reply(raw, user_content)
 
-  def generate_user_turn(self, messages: list[dict]) -> str:
-    """Produce the next user (simulator) reply. THE Phase-1/Phase-2 seam.
+  def generate_user_turn(self, messages: list[dict[str, str]]) -> str:
+    """Produce the next user (simulator) reply.
+
+    THE Phase-1/Phase-2 seam.
 
     ``messages`` is the running dialogue as ``[{role, content}, ...]`` (problem
     + solver turns + prior user replies) -- it contains NO ground truth. The GT
@@ -311,11 +325,11 @@ class ColBenchUserSimEnv:
 
   def generate_user_turn_checked(
       self,
-      messages: list[dict],
+      messages: list[dict[str, str]],
       max_tries: int = 32,
       ngram_n: int = 10,
       min_operators: int = 2,
-  ) -> dict:
+  ) -> dict[str, Any]:
     """Rejection-sampled user turn: resample until the reply has no code leak.
 
     Keeps drawing sim replies (up to ``max_tries``) until one passes
@@ -359,9 +373,10 @@ class ColBenchUserSimEnv:
         "reasons": reasons,
     }
 
-  async def agenerate_user_turn(self, messages: list[dict]) -> str:
-    """LIVE-weights twin of ``generate_user_turn`` (same prompt, current policy
-    answers).
+  async def agenerate_user_turn(self, messages: list[dict[str, str]]) -> str:
+    """LIVE-weights twin of ``generate_user_turn``.
+
+    Same prompt, current policy answers.
     """
     reply = await self._asample_user_reply(messages)
     self.last_sim_reply = reply
@@ -369,13 +384,14 @@ class ColBenchUserSimEnv:
 
   async def agenerate_user_turn_checked(
       self,
-      messages: list[dict],
+      messages: list[dict[str, str]],
       max_tries: int = 32,
       ngram_n: int = 10,
       min_operators: int = 2,
-  ) -> dict:
-    """LIVE-weights twin of ``generate_user_turn_checked`` (identical record
-    contract).
+  ) -> dict[str, Any]:
+    """LIVE-weights twin of ``generate_user_turn_checked``.
+
+    Identical record contract.
 
     Rejection sampling matters MORE here than on the frozen path: a live
     simulator shares the solver's weights and its incentive-free view of the GT,
@@ -404,8 +420,10 @@ class ColBenchUserSimEnv:
         "reasons": reasons,
     }
 
-  def score(self, answer_text: str) -> dict:
-    """Grade the submitted answer against the GT. Returns reward.grade's dict.
+  def score(self, answer_text: str) -> dict[str, Any]:
+    """Grade the submitted answer against the GT.
+
+    Returns reward.grade's dict.
 
     The answer is fence-stripped to code, then compared to the GT function on
     every call-string via the sandboxed exec sidecar (functional equivalence).

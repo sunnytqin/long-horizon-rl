@@ -1,5 +1,6 @@
-"""Functional-equivalence reward for ColBench, via the EXISTING code-exec
-sidecar.
+r"""Functional-equivalence reward for ColBench.
+
+Via the EXISTING code-exec sidecar.
 
 ColBench grades a submitted function against a hidden ground-truth function by
 CALLING both on the same argument tuples and comparing return values with Python
@@ -26,8 +27,8 @@ semantics while reusing all existing isolation + concurrency + retry. No
 sidecar/server change.
 
 Call-strings are base64-encoded onto stdin: ``local_exec.normalise`` rewrites
-``\\n`` -> real newline on every ``test_input``, which would corrupt a call
-whose args contain string literals with ``\\n``. base64 (no backslashes) passes
+``\n`` -> real newline on every ``test_input``, which would corrupt a call
+whose args contain string literals with ``\n``. base64 (no backslashes) passes
 through ``normalise`` untouched.
 """
 

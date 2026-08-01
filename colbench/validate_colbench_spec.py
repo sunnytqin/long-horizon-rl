@@ -51,6 +51,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
 import pandas as pd
 
 from colbench import templates
@@ -64,12 +67,12 @@ CTX_MARGIN = 8
 
 
 # -----------------------------------------------------------------------------
-# # Per-trajectory state (one per (problem, sample)). Carries the growing solver
-# conversation, the GT-free sim dialogue, its spec env, and the
-# user-driven-termination bookkeeping.
-# -----------------------------------------------------------------------------
-# #
 class Trajectory:
+  """Per-trajectory state, one per (problem, sample) pair.
+
+  It carries the growing solver conversation, the GT-free sim dialogue, its
+  spec env, and the user-driven-termination bookkeeping.
+  """
 
   def __init__(
       self,
@@ -116,7 +119,7 @@ class Trajectory:
     self.sim_code_rejected = (
         0  # count of code-writing sim replies discarded (rejection sampling)
     )
-    self._grade_pending = False
+    self.grade_pending = False
 
   def to_dict(self):
     return {
@@ -145,14 +148,14 @@ class Trajectory:
 
 
 # -----------------------------------------------------------------------------
-# # Solver backends -- both expose generate(message_lists, tokenizer,
+# Solver backends -- both expose generate(message_lists, tokenizer,
 # max_model_len, sampling) -> list of {"text": str, "tokens": int}. The
 # termination loop is backend-agnostic.
 # -----------------------------------------------------------------------------
-# #
 class OpenAISolver:
-  """Solver = OpenAI-API chat calls to a served model (reuses ChatEndpoint),
-  threaded per req.
+  """Solver = OpenAI-API chat calls to a served model (reuses ChatEndpoint).
+
+  Threaded per req.
   """
 
   def __init__(
@@ -203,8 +206,9 @@ class OpenAISolver:
 
 
 class SGLangSolver:
-  """Solver = offline sgl.Engine (a merged checkpoint), batched, with per-turn
-  context clamp.
+  """Solver = offline sgl.Engine (a merged checkpoint), batched.
+
+  With per-turn context clamp.
   """
 
   def __init__(
@@ -249,8 +253,9 @@ class SGLangSolver:
 
 
 def _solver_template_kwargs():
-  """apply_chat_template kwargs for the SOLVER from SOLVER_ENABLE_THINKING (see
-  GT validator).
+  """Resolve apply_chat_template kwargs for the SOLVER.
+
+  Driven by SOLVER_ENABLE_THINKING; see the GT validator.
   """
   v = os.environ.get("SOLVER_ENABLE_THINKING", "").strip().lower()
   if v in ("true", "1"):
@@ -270,8 +275,9 @@ def _solver_thinking():
 
 
 def build_trajectories(val_df, n_samples, args, sim_backend=None):
-  """Expand each spec row into ``n_samples`` independent trajectories (spec env
-  per traj).
+  """Expand each spec row into ``n_samples`` trajectories.
+
+  The trajectories are independent -- one spec env per trajectory.
   """
   trajs = []
   for row_index, row in val_df.iterrows():
@@ -313,7 +319,9 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
 
 
 def eval_tagged_path(base_out, turns, n_samples, temperature, max_code):
-  """'_turns<N>_n<K>_t<temp>_cc<C>' tag so each config gets its own
+  """Insert an eval-config tag before the output file's extension.
+
+  The tag is '_turns<N>_n<K>_t<temp>_cc<C>', so each config gets its own
   self-documenting file.
   """
   root, ext = os.path.splitext(base_out)
@@ -357,7 +365,7 @@ def run_eval(
             "turn_cap" if t.showed_code else "no_code"
         )
         if t.showed_code:
-          t._grade_pending = True
+          t.grade_pending = True
       else:
         gen_batch.append(t)
     if not gen_batch:
@@ -392,11 +400,11 @@ def run_eval(
         if is_last:
           t.done = True
           t.terminated_by = "turn_cap" if t.showed_code else "no_code"
-          t._grade_pending = t.showed_code
+          t.grade_pending = t.showed_code
         elif t.code_proposals >= args.max_code_proposals:
           t.done = True
           t.terminated_by = "code_cap"
-          t._grade_pending = True
+          t.grade_pending = True
         else:
           pending.append(t)
 
@@ -421,12 +429,12 @@ def run_eval(
           t.messages.append({"role": "user", "content": raw})
           t.done = True
           t.terminated_by = "sim_code_reject"
-          t._grade_pending = t.showed_code
+          t.grade_pending = t.showed_code
           continue
         if templates.sim_terminated(raw):
           t.done = True
           t.terminated_by = "user" if t.showed_code else "no_code"
-          t._grade_pending = t.showed_code
+          t.grade_pending = t.showed_code
           continue
         feedback_tokens = (
             len(tokenizer.encode(reply, add_special_tokens=False))
@@ -437,7 +445,7 @@ def run_eval(
           t.overflow = True
           t.done = True
           t.terminated_by = "turn_cap" if t.showed_code else "no_code"
-          t._grade_pending = t.showed_code
+          t.grade_pending = t.showed_code
           continue
         t.messages.append({"role": "user", "content": reply})
         t.sim_dialogue.append({"role": "user", "content": reply})
@@ -446,13 +454,13 @@ def run_eval(
 
     # ---- Grade every trajectory that finished THIS turn with a shown function
     # (parallel). ----
-    to_grade = [t for t in trajs if t._grade_pending]
+    to_grade = [t for t in trajs if t.grade_pending]
 
     def _grade(t):
       return t, t.env.score(t.last_code)
 
     for t, result in pool.map(_grade, to_grade):
-      t._grade_pending = False
+      t.grade_pending = False
       t.reward = float(result.get("pass_rate", 0.0))
       t.all_pass = bool(result.get("all_pass", False))
       t.num_test_cases = int(result.get("n", 0))
@@ -485,7 +493,7 @@ def run_eval(
   saved.sort(key=lambda t: (t.row_index, t.sample_idx))
   out_dir = os.path.dirname(os.path.abspath(out_path))
   os.makedirs(out_dir, exist_ok=True)
-  with open(out_path, "w") as f:
+  with open(out_path, "w", encoding="utf-8") as f:
     json.dump(
         {
             "summary": summary,
@@ -504,7 +512,7 @@ def run_eval(
   # conversations to read/fix.
   aborts = [t for t in trajs if t.terminated_by == "sim_code_reject"]
   aborts_path = os.path.splitext(out_path)[0] + ".aborts.txt"
-  with open(aborts_path, "w") as f:
+  with open(aborts_path, "w", encoding="utf-8") as f:
     f.write(
         f"{len(aborts)} sim_code_reject aborts / {n_traj} trajectories "
         f"(sim={summary.get('sim_model')}, sim_max_tries={args.sim_max_tries})\n"

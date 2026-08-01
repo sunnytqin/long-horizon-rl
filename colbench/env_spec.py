@@ -33,15 +33,21 @@ selection lives in the loop via ``templates.contains_code`` / ``templates.extrac
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
+from typing import Any
 from typing import Optional
 
-from colbench import reward, templates
+from colbench import reward
+from colbench import templates
 
 # Reuse the GT env's frozen-sim HTTP backend + sampling resolution verbatim --
 # only the PROMPT built here differs (spec vs GT source). Keeps sim sampling /
 # thinking-kwarg behavior identical.
-from colbench.env import SimBackend, _sim_extra_body, _sim_sampling, openai_sim_backend  # pylint: disable=unused-import
+from colbench.env import SimBackend  # pylint: disable=unused-import
+from colbench.env import _sim_extra_body  # pylint: disable=unused-import
+from colbench.env import _sim_sampling  # pylint: disable=unused-import
+from colbench.env import openai_sim_backend  # pylint: disable=unused-import
 
 
 def make_openai_sim_backend(
@@ -53,8 +59,9 @@ def make_openai_sim_backend(
     max_tokens: int = 4096,
     timeout: float = 60.0,
 ) -> SimBackend:
-  """Build a sim backend that queries a REAL OpenAI-API endpoint (e.g.
-  api.openai.com).
+  """Build a sim backend that queries a REAL OpenAI-API endpoint.
+
+  For example api.openai.com.
 
   For comparison studies where the frozen user-simulator is a hosted GPT model
   instead of the local vLLM/SGLang Qwen server. Differs from
@@ -69,6 +76,7 @@ def make_openai_sim_backend(
   the same call works for gpt-4o-mini and gpt-5.4-mini alike. Degrades to "No
   response." on persistent error, never crashes the rollout.
   """
+  # pylint: disable=g-import-not-at-top
   from openai import OpenAI  # lazy: only the real sim path needs the SDK
 
   client = OpenAI(api_key=api_key, base_url=base_url)
@@ -130,8 +138,9 @@ _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
 @dataclass
 class ColBenchSpecUserSimEnv:
-  """Spec-conditioned user-simulator env holding the problem, spec, hidden GT,
-  and GT calls.
+  """Spec-conditioned user-simulator env.
+
+  Holds the problem, the spec, the hidden GT and the GT calls.
 
   Args:
       problem_description: the user's (public) problem statement.
@@ -151,9 +160,9 @@ class ColBenchSpecUserSimEnv:
   """
 
   problem_description: str
-  spec: dict
+  spec: dict[str, Any]
   ground_truth: str
-  test_cases: list
+  test_cases: list[str]
   max_steps: int = 10
   reward_time_limit: float = 6.0
   sim_backend: Optional[SimBackend] = None
@@ -187,7 +196,7 @@ class ColBenchSpecUserSimEnv:
     if self.sim_backend is None:
       self.sim_backend = openai_sim_backend
 
-  def generate_user_turn(self, messages: list[dict]) -> str:
+  def generate_user_turn(self, messages: list[dict[str, str]]) -> str:
     """Produce the next spec-conditioned user (simulator) reply.
 
     ``messages`` is the running dialogue as ``[{role, content}, ...]`` (problem
@@ -256,8 +265,10 @@ class ColBenchSpecUserSimEnv:
       )
     return reply
 
-  def score(self, answer_text: str) -> dict:
-    """Grade the submitted answer against the GT. Returns reward.grade's dict.
+  def score(self, answer_text: str) -> dict[str, Any]:
+    """Grade the submitted answer against the GT.
+
+    Returns reward.grade's dict.
 
     Identical to the GT env: the answer is fence-stripped to code, then compared
     to the GT function on every call-string via the sandboxed exec sidecar

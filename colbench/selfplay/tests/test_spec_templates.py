@@ -1,6 +1,11 @@
 """CPU tests for colbench.selfplay.spec_templates (parsing + prompt building).
+
 No server.
 """
+
+# These tests pin the behaviour of module-private helpers, so they reach for
+# them directly.
+# pylint: disable=protected-access
 
 from colbench.selfplay import spec_templates as st
 

@@ -243,7 +243,7 @@ def _persona_to_text(persona: Any) -> str:
   return str(persona or "").strip()
 
 
-def parse_spec(raw: str) -> dict:
+def parse_spec(raw: str) -> dict[str, Any]:
   """Parse an author model's reply into ``{persona, scenario, requirements, raw, ok}``.
 
   Tolerant: strips prose/fences around the JSON object. If no JSON parses, we
@@ -279,7 +279,7 @@ def parse_spec(raw: str) -> dict:
 
 def build_author_messages(
     problem_description: str, ground_truth: str
-) -> list[dict]:
+) -> list[dict[str, Any]]:
   """Chat messages for the spec-author call."""
   return [
       {"role": "system", "content": SPEC_AUTHOR_SYSTEM},
@@ -293,8 +293,8 @@ def build_author_messages(
 
 
 def build_full_spec_solver_messages(
-    problem_description: str, spec: dict
-) -> list[dict]:
+    problem_description: str, spec: dict[str, Any]
+) -> list[dict[str, Any]]:
   """Chat messages for the full-spec diagnostic solver call.
 
   Includes the public request (for the exact signature/name) plus the full
@@ -314,7 +314,7 @@ def build_full_spec_solver_messages(
   ]
 
 
-def parse_plot_spec(raw: str) -> dict:
+def parse_plot_spec(raw: str) -> dict[str, Any]:
   """Parse a plot author reply into ``{persona, scenario, requirements, plot, raw, ok}``.
 
   ``requirements`` is the full intent the simulator must eventually convey;
@@ -354,7 +354,7 @@ def parse_plot_spec(raw: str) -> dict:
 
 def build_plot_author_messages(
     problem_description: str, ground_truth: str
-) -> list[dict]:
+) -> list[dict[str, Any]]:
   """Chat messages for the plot spec-author call."""
   return [
       {"role": "system", "content": PLOT_AUTHOR_SYSTEM},

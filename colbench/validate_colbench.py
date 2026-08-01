@@ -1,5 +1,4 @@
-"""Standalone multi-turn validation / inspection harness for the ColBench
-solver.
+"""Standalone validation / inspection harness for the ColBench solver.
 
 Runs the SAME solver<->frozen-simulator conversation as training on the
 validation/test set, but as an *offline* SGLang batch job with freely tunable
@@ -75,12 +74,12 @@ CTX_MARGIN = 8
 
 
 # -----------------------------------------------------------------------------
-# # Per-trajectory state. One of these per (problem, sample) pair; it carries
-# the growing solver conversation, the separate GT-free sim dialogue, its env,
-# and token bookkeeping.
-# -----------------------------------------------------------------------------
-# #
 class Trajectory:
+  """Per-trajectory state, one per (problem, sample) pair.
+
+  It carries the growing solver conversation, the separate GT-free sim
+  dialogue, its env, and token bookkeeping.
+  """
 
   def __init__(
       self,
@@ -133,6 +132,8 @@ class Trajectory:
     self.sim_reject_events = []
     # Per-turn audit trail.
     self.turn_records = []
+    # Set by the loop when a submission is waiting for the parallel grade pass.
+    self.grade_pending = False
 
   def to_dict(self):
     return {
@@ -211,9 +212,10 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
 def eval_tagged_path(
     base_out, turns, n_samples, temperature, sim_reject_max_tries=0
 ):
-  """Insert a '_turns<N>_n<K>_t<temp>[_reject<R>]' tag before the extension so
-  each eval config gets its own self-documenting file (and can never clobber a
-  different config).
+  """Insert an eval-config tag before the output file's extension.
+
+  The tag is '_turns<N>_n<K>_t<temp>[_reject<R>]', so each eval config gets its
+  own self-documenting file and can never clobber a different config.
 
   ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced to 1), so
   the tag faithfully records what was run. A '_reject<R>' suffix is added ONLY when
@@ -232,8 +234,9 @@ def eval_tagged_path(
 
 
 def _solver_template_kwargs():
-  """Resolve apply_chat_template kwargs for the SOLVER from
-  SOLVER_ENABLE_THINKING.
+  """Resolve apply_chat_template kwargs for the SOLVER.
+
+  Driven by SOLVER_ENABLE_THINKING.
 
   The solver-side mirror of env._sim_extra_body, and the eval counterpart of
   training's data.apply_chat_template_kwargs (set from the same env by
@@ -377,7 +380,7 @@ def run_eval(
         t.answered_at_turn = turn
         t.final_answer = ans
         t.final_code = templates.extract_code_answer(ans)
-        t._grade_pending = True  # graded in the parallel pass below
+        t.grade_pending = True  # graded in the parallel pass below
       elif is_last_turn:
         # Ran out of turns without a usable submission -> reward stays 0.
         t.done = True
@@ -386,13 +389,13 @@ def run_eval(
 
     # ---- Grade every answered trajectory in parallel (blocking exec sidecar).
     # ----
-    to_grade = [t for t in kept if getattr(t, "_grade_pending", False)]
+    to_grade = [t for t in kept if t.grade_pending]
 
     def _grade(t):
       return t, t.env.score(t.final_answer)
 
     for t, result in pool.map(_grade, to_grade):
-      t._grade_pending = False
+      t.grade_pending = False
       t.reward = float(result.get("pass_rate", 0.0))
       t.all_pass = bool(result.get("all_pass", False))
       t.num_test_cases = int(result.get("n", 0))
@@ -502,11 +505,11 @@ def run_eval(
   accepted_events = [ev for ev in all_events if ev.get("accepted")]
   n_turns_retried = sum(1 for ev in accepted_events if ev["tries"] > 1)
   total_samples = sum(ev["tries"] for ev in all_events)
-  reason_counts: dict = {}
+  reason_counts: dict[str, int] = {}
   for ev in all_events:
     for r in ev["reasons"]:
       reason_counts[r] = reason_counts.get(r, 0) + 1
-  tries_hist: dict = {}
+  tries_hist: dict[int, int] = {}
   for ev in accepted_events:
     tries_hist[ev["tries"]] = tries_hist.get(ev["tries"], 0) + 1
   rejection = {
@@ -572,7 +575,7 @@ def run_eval(
 
   out_dir = os.path.dirname(os.path.abspath(out_path))
   os.makedirs(out_dir, exist_ok=True)
-  with open(out_path, "w") as f:
+  with open(out_path, "w", encoding="utf-8") as f:
     json.dump(
         {
             "summary": summary,
@@ -587,9 +590,11 @@ def run_eval(
 
 
 def _load_engine(args, max_model_len):
-  """Load the SGLang solver engine (imported lazily so CPU tests never need
-  sglang).
+  """Load the SGLang solver engine.
+
+  Imported lazily so CPU tests never need sglang.
   """
+  # pylint: disable=g-import-not-at-top
   import sglang as sgl
   from transformers import AutoTokenizer
 

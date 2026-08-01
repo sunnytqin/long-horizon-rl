@@ -33,17 +33,19 @@ Usage:
 
 import argparse
 import os
+from typing import Any
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
 import datasets
 
 from colbench.selfplay import dataio
-from colbench.templates import (
-    COLBENCH_SPEC_AGENT_SYSTEM_PROMPT,
-    build_initial_user_message,
-)
+from colbench.templates import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT
+from colbench.templates import build_initial_user_message
 
 DATA_SOURCE = (
     "colbench_spec_local"  # routes nowhere special; reward comes from the loop
@@ -52,9 +54,10 @@ DATA_SOURCE = (
 _SPEC_KEYS = ("persona", "scenario", "requirements", "plot")
 
 
-def _usable(spec_row: dict) -> bool:
-  """A spec row is usable iff it parsed ok and has non-empty requirements +
-  plot.
+def _usable(spec_row: dict[str, Any]) -> bool:
+  """A spec row is usable iff it parsed ok and is non-empty.
+
+  Non-empty means both ``requirements`` and ``plot`` are present.
 
   Guards against the ~3/1000 rows that failed to parse (empty spec) and any row
   missing the two fields the sim actually needs to behave (the substance + the
@@ -67,9 +70,12 @@ def _usable(spec_row: dict) -> bool:
   )
 
 
-def build_rows(raw_parquet: str, specs_jsonl: str, split: str) -> list[dict]:
-  """Join specs (by ``index``) to the raw parquet's resolved GT and build
-  VERL-schema rows.
+def build_rows(
+    raw_parquet: str, specs_jsonl: str, split: str
+) -> list[dict[str, Any]]:
+  """Join specs to the raw parquet's GT and build VERL-schema rows.
+
+  Specs are joined by ``index`` to the resolved ground truth.
   """
   tasks = dataio.read_tasks(
       raw_parquet

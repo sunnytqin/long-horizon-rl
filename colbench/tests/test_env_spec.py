@@ -1,5 +1,6 @@
-"""CPU tests for the SPEC path: colbench.env_spec + the spec templates helpers
-(mocked sim).
+"""CPU tests for the SPEC path.
+
+Covers colbench.env_spec and the spec templates helpers, against a mocked sim.
 
 Covers the leak invariant (GT source NEVER enters the spec sim prompt -- only
 the spec does), grading parity with the GT env, the spec-specific templates
@@ -16,8 +17,11 @@ import os
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench import templates  # pylint: disable=g-import-not-at-top,wrong-import-position
-from colbench.env_spec import ColBenchSpecUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench import templates
+from colbench.env_spec import ColBenchSpecUserSimEnv
 
 GT = (
     "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n "
@@ -224,8 +228,9 @@ def test_score_full_and_partial():
 
 
 def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
-  """Replicate the spec agent loop's termination state machine (the pinned
-  contract).
+  """Replicate the spec agent loop's termination state machine.
+
+  That state machine is the pinned contract.
 
   ``colbench_spec_agent`` / ``validate_colbench_spec`` MUST mirror this: solver
   turn -> track last code / count proposals -> turn cap -> code cap -> else sim

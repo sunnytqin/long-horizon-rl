@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Two focused reports on spec-eval conversation dumps (offline, JSON-only, no
-re-grading).
+"""Two focused reports on spec-eval conversation dumps.
+
+Offline and JSON-only -- nothing is re-graded.
 
 Report 1 -- WITHIN-conversation degeneration, by code-submission segment:
     A = start .. 1st code turn (inclusive)                          [always]
@@ -101,8 +102,9 @@ def report1(trajs):
 
 
 def _segB_stats(t, fc):
-  """Prose-length list + capitulation-flag list over the agent's post-1st-code
-  turns (segment B).
+  """Prose-length and capitulation-flag lists over segment B.
+
+  Segment B is the agent's post-1st-code turns.
   """
   atext = [
       m["content"]
@@ -118,8 +120,9 @@ def _segB_stats(t, fc):
 
 
 class Bucket:
-  """A group of trajectories: count + pooled segment-B prose lengths /
-  capitulation flags.
+  """A group of trajectories.
+
+  Count + pooled segment-B prose lengths / capitulation flags.
   """
 
   def __init__(self):
@@ -237,7 +240,7 @@ def main():
   if not files:
     files = sorted(glob.glob("runs/spec/*.json"))
   for f in files:
-    d = json.load(open(f))
+    d = json.load(open(f, encoding="utf-8"))
     trajs = d.get("trajectories", [])
     print("=" * 90)
     print(f.split("/")[-1], f"  (n_traj={len(trajs)})")

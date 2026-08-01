@@ -25,23 +25,34 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+from concurrent.futures import as_completed
 
 sys.path.append(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
-from colbench import reward, templates
+# The module-level setup above (env vars, sys.path) has to run
+# before these imports resolve, so they cannot sit at the top.
+# pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench import reward
+from colbench import templates
 from colbench.selfplay import spec_templates
-from colbench.selfplay.dataio import read_jsonl, read_tasks
+from colbench.selfplay.dataio import read_jsonl
+from colbench.selfplay.dataio import read_tasks
 from colbench.selfplay.llm_client import ChatEndpoint
 
 
 def _solve_and_grade(
-    endpoint: ChatEndpoint, task: dict, spec: dict, reward_time_limit: float
-) -> dict:
-  """One sample: the authored ``requirements`` -> solver code -> grade against
-  GT test_cases.
+    endpoint: ChatEndpoint,
+    task: dict[str, Any],
+    spec: dict[str, Any],
+    reward_time_limit: float,
+) -> dict[str, Any]:
+  """Grade one sample of the authored ``requirements`` against the GT.
+
+  One sample is ``requirements`` -> solver code -> grade on the GT test_cases.
 
   This is the full-spec faithfulness check: can a solver reconstruct GT behavior
   from the authored requirements alone. (The plot only shapes the Phase-1
@@ -66,7 +77,7 @@ def _solve_and_grade(
   }
 
 
-def _aggregate(rows: list[dict], n_samples: int) -> dict:
+def _aggregate(rows: list[dict[str, Any]], n_samples: int) -> dict[str, Any]:
   """Aggregate per-sample rows into solve-rate metrics.
 
   solve_rate    = mean(all_pass) over ALL samples (per-sample correctness),
@@ -81,7 +92,7 @@ def _aggregate(rows: list[dict], n_samples: int) -> dict:
         "pass_at_n": 0.0,
         "mean_pass_rate": 0.0,
     }
-  by_task: dict = {}
+  by_task: dict[int, list[dict[str, Any]]] = {}
   for r in rows:
     by_task.setdefault(r["index"], []).append(r)
   solve_rate = sum(r["all_pass"] for r in rows) / len(rows)
@@ -100,15 +111,16 @@ def _aggregate(rows: list[dict], n_samples: int) -> dict:
 
 def diagnose_specs_file(
     specs_path: str,
-    tasks_by_index: dict,
+    tasks_by_index: dict[int, dict[str, Any]],
     endpoint: ChatEndpoint,
     n_samples: int,
     reward_time_limit: float,
     concurrency: int,
-) -> dict:
-  """Run the requirements full-spec diagnostic for one spec file. Returns
-  {label, metrics,
-  rows}. Specs with no ``requirements`` text are skipped (counted)."""
+) -> dict[str, Any]:
+  """Run the requirements full-spec diagnostic for one spec file.
+
+  Returns {label, metrics, rows}. Specs with no ``requirements`` text are
+  skipped (counted)."""
   specs = read_jsonl(specs_path)
   backend = (
       specs[0].get("backend")
@@ -254,7 +266,7 @@ def main():
   if args.out:
     out = os.path.expanduser(args.out)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
       json.dump(
           [
               {

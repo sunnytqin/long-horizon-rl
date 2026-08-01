@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Standalone throughput/health smoke test for the frozen ColBench
-user-simulator server.
+"""Throughput/health smoke test for the frozen user-simulator server.
+
+Standalone: it talks to the ColBench sim server directly.
 
 Invoked by xcloud_setup/entrypoint_colbench.sh in SIM_SERVER_ONLY +
 SIM_SMOKE=True mode, AFTER the SGLang server is healthy. It fires a concurrency
@@ -97,8 +98,9 @@ async def _run_level(
 
 
 def _thinking_check():
-  """Assert the sim actually answers WITHOUT a <think> block, via the REAL sim
-  code path.
+  """Assert the sim actually answers WITHOUT a <think> block.
+
+  Via the REAL sim code path.
 
   Uses ``env.openai_sim_backend`` rather than a hand-written request, so this
   exercises the exact payload the rollouts send -- the point is to catch a
@@ -114,7 +116,9 @@ def _thinking_check():
                            chain-of-thought was injected as the user's dialogue
                            turn.
   """
-  from colbench.env import _sim_extra_body, openai_sim_backend
+  # pylint: disable=g-import-not-at-top
+  from colbench.env import _sim_extra_body
+  from colbench.env import openai_sim_backend
   from colbench.templates import strip_think
 
   want_off = _sim_extra_body() == {"enable_thinking": False}
