@@ -53,6 +53,13 @@ def build_harness(ground_truth_src: str, candidate_src: str) -> str:
   GT namespace and a candidate namespace (each ``exec``'d fresh), and prints the
   boolean equivalence for that one call. Both sources are embedded base64 so any
   source text round-trips.
+
+  Args:
+    ground_truth_src: the hidden GT function source.
+    candidate_src: the solver's submitted source.
+
+  Returns:
+    The harness program text for the sandbox to run.
   """
   gt_b64 = _b64(ground_truth_src)
   cand_b64 = _b64(candidate_src)
@@ -110,7 +117,7 @@ def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
   #            multi-element array raises "truth value is ambiguous") and use
   #            is-None.
   _calls_iter = test_calls if test_calls is not None else []
-  calls = [str(c) for c in _calls_iter if c is not None and str(c) != ""]
+  calls = [str(c) for c in _calls_iter if c is not None and str(c)]
   if not candidate_code or not calls:
     return {"pass_rate": 0.0, "all_pass": False, "per_case": [], "n": 0}
 
@@ -120,7 +127,7 @@ def grade(candidate_code, ground_truth_src, test_calls, time_limit=6.0):
   # max_gt_test = len(calls): grade EVERY case so the fraction denominator
   # matches sweet_rl (which divides by len(test_cases)); the default cap of 20
   # would silently drop cases.
-  all_pass, per_case, _failures = exec_client.eval_code_on_tests(
+  all_pass, per_case, _ = exec_client.eval_code_on_tests(
       harness,
       test_input,
       test_output,

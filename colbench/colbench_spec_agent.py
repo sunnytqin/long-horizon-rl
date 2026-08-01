@@ -43,6 +43,10 @@ Reference contract (MUST stay byte-identical):
 Training is SOLVER-ONLY. The simulator is frozen and its turns are masked.
 """
 
+# This tree imports names directly (``from colbench.env import
+# ColBenchUserSimEnv``) rather than the enclosing module, matching how the
+# rest of verl is written; call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
 import asyncio
 import logging
 import os

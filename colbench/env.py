@@ -27,6 +27,10 @@ pass-rate in [0,1]; the frozen simulator governs the DIALOGUE only and has zero
 influence on grading.
 """
 
+# This tree imports names directly (``from colbench.env import
+# ColBenchUserSimEnv``) rather than the enclosing module, matching how the
+# rest of verl is written; call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
 import logging
 import os
 from dataclasses import dataclass
@@ -60,6 +64,10 @@ def _sim_extra_body():
   SIM_ENABLE_THINKING=true forces it on. This replaces the old brittle `"qwen3"
   in served_name` guard (the served name is a fixed alias, not the model family,
   so that check never fired).
+
+  Returns:
+    ``{"enable_thinking": bool}`` when SIM_ENABLE_THINKING is set, else ``None``
+    to send no thinking kwarg at all.
   """
   v = os.environ.get("SIM_ENABLE_THINKING", "").strip().lower()
   if v in ("true", "1"):
@@ -91,6 +99,9 @@ def _sim_sampling():
   0.7, top_p 0.8, top_k 20, min_p 0); for a Qwen3-32B (thinking) sim set
   SIM_TEMPERATURE=0.6 SIM_TOP_P=0.95. Returns (temperature, top_p, top_k,
   min_p).
+
+  Returns:
+    ``(temperature, top_p, top_k, min_p)``.
   """
   return (
       float(os.environ.get("SIM_TEMPERATURE", "0.7")),
@@ -113,6 +124,13 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
   "No response." -- mirrors sweet_rl HumanInteractionEnv.invoke_model / InfoPO
   APIHumanSimulator.invoke_model. ``openai`` is imported lazily so CPU tests
   (which inject a stub) never need it installed.
+
+  Args:
+    system_content: the sim's system message, carrying the hidden GT.
+    user_content: the rendered dialogue history.
+
+  Returns:
+    The sim's raw reply text, or ``"No response."`` once retries are exhausted.
   """
   # pylint: disable=g-import-not-at-top
   from openai import OpenAI  # lazy: only the real sim path needs the SDK
@@ -184,24 +202,21 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
 class ColBenchUserSimEnv:
   """User-simulator env holding the problem, hidden GT, and GT call-strings.
 
-  Args:
-      problem_description: the user's (public) problem statement.
-      ground_truth: the HIDDEN ground-truth function source (never shown to the
-                    solver).
-      test_cases: list of GT call-strings used for grading.
-      max_steps: max solver turns before the episode is force-ended (sweet_rl
-                 default 10).
-      reward_time_limit: per-case exec timeout (seconds) for grading.
-      sim_backend: (system, user) -> raw reply. Defaults to the frozen-server
-                   HTTP call; tests inject their own. This is the ONE seam that
-                   sees the GT.
-      asim_backend: async (system, user) -> raw reply. When set, the
-                    LIVE-weights path (``agenerate_user_turn``) uses it instead
-                    of ``sim_backend``: the agent loop generates the user turn
-                    on the training rollout engine, so the simulator IS the
-                    current policy (no frozen copy). ``sim_backend`` is left
-                    untouched, so the sync path (offline eval, tests) keeps
-                    working.
+  Attributes:
+    problem_description: the user's (public) problem statement.
+    ground_truth: the HIDDEN ground-truth function source (never shown to the
+      solver).
+    test_cases: list of GT call-strings used for grading.
+    max_steps: max solver turns before the episode is force-ended (sweet_rl
+      default 10).
+    reward_time_limit: per-case exec timeout (seconds) for grading.
+    sim_backend: (system, user) -> raw reply. Defaults to the frozen-server HTTP
+      call; tests inject their own. This is the ONE seam that sees the GT.
+    asim_backend: async (system, user) -> raw reply. When set, the LIVE-weights
+      path (``agenerate_user_turn``) uses it instead of ``sim_backend``: the
+      agent loop generates the user turn on the training rollout engine, so the
+      simulator IS the current policy (no frozen copy). ``sim_backend`` is left
+      untouched, so the sync path (offline eval, tests) keeps working.
   """
 
   problem_description: str
@@ -224,11 +239,17 @@ class ColBenchUserSimEnv:
   ) -> tuple[bool, str]:
     """Did the solver submit a final answer this turn?
 
-    Returns (has_answer, answer_text).
-
     ``assistant_text`` is <think>-stripped first so a marker inside a reasoning
     block is ignored. On the final turn a code-like response is accepted as the
     answer even without the marker (templates.final_answer).
+
+    Args:
+      assistant_text: one assistant turn; ``<think>``-stripped here.
+      episode_done: True on the final turn, which accepts a code-like response
+        without the marker.
+
+    Returns:
+      ``(has_answer, answer_text)``.
     """
     clean = templates.strip_think(assistant_text)
     return templates.final_answer(clean, episode_done)
@@ -243,6 +264,14 @@ class ColBenchUserSimEnv:
     Kept separate from the sampling so the sync (frozen-server) and async
     (live-weights) paths build a BYTE-IDENTICAL prompt -- the two arms must
     differ only in which weights answer it.
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT.
+
+    Returns:
+      ``(system_content, user_content)`` -- byte-identical across the sync and
+      async paths.
     """
     return templates.SIM_SYSTEM_PROMPT, templates.build_sim_user_message(
         self.problem_description, self.ground_truth, messages
@@ -261,6 +290,14 @@ class ColBenchUserSimEnv:
     environment-quality result. With it off, both arms are bounded by the SAME
     knob (SIM_MAX_TOKENS) and the sim prompt's "IN TWO SENTENCES" instruction
     does the shaping. See run_colbench_grpo.sh.
+
+    Args:
+      raw: the backend's unprocessed reply.
+      user_content: the prompt that produced it, for the debug dump only.
+
+    Returns:
+      The reply the solver will see: ``<think>``-stripped and, unless
+      ``SIM_CHAR_LIMIT=0``, truncated to the character cap.
     """
     limit = int(
         os.environ.get(
@@ -293,6 +330,13 @@ class ColBenchUserSimEnv:
     message list only ever receives that short reply. Shared by the single-shot
     training path (generate_user_turn) and the eval rejection loop
     (generate_user_turn_checked).
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT.
+
+    Returns:
+      One finalized sim reply.
     """
     system_content, user_content = self._build_sim_prompt(messages)
     raw = self.sim_backend(system_content, user_content)
@@ -321,6 +365,13 @@ class ColBenchUserSimEnv:
     and passed only to the backend. Single-shot (no rejection sampling). Callers
     opt into rejection sampling via generate_user_turn_checked; this stays the
     path when it is disabled.
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT.
+
+    Returns:
+      The next user reply, single-shot.
     """
     reply = self._sample_user_reply(messages)
     self.last_sim_reply = reply
@@ -338,10 +389,6 @@ class ColBenchUserSimEnv:
     Keeps drawing sim replies (up to ``max_tries``) until one passes
     ``templates.detect_code_leak`` (against the hidden GT this env holds),
     preventing the frozen simulator from just handing the solver the solution.
-    Returns a record::
-
-        {"reply": str|None, "tries": int, "accepted": bool, "reasons": [str,
-        ...]}
 
     On success ``reply`` is the accepted turn, ``tries`` the number of samples
     drawn, and ``reasons`` the leak reason of each REJECTED sample (len ==
@@ -353,6 +400,17 @@ class ColBenchUserSimEnv:
     it as a THIRD outcome excluded from the pass-rate denominator, while
     training keeps the trajectory in the batch at reward 0 so the offending
     solver turn takes a negative advantage (see colbench_agent.py).
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT.
+      max_tries: how many samples to draw before declaring exhaustion.
+      ngram_n: n-gram width passed to ``templates.detect_code_leak``.
+      min_operators: operator floor passed to ``templates.detect_code_leak``.
+
+    Returns:
+      ``{"reply": str|None, "tries": int, "accepted": bool, "reasons": [str,
+      ...]}``, as described above.
     """
     reasons: list[str] = []
     for i in range(1, max_tries + 1):
@@ -380,6 +438,13 @@ class ColBenchUserSimEnv:
     """LIVE-weights twin of ``generate_user_turn``.
 
     Same prompt, current policy answers.
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT.
+
+    Returns:
+      The next user reply, generated by the current policy.
     """
     reply = await self._asample_user_reply(messages)
     self.last_sim_reply = reply
@@ -400,6 +465,17 @@ class ColBenchUserSimEnv:
     simulator shares the solver's weights and its incentive-free view of the GT,
     so if the policy drifts toward dumping code the "user" drifts with it. Same
     accept/exhaust semantics as the sync method.
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT.
+      max_tries: how many samples to draw before declaring exhaustion.
+      ngram_n: n-gram width passed to ``templates.detect_code_leak``.
+      min_operators: operator floor passed to ``templates.detect_code_leak``.
+
+    Returns:
+      ``{"reply": str|None, "tries": int, "accepted": bool, "reasons": [str,
+      ...]}``, as described above.
     """
     reasons: list[str] = []
     for i in range(1, max_tries + 1):
@@ -426,10 +502,14 @@ class ColBenchUserSimEnv:
   def score(self, answer_text: str) -> dict[str, Any]:
     """Grade the submitted answer against the GT.
 
-    Returns reward.grade's dict.
-
     The answer is fence-stripped to code, then compared to the GT function on
     every call-string via the sandboxed exec sidecar (functional equivalence).
+
+    Args:
+      answer_text: the submitted answer, fence-stripped here.
+
+    Returns:
+      ``reward.grade``'s dict: ``pass_rate``, ``all_pass``, ``per_case``, ``n``.
     """
     code = templates.extract_code_answer(answer_text)
     return reward.grade(

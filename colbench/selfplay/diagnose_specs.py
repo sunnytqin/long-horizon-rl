@@ -21,14 +21,18 @@ Example:
         --n_samples 1 --out ~/data/colbench/specs/diagnostic.json
 """
 
+# This tree imports names directly (``from colbench.env import
+# ColBenchUserSimEnv``) rather than the enclosing module, matching how the
+# rest of verl is written; call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
 import argparse
 import json
 import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 from concurrent.futures import as_completed
+from typing import Any
 
 sys.path.append(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -58,6 +62,15 @@ def _solve_and_grade(
   This is the full-spec faithfulness check: can a solver reconstruct GT behavior
   from the authored requirements alone. (The plot only shapes the Phase-1
   dialogue; it is not a self-contained spec and is not graded here.)
+
+  Args:
+    endpoint: the solver endpoint to call.
+    task: ``{problem_description, ground_truth, test_cases}`` for this row.
+    spec: the authored spec supplying ``requirements``.
+    reward_time_limit: per-call grading timeout in seconds.
+
+  Returns:
+    A per-sample row carrying the grade and the generated code.
   """
   messages = spec_templates.build_full_spec_solver_messages(
       task["problem_description"], spec
@@ -78,12 +91,18 @@ def _solve_and_grade(
   }
 
 
-def _aggregate(rows: list[dict[str, Any]], n_samples: int) -> dict[str, Any]:
+def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
   """Aggregate per-sample rows into solve-rate metrics.
 
   solve_rate    = mean(all_pass) over ALL samples (per-sample correctness),
   pass_at_n     = fraction of TASKS with >=1 fully-correct sample,
   mean_pass_rate= mean fractional pass-rate over all samples.
+
+  Args:
+    rows: the per-sample rows to reduce.
+
+  Returns:
+    ``{n_tasks, n_samples_total, solve_rate, pass_at_n, mean_pass_rate}``.
   """
   if not rows:
     return {
@@ -120,8 +139,18 @@ def diagnose_specs_file(
 ) -> dict[str, Any]:
   """Run the requirements full-spec diagnostic for one spec file.
 
-  Returns {label, metrics, rows}. Specs with no ``requirements`` text are
-  skipped (counted).
+  Specs with no ``requirements`` text are skipped (and counted).
+
+  Args:
+    specs_path: JSONL of authored specs to diagnose.
+    tasks_by_index: raw tasks keyed by the ``index`` the specs point at.
+    endpoint: the solver endpoint to call.
+    n_samples: samples to draw per spec.
+    reward_time_limit: per-call grading timeout in seconds.
+    concurrency: parallel solver calls.
+
+  Returns:
+    ``{label, metrics, rows}``.
   """
   specs = read_jsonl(specs_path)
   backend = (
@@ -153,7 +182,7 @@ def diagnose_specs_file(
       "label": label,
       "path": specs_path,
       "n_missing_field": n_missing,
-      "metrics": _aggregate(rows, n_samples),
+      "metrics": _aggregate(rows),
       "rows": rows,
   }
 

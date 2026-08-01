@@ -35,8 +35,8 @@ Usage:
 
 import argparse
 import os
-from typing import Any
 import sys
+from typing import Any
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -64,6 +64,12 @@ def _usable(spec_row: dict[str, Any]) -> bool:
   Guards against the ~3/1000 rows that failed to parse (empty spec) and any row
   missing the two fields the sim actually needs to behave (the substance + the
   arc).
+
+  Args:
+    spec_row: one parsed spec record.
+
+  Returns:
+    True iff the row parsed and carries both fields.
   """
   if not spec_row.get("ok", True):
     return False
@@ -78,6 +84,14 @@ def build_rows(
   """Join specs to the raw parquet's GT and build VERL-schema rows.
 
   Specs are joined by ``index`` to the resolved ground truth.
+
+  Args:
+    raw_parquet: the raw InfoPO parquet the specs' ``index`` points into.
+    specs_jsonl: the Phase-0 authored specs.
+    split: value stored in ``extra_info.split``.
+
+  Returns:
+    The VERL-schema rows for every usable spec.
   """
   tasks = dataio.read_tasks(
       raw_parquet

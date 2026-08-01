@@ -29,11 +29,11 @@ Usage:
 
 import os
 import sys
+from typing import Any
 
 import datasets
 import pandas as pd
 from absl import app
-from typing import Any
 from absl import flags
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,6 +62,15 @@ def _extract_test_cases(extra_info: dict[str, Any]) -> list[str]:
 
 
 def make_map_fn(split: str):
+  """Build the ``datasets.map`` function for one split.
+
+  Args:
+    split: value stored in ``extra_info.split``.
+
+  Returns:
+    A ``(example, idx) -> row`` callable in the VERL schema.
+  """
+
   def process_fn(example, idx):
     reward_model = example["reward_model"] or {}
     problem_description = reward_model.get("problem_description", "")

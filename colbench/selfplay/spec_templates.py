@@ -251,6 +251,13 @@ def parse_spec(raw: str) -> dict[str, Any]:
   so a malformed generation is still usable/inspectable rather than lost.
   ``persona`` is kept as-authored (dict or str); use ``_persona_to_text`` when
   composing prompt text.
+
+  Args:
+    raw: the author model's reply, possibly wrapped in prose or fences.
+
+  Returns:
+    ``{persona, scenario, requirements, raw, ok}``. ``ok`` is False when no JSON
+    parsed, in which case the whole reply becomes ``requirements``.
   """
   text = (raw or "").strip()
   obj = None
@@ -299,6 +306,14 @@ def build_full_spec_solver_messages(
 
   Includes the public request (for the exact signature/name) plus the full
   authored spec. ``spec`` is a parsed dict from ``parse_spec``.
+
+  Args:
+    problem_description: the public request, which carries the required
+      signature.
+    spec: a parsed dict from ``parse_spec``.
+
+  Returns:
+    The chat messages for the diagnostic solver call.
   """
   return [
       {"role": "system", "content": FULL_SPEC_SOLVER_SYSTEM},
@@ -322,6 +337,13 @@ def parse_plot_spec(raw: str) -> dict[str, Any]:
   naturally unfolds (NOT a script). Tolerant like ``parse_spec``: ``ok``
   requires BOTH ``requirements`` and ``plot``. On malformed JSON the whole reply
   becomes free-text requirements with ``ok=False``.
+
+  Args:
+    raw: the plot author's reply, possibly wrapped in prose or fences.
+
+  Returns:
+    ``{persona, scenario, requirements, plot, raw, ok}``. ``ok`` requires BOTH
+    ``requirements`` and ``plot``.
   """
   text = (raw or "").strip()
   obj = None

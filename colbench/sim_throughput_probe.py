@@ -59,6 +59,21 @@ async def _one_request(client, model, prompt, output_tokens, temperature):
 async def _run_level(
     client, model, prompt, output_tokens, temperature, concurrency, num_prompts
 ):
+  """Fire ``num_prompts`` requests at a fixed concurrency.
+
+  Args:
+    client: the async OpenAI client.
+    model: served model name.
+    prompt: the padded prompt every request sends.
+    output_tokens: per-reply token cap.
+    temperature: decoding temperature.
+    concurrency: requests in flight at once.
+    num_prompts: total requests to issue.
+
+  Returns:
+    A dict of throughput and latency stats for this level; on total failure only
+    ``concurrency``, ``ok``, ``errors`` and ``wall``.
+  """
   sem = asyncio.Semaphore(concurrency)
   results = []
   errors = 0
@@ -112,6 +127,10 @@ def _thinking_check():
   reaches the Qwen3 template. While that was broken every hybrid sim replied
   with reasoning, and at SIM_MAX_TOKENS=256 the block never even closed, so
   truncated chain-of-thought was injected as the user's dialogue turn.
+
+  Returns:
+    True if the sim answered usably, False on either failure mode (thinking
+    still on, or nothing left after stripping).
   """
   # pylint: disable=g-import-not-at-top
   from colbench.env import _sim_extra_body
@@ -156,6 +175,11 @@ def _thinking_check():
 
 
 async def _main_async(args):
+  """Run the thinking check, then the concurrency sweep.
+
+  Args:
+    args: the parsed CLI namespace.
+  """
   base_url = os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:30000/v1")
   model = os.environ.get("MULTITURN_MODEL_NAME", "colbench-sim")
   api_key = os.environ.get("OPENAI_API_KEY", "EMPTY")

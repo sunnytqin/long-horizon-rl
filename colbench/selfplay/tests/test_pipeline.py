@@ -319,7 +319,7 @@ def test_aggregate_pass_at_n_counts_task_level():
       {"index": 1, "all_pass": False, "pass_rate": 0.0},
       {"index": 1, "all_pass": False, "pass_rate": 0.0},
   ]
-  m = diagnose_specs._aggregate(rows, n_samples=2)
+  m = diagnose_specs._aggregate(rows)
   assert m["n_tasks"] == 2
   assert m["solve_rate"] == 0.25  # 1 of 4 samples fully correct
   assert m["pass_at_n"] == 0.5  # task 0 has a correct sample, task 1 does not

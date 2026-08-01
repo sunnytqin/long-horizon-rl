@@ -41,6 +41,10 @@ the user role that is not "the solver succeeded" (that objective pays the sim to
 leak the GT).
 """
 
+# This tree imports names directly (``from colbench.env import
+# ColBenchUserSimEnv``) rather than the enclosing module, matching how the
+# rest of verl is written; call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
 import asyncio
 import logging
 import os
@@ -156,8 +160,12 @@ class ColBenchAgentLoop(AgentLoopBase):
     template here is the SOLVER's (same tokenizer, incl.
     data.apply_chat_template_kwargs) -- true by construction now that the sim IS
     the solver.
+
+    Returns:
+      An async ``(system_content, user_content) -> reply`` callable, installed
+      as the env's ``asim_backend``.
     """
-    temperature, top_p, top_k, _min_p = _sim_sampling()
+    temperature, top_p, top_k, _ = _sim_sampling()
     sim_sampling_params = {
         "temperature": temperature,
         "top_p": top_p,

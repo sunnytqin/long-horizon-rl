@@ -33,6 +33,10 @@ terminates), so answer detection / grading-target selection lives in the loop
 via ``templates.contains_code`` / ``templates.extract_last_code``.
 """
 
+# This tree imports names directly (``from colbench.env import
+# ColBenchUserSimEnv``) rather than the enclosing module, matching how the
+# rest of verl is written; call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
 import logging
 import os
 from dataclasses import dataclass
@@ -77,6 +81,21 @@ def make_openai_sim_backend(
   unsupported/renamed parameter, it drops or renames that field and retries, so
   the same call works for gpt-4o-mini and gpt-5.4-mini alike. Degrades to "No
   response." on persistent error, never crashes the rollout.
+
+  Args:
+    base_url: the sim endpoint, independent of the solver's.
+    model: served model name at that endpoint.
+    api_key: key for that endpoint.
+    temperature: sampling temperature; the reasoning family accepts only the
+      default 1.0.
+    top_p: nucleus mass; likewise pinned to 1.0 on the reasoning family.
+    max_tokens: reply cap, renamed to ``max_completion_tokens`` when the model
+      demands it.
+    timeout: per-request socket timeout in seconds.
+
+  Returns:
+    A ``SimBackend`` closure mapping ``(system_content, user_content)`` to reply
+    text, degrading to ``"No response."`` rather than raising.
   """
   # pylint: disable=g-import-not-at-top
   from openai import OpenAI  # lazy: only the real sim path needs the SDK
@@ -144,21 +163,20 @@ class ColBenchSpecUserSimEnv:
 
   Holds the problem, the spec, the hidden GT and the GT calls.
 
-  Args:
-      problem_description: the user's (public) problem statement.
-      spec: the authored spec
-            ``{persona{who,domain,python_skill,communication_style}, scenario,
-            requirements, plot}`` the sim conditions on (NEVER the GT code).
-      ground_truth: the HIDDEN GT function source -- used ONLY for grading
-                    (score), never shown to the sim or the solver (except in
-                    ``grounded`` mode, where it conditions the sim -- still
-                    never the solver).
-      test_cases: list of GT call-strings used for grading.
-      max_steps: max solver turns before the episode is force-ended (loop
-                 guardrail).
-      reward_time_limit: per-case exec timeout (seconds) for grading.
-      sim_backend: (system, user) -> raw reply. Defaults to the frozen-server
-                   HTTP call; tests / Phase-2 inject their own.
+  Attributes:
+    problem_description: the user's (public) problem statement.
+    spec: the authored spec
+      ``{persona{who,domain,python_skill,communication_style}, scenario,
+      requirements, plot}`` the sim conditions on (NEVER the GT code).
+    ground_truth: the HIDDEN GT function source -- used ONLY for grading
+      (score), never shown to the sim or the solver (except in ``grounded``
+      mode, where it conditions the sim -- still never the solver).
+    test_cases: list of GT call-strings used for grading.
+    max_steps: max solver turns before the episode is force-ended (loop
+      guardrail).
+    reward_time_limit: per-case exec timeout (seconds) for grading.
+    sim_backend: (system, user) -> raw reply. Defaults to the frozen-server HTTP
+      call; tests / Phase-2 inject their own.
   """
 
   problem_description: str
@@ -210,6 +228,14 @@ class ColBenchSpecUserSimEnv:
     ``last_sim_raw`` keeps the stripped-but-uncapped reply so the loop can
     detect ``[TERMINATE]`` (the sentinel could otherwise fall past the char
     cap).
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT.
+
+    Returns:
+      The next user reply: ``<think>``-stripped and char-capped.
+      ``last_sim_raw`` holds the uncapped form for ``[TERMINATE]`` detection.
     """
     if self.grounded:
       system_content, user_content = templates.build_grounded_sim_messages(
@@ -271,11 +297,15 @@ class ColBenchSpecUserSimEnv:
   def score(self, answer_text: str) -> dict[str, Any]:
     """Grade the submitted answer against the GT.
 
-    Returns reward.grade's dict.
-
     Identical to the GT env: the answer is fence-stripped to code, then compared
     to the GT function on every call-string via the sandboxed exec sidecar
     (functional equivalence).
+
+    Args:
+      answer_text: the submitted answer, fence-stripped here.
+
+    Returns:
+      ``reward.grade``'s dict: ``pass_rate``, ``all_pass``, ``per_case``, ``n``.
     """
     code = templates.extract_code_answer(answer_text)
     return reward.grade(

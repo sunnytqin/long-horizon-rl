@@ -62,11 +62,16 @@ def code_turn_indices(tr):
 
 
 def report1(trajs):
+  """Print report 1: within-conversation degeneration by segment.
+
+  Args:
+    trajs: the loaded trajectory dumps.
+  """
   seg = {
       "A": {"raw": [], "prose": [], "cap": []},
       "B": {"raw": [], "prose": [], "cap": []},
   }
-  n_with_B = 0
+  n_with_b = 0
   for t in trajs:
     atext = [
         m["content"]
@@ -77,15 +82,15 @@ def report1(trajs):
     fc, _ = code_turn_indices(tr)
     if fc is None:
       continue
-    has_B = False
+    has_b = False
     for i, txt in enumerate(atext):
       s = "A" if i <= fc else "B"
       if s == "B":
-        has_B = True
+        has_b = True
       seg[s]["raw"].append(len(txt))
       seg[s]["prose"].append(len(prose(txt)))
       seg[s]["cap"].append(1 if is_capit(txt) else 0)
-    n_with_B += int(has_B)
+    n_with_b += int(has_b)
 
   def row(name, d):
     n = len(d["raw"])
@@ -103,15 +108,22 @@ def report1(trajs):
   print(
       (
           f"  # conversations with a segment B (sim pressed after 1st code): "
-          f"{n_with_B}"
+          f"{n_with_b}"
       )
   )
 
 
-def _segB_stats(t, fc):
+def _seg_b_stats(t, fc):
   """Prose-length and capitulation-flag lists over segment B.
 
   Segment B is the agent's post-1st-code turns.
+
+  Args:
+    t: one trajectory dump.
+    fc: index of the first code turn; segment B is everything after it.
+
+  Returns:
+    ``(prose_lengths, capitulation_flags)`` over the agent's segment-B turns.
   """
   atext = [
       m["content"]
@@ -139,7 +151,7 @@ class Bucket:
 
   def add(self, t, fc):
     self.n += 1
-    seg_lens, seg_caps = _segB_stats(t, fc)
+    seg_lens, seg_caps = _seg_b_stats(t, fc)
     self.lens += seg_lens
     self.caps += seg_caps
 
@@ -153,6 +165,11 @@ class Bucket:
 
 
 def report2(trajs):
+  """Print report 2: sim decision, correctness, and round-2 outcome.
+
+  Args:
+    trajs: the loaded trajectory dumps.
+  """
   acc = {"correct": 0, "incorrect": 0}  # Branch 1: sim accepted
   no_decision = 0
   # Branch 2: sim pressed -> [first correct?] -> outcome bucket
@@ -242,11 +259,12 @@ def report2(trajs):
 
 
 def main():
-  files = [
-      x
-      for f in sys.argv[1:]
-      for x in (sorted(glob.glob(f)) if any(c in f for c in "*?[") else [f])
-  ]
+  files = []
+  for pattern in sys.argv[1:]:
+    if any(c in pattern for c in "*?["):
+      files.extend(sorted(glob.glob(pattern)))
+    else:
+      files.append(pattern)
   if not files:
     files = sorted(glob.glob("runs/spec/*.json"))
   for f in files:

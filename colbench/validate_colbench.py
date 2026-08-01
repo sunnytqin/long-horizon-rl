@@ -55,6 +55,10 @@ already up):
         --max_assistant_turns 10 --max_new_tokens_per_turn 1024
 """
 
+# This tree imports names directly (``from colbench.env import
+# ColBenchUserSimEnv``) rather than the enclosing module, matching how the
+# rest of verl is written; call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
 import argparse
 import json
 import os
@@ -168,6 +172,16 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
 
   ``sim_backend`` is injectable (default None -> the real HTTP frozen-sim
   backend); CPU tests pass a stub so no server / openai SDK is needed.
+
+  Args:
+    val_df: the validation parquet as a DataFrame, one row per problem.
+    n_samples: trajectories to spawn per problem.
+    args: the parsed CLI namespace.
+    sim_backend: injectable sim backend; None uses the real frozen-sim HTTP
+      backend, and CPU tests pass a stub.
+
+  Returns:
+    One flat list of ``Trajectory`` objects, ``n_samples`` per row.
   """
   trajs = []
   for row_index, row in val_df.iterrows():
@@ -227,6 +241,18 @@ def eval_tagged_path(
   plain-run filename is unchanged. e.g.
     (..., 10, 4, 0.6)      -> "...step120_turns10_n4_t0.6.json"
     (..., 10, 4, 0.6, 32)  -> "...step120_turns10_n4_t0.6_reject32.json".
+
+  Args:
+    base_out: the requested output path.
+    turns: max assistant turns for this run.
+    n_samples: the temperature-adjusted sample count actually used.
+    temperature: decoding temperature for this run.
+    sim_reject_max_tries: rejection-sampling budget; a nonzero value adds the
+      ``_reject<R>`` suffix.
+
+  Returns:
+    ``base_out`` with the config tag inserted before its extension, defaulting
+    the extension to ``.json``.
   """
   root, ext = os.path.splitext(base_out)
   reject_tag = (
@@ -255,6 +281,10 @@ def _solver_template_kwargs():
   a HYBRID Qwen3 solver (Qwen3-14B/32B) that would otherwise emit <think> needs
   SOLVER_ENABLE_THINKING=false; the entrypoint sets it from the model registry's
   THINKING field.
+
+  Returns:
+    ``{"enable_thinking": bool}`` when SOLVER_ENABLE_THINKING is set, else
+    ``{}`` so no kwarg reaches the chat template.
   """
   v = os.environ.get("SOLVER_ENABLE_THINKING", "").strip().lower()
   if v in ("true", "1"):
@@ -287,6 +317,23 @@ def run_eval(
   returning, per request, a dict with ``"text"`` and
   ``"meta_info"["completion_tokens"]`` -- i.e. an ``sgl.Engine`` (or a test
   stub). ``sim_backend`` is forwarded to each env (None = real).
+
+  Args:
+    llm: an object exposing ``generate(prompt=[...], sampling_params=[...])``
+      that returns, per request, a dict with ``"text"`` and
+      ``"meta_info"["completion_tokens"]`` -- an ``sgl.Engine`` or a test stub.
+    tokenizer: tokenizer used for prompt templating and token accounting.
+    val_df: the validation parquet as a DataFrame, one row per problem.
+    temperature: decoding temperature for this pass.
+    n_samples: trajectories per problem; forced to 1 at temperature 0.
+    args: the parsed CLI namespace.
+    out_path: where the per-trajectory JSON dump is written.
+    max_model_len: context length used to clamp per-turn generation.
+    sim_backend: injectable sim backend; None uses the real frozen-sim HTTP
+      backend, and CPU tests pass a stub.
+
+  Returns:
+    The summary dict that was written to ``out_path``.
   """
   # SGLang sampling params (dict, applied to every request in a batch). Note the
   # name is ``max_new_tokens`` here, and top_k=-1 means "use the whole
@@ -508,7 +555,9 @@ def run_eval(
   )
 
   # ---- rejection-sampling audit (aggregated over every injected sim turn) ----
-  all_events = [ev for t in trajs for ev in t.sim_reject_events]
+  all_events = []
+  for t in trajs:
+    all_events.extend(t.sim_reject_events)
   accepted_events = [ev for ev in all_events if ev.get("accepted")]
   n_turns_retried = sum(1 for ev in accepted_events if ev["tries"] > 1)
   total_samples = sum(ev["tries"] for ev in all_events)
@@ -600,6 +649,13 @@ def _load_engine(args, max_model_len):
   """Load the SGLang solver engine.
 
   Imported lazily so CPU tests never need sglang.
+
+  Args:
+    args: the parsed CLI namespace.
+    max_model_len: context length to configure the engine with.
+
+  Returns:
+    ``(engine, tokenizer)``.
   """
   # pylint: disable=g-import-not-at-top
   import sglang as sgl

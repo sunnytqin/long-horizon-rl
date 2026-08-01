@@ -41,6 +41,10 @@ Example (conda env, base Qwen3-4B on both roles, one vLLM server on :30000):
         --out runs/spec_eval_cond30.json --n_samples 2 --temperature 0.6
 """
 
+# This tree imports names directly (``from colbench.env import
+# ColBenchUserSimEnv``) rather than the enclosing module, matching how the
+# rest of verl is written; call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
 import argparse
 import json
 import os
@@ -191,6 +195,17 @@ class OpenAISolver:
     self._pool = ThreadPoolExecutor(max_workers=max(1, concurrency))
 
   def generate(self, message_lists, tokenizer, max_model_len):
+    """Generate one assistant turn per conversation.
+
+    Args:
+      message_lists: one message list per trajectory.
+      tokenizer: used only to count the reply's tokens; may be None.
+      max_model_len: unused here -- the served model enforces its own context.
+
+    Returns:
+      One ``{"text", "tokens"}`` dict per input conversation, in order.
+    """
+    del max_model_len  # part of the shared solver interface
     texts = list(self._pool.map(self._ep.chat, message_lists))
     out = []
     for t in texts:
@@ -226,6 +241,17 @@ class SGLangSolver:
     self._max_new = max_new_tokens
 
   def generate(self, message_lists, tokenizer, max_model_len):
+    """Generate one assistant turn per conversation.
+
+    Args:
+      message_lists: one message list per trajectory.
+      tokenizer: applies the chat template and counts tokens.
+      max_model_len: context length; the per-turn budget is clamped to what is
+        left after the prompt.
+
+    Returns:
+      One ``{"text", "tokens"}`` dict per input conversation, in order.
+    """
     prompts, params = [], []
     for msgs in message_lists:
       ptext = tokenizer.apply_chat_template(
@@ -257,6 +283,10 @@ def _solver_template_kwargs():
   """Resolve apply_chat_template kwargs for the SOLVER.
 
   Driven by SOLVER_ENABLE_THINKING; see the GT validator.
+
+  Returns:
+    ``{"enable_thinking": bool}`` when SOLVER_ENABLE_THINKING is set, else
+    ``{}`` so no kwarg reaches the chat template.
   """
   v = os.environ.get("SOLVER_ENABLE_THINKING", "").strip().lower()
   if v in ("true", "1"):
@@ -279,6 +309,17 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
   """Expand each spec row into ``n_samples`` trajectories.
 
   The trajectories are independent -- one spec env per trajectory.
+
+  Args:
+    val_df: the spec parquet as a DataFrame, one row per problem.
+    n_samples: trajectories to spawn per problem.
+    args: the parsed CLI namespace.
+    sim_backend: injectable sim backend; None uses the real frozen-sim HTTP
+      backend, and CPU tests pass a stub.
+
+  Returns:
+    One flat list of ``Trajectory`` objects, ``n_samples`` per row, each with
+    its own spec env.
   """
   trajs = []
   for row_index, row in val_df.iterrows():
@@ -324,6 +365,17 @@ def eval_tagged_path(base_out, turns, n_samples, temperature, max_code):
 
   The tag is '_turns<N>_n<K>_t<temp>_cc<C>', so each config gets its own
   self-documenting file.
+
+  Args:
+    base_out: the requested output path.
+    turns: max assistant turns for this run.
+    n_samples: trajectories per problem.
+    temperature: decoding temperature for this run.
+    max_code: the code-proposal cap (``_cc<C>`` in the tag).
+
+  Returns:
+    ``base_out`` with the config tag inserted before its extension, defaulting
+    the extension to ``.json``.
   """
   root, ext = os.path.splitext(base_out)
   return (
@@ -350,6 +402,22 @@ def run_eval(
   track last code / count proposals -> turn cap -> code cap -> else sim reply ->
   [TERMINATE]. Grade the last shown function; reward 0 (terminated_by 'no_code')
   if the solver never showed code.
+
+  Args:
+    solver: an ``OpenAISolver`` or ``SGLangSolver``; both expose
+      ``generate(message_lists, tokenizer, max_model_len)``.
+    tokenizer: tokenizer used for prompt templating and token accounting.
+    val_df: the spec parquet as a DataFrame.
+    temperature: decoding temperature for this pass.
+    n_samples: trajectories per problem.
+    args: the parsed CLI namespace.
+    out_path: where the per-trajectory JSON dump is written.
+    max_model_len: context length used to clamp per-turn generation.
+    sim_backend: injectable sim backend; None uses the real frozen-sim HTTP
+      backend, and CPU tests pass a stub.
+
+  Returns:
+    The summary dict that was written to ``out_path``.
   """
   trajs = build_trajectories(val_df, n_samples, args, sim_backend=sim_backend)
   pool = ThreadPoolExecutor(max_workers=max(1, args.grade_concurrency))
@@ -546,6 +614,18 @@ def run_eval(
 
 
 def _aggregate(trajs, temperature, n_samples, args, elapsed):
+  """Reduce finished trajectories to the run's summary dict.
+
+  Args:
+    trajs: every trajectory, finished or capped.
+    temperature: decoding temperature, recorded in the summary.
+    n_samples: trajectories per problem, recorded in the summary.
+    args: the parsed CLI namespace.
+    elapsed: wall-clock seconds for the pass.
+
+  Returns:
+    The summary dict: pass rates, termination counts and timing.
+  """
   n = len(trajs)
   by_problem = {}
   for t in trajs:
@@ -668,6 +748,16 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
 
 
 def _load_tokenizer(args):
+  """Load the solver tokenizer, or None if it cannot be loaded.
+
+  openai mode can run without one; token budgets then become approximate.
+
+  Args:
+    args: the parsed CLI namespace.
+
+  Returns:
+    The tokenizer, or None after warning.
+  """
   try:
     from transformers import AutoTokenizer
 
@@ -683,6 +773,17 @@ def _load_tokenizer(args):
 
 
 def build_solver(args, tokenizer, max_model_len):
+  """Construct the solver backend named by ``--solver_backend``.
+
+  Args:
+    args: the parsed CLI namespace.
+    tokenizer: accepted for call-site symmetry; unused.
+    max_model_len: context length for the SGLang path.
+
+  Returns:
+    An ``OpenAISolver`` or ``SGLangSolver``.
+  """
+  del tokenizer  # the SGLang engine loads its own
   thinking = _solver_thinking()
   if args.solver_backend == "openai":
     return OpenAISolver(
