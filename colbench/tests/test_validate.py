@@ -14,9 +14,9 @@ from argparse import Namespace
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-import pandas as pd  # noqa: E402
+import pandas as pd  # pylint: disable=g-import-not-at-top,wrong-import-position
 
-from colbench import validate_colbench as vc  # noqa: E402
+from colbench import validate_colbench as vc  # pylint: disable=g-import-not-at-top,wrong-import-position
 
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
@@ -138,7 +138,7 @@ def _run(
 
 
 def test_correct_submission_scores_full_pass_rate(tmp_path):
-  summary, dump = _run(tmp_path, n_samples=2)
+  summary, _ = _run(tmp_path, n_samples=2)
   assert summary["n_problems"] == 2
   assert summary["n_trajectories"] == 4
   assert summary["mean_pass_rate"] == 1.0
@@ -162,8 +162,9 @@ def _leaking_sim_backend(system_content, user_content):
 
 
 def test_rejection_on_clean_backend_records_no_retry(tmp_path):
-  # Rejection sampling enabled but the sim is already clean -> accepted on the first try,
-  # every turn recorded, no simulation failures, no denominator change.
+  # Rejection sampling enabled but the sim is already clean -> accepted on the
+  # first try, every turn recorded, no simulation failures, no denominator
+  # change.
   summary, dump = _run(tmp_path, n_samples=2, sim_reject_max_tries=8)
   assert summary["n_sim_failures"] == 0
   assert summary["mean_pass_rate"] == 1.0
@@ -181,8 +182,9 @@ def test_rejection_on_clean_backend_records_no_retry(tmp_path):
 
 
 def test_rejection_exhaustion_marks_simulation_failure(tmp_path):
-  # The sim only ever produces code -> every trajectory becomes a "simulation failure":
-  # terminated, excluded from the pass-rate denominator, and its own reported category.
+  # The sim only ever produces code -> every trajectory becomes a "simulation
+  # failure": terminated, excluded from the pass-rate denominator, and its own
+  # reported category.
   summary, dump = _run(
       tmp_path,
       n_samples=2,
@@ -207,8 +209,9 @@ def test_rejection_exhaustion_marks_simulation_failure(tmp_path):
 
 
 def test_no_answer_scores_zero_and_no_gt_leak(tmp_path):
-  # Solver never submits; its FINAL turn is short/non-code so the last-turn fallback in
-  # templates.final_answer does not accept it as an answer -> reward 0, not answered.
+  # Solver never submits; its FINAL turn is short/non-code so the last-turn
+  # fallback in templates.final_answer does not accept it as an answer -> reward
+  # 0, not answered.
   summary, dump = _run(
       tmp_path,
       n_samples=1,

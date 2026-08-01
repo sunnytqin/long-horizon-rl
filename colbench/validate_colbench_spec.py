@@ -50,7 +50,8 @@ from colbench.env_spec import ColBenchSpecUserSimEnv
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-# Same strict-under-context margin as the GT validator (SGLang rejects input+max_new==ctx).
+# Same strict-under-context margin as the GT validator (SGLang rejects
+# input+max_new==ctx).
 CTX_MARGIN = 8
 
 
@@ -385,8 +386,9 @@ def run_eval(
       for t, reply, raw, code_rejected, exhausted in pool.map(_sim, pending):
         t.sim_code_rejected += code_rejected
         if exhausted:
-          # Every retry still wrote code -> abort this conversation for inspection.
-          # Save the offending (uncapped) reply so it shows in the transcript dump.
+          # Every retry still wrote code -> abort this conversation for
+          # inspection. Save the offending (uncapped) reply so it shows in the
+          # transcript dump.
           t.messages.append({"role": "user", "content": raw})
           t.done = True
           t.terminated_by = "sim_code_reject"
@@ -466,8 +468,9 @@ def run_eval(
       f"[validate_spec] wrote {len(saved)}/{n_traj} conversations -> {out_path}"
   )
 
-  # Always dump the sim-code-reject ABORTS (all rejection tries wrote code) to a sidecar file so
-  # this fidelity failure is tracked every run -- these are the conversations to read/fix.
+  # Always dump the sim-code-reject ABORTS (all rejection tries wrote code) to a
+  # sidecar file so this fidelity failure is tracked every run -- these are the
+  # conversations to read/fix.
   aborts = [t for t in trajs if t.terminated_by == "sim_code_reject"]
   aborts_path = os.path.splitext(out_path)[0] + ".aborts.txt"
   with open(aborts_path, "w") as f:
@@ -530,8 +533,9 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
   mean_code_proposals = sum(t.code_proposals for t in trajs) / max(1, n)
   mean_turns = sum(t.assistant_turns for t in trajs) / max(1, n)
   overflow_rate = sum(1 for t in trajs if t.overflow) / max(1, n)
-  # Fidelity guard: how often the sim tried to write code (an ordinary user shouldn't). Total
-  # discarded code replies + the fraction of trajectories that hit >=1 rejection.
+  # Fidelity guard: how often the sim tried to write code (an ordinary user
+  # shouldn't). Total discarded code replies + the fraction of trajectories that
+  # hit >=1 rejection.
   total_code_rejected = sum(t.sim_code_rejected for t in trajs)
   sim_code_reject_traj_rate = sum(
       1 for t in trajs if t.sim_code_rejected > 0
@@ -540,9 +544,10 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
       1 for t in trajs if t.terminated_by == "sim_code_reject"
   )
 
-  # The imperfect-signal cost: among USER-terminated trajectories (the sim decided it was
-  # satisfied), how often did the graded code NOT fully pass GT. High -> the sim is quitting on
-  # wrong code; low -> user-termination tracks correctness well enough.
+  # The imperfect-signal cost: among USER-terminated trajectories (the sim
+  # decided it was satisfied), how often did the graded code NOT fully pass GT.
+  # High -> the sim is quitting on wrong code; low -> user-termination tracks
+  # correctness well enough.
   user_term = [t for t in trajs if t.terminated_by == "user"]
   false_terminate_rate = (
       (sum(1 for t in user_term if not t.all_pass) / len(user_term))
@@ -575,7 +580,8 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
       "pass@1_mean_pass_rate": pass_at_1,
       "all_pass_rate": all_pass,
       "showed_code_rate": showed_rate,
-      # First-vs-final code lift (how much the sim's feedback + revisions helped):
+      # First-vs-final code lift (how much the sim's feedback + revisions
+      # helped):
       "mean_first_code_pass_rate": mean_first_pass,
       "first_code_all_pass_rate": first_all_pass,
       "feedback_lift_pass_rate": round(mean_pass - mean_first_pass, 4),
@@ -621,7 +627,7 @@ def _load_tokenizer(args):
     return AutoTokenizer.from_pretrained(
         args.model, trust_remote_code=args.trust_remote_code
     )
-  except Exception as e:  # noqa: BLE001 - openai mode can proceed without exact token counts
+  except Exception as e:  # pylint: disable=broad-exception-caught  # openai mode can proceed without exact token counts
     print(
         f"[validate_spec] WARNING: could not load tokenizer from {args.model!r} ({e}); "
         "token budgets will be approximate."
@@ -798,7 +804,8 @@ def main():
       "post-hoc character truncation; the local backend reads SIM_MAX_TOKENS too.",
   )
   args = ap.parse_args()
-  # Normalize the legacy 'vllm' alias so downstream checks + the summary report the clear name.
+  # Normalize the legacy 'vllm' alias so downstream checks + the summary report
+  # the clear name.
   if args.sim_backend == "vllm":
     args.sim_backend = "local"
 
@@ -809,8 +816,9 @@ def main():
     raise SystemExit(
         "No code-exec backend: set CODECONTEST_EXEC_URL or CODECONTEST_ALLOW_INPROCESS=1."
     )
-  # The sim always reads OPENAI_BASE_URL / MULTITURN_MODEL_NAME; in openai mode default them from
-  # the solver args so BOTH roles hit the same server without extra env plumbing.
+  # The sim always reads OPENAI_BASE_URL / MULTITURN_MODEL_NAME; in openai mode
+  # default them from the solver args so BOTH roles hit the same server without
+  # extra env plumbing.
   if not os.environ.get("OPENAI_BASE_URL"):
     os.environ["OPENAI_BASE_URL"] = args.base_url
   if not os.environ.get("MULTITURN_MODEL_NAME") and args.served_model:
@@ -833,8 +841,9 @@ def main():
   tokenizer = _load_tokenizer(args)
   solver = build_solver(args, tokenizer, max_model_len)
 
-  # sim_backend=None -> the env default (env.openai_sim_backend, reads OPENAI_BASE_URL). For the
-  # 'openai' sim we build a decoupled hosted-GPT backend so the solver stays on the Qwen server.
+  # sim_backend=None -> the env default (env.openai_sim_backend, reads
+  # OPENAI_BASE_URL). For the 'openai' sim we build a decoupled hosted-GPT
+  # backend so the solver stays on the Qwen server.
   sim_backend = None
   if args.sim_backend == "openai":
     from colbench.env_spec import make_openai_sim_backend
@@ -857,8 +866,8 @@ def main():
         top_p=args.sim_top_p,
         max_tokens=args.sim_max_tokens,
     )
-  # The 'local' sim backend (env.openai_sim_backend) reads SIM_MAX_TOKENS from the env; mirror
-  # the CLI value there so both backends honor the same bound.
+  # The 'local' sim backend (env.openai_sim_backend) reads SIM_MAX_TOKENS from
+  # the env; mirror the CLI value there so both backends honor the same bound.
   os.environ["SIM_MAX_TOKENS"] = str(args.sim_max_tokens)
 
   temps = args.temperatures if args.temperatures else [args.temperature]
@@ -868,8 +877,9 @@ def main():
   results_index = []
   for temperature in temps:
     n_samples = 1 if temperature == 0.0 else args.n_samples
-    # NOTE: openai solver sampling is fixed at construction; for a temperature sweep the openai
-    # backend would need rebuilding per temp. sglang re-uses the engine with per-request temp.
+    # NOTE: openai solver sampling is fixed at construction; for a temperature
+    # sweep the openai backend would need rebuilding per temp. sglang re-uses
+    # the engine with per-request temp.
     if args.solver_backend == "openai" and len(temps) > 1:
       args.temperature = temperature
       solver.shutdown()

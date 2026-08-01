@@ -11,16 +11,17 @@ import tempfile
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench.selfplay import diagnose_specs, generate_specs  # noqa: E402
-from colbench.selfplay.dataio import (  # noqa: E402
+from colbench.selfplay import diagnose_specs, generate_specs  # pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.selfplay.dataio import (  # pylint: disable=g-import-not-at-top,wrong-import-position
     _resolve_gt,
     append_jsonl,
     existing_indices,
     read_jsonl,
 )
-from colbench.selfplay.llm_client import ChatEndpoint  # noqa: E402
+from colbench.selfplay.llm_client import ChatEndpoint  # pylint: disable=g-import-not-at-top,wrong-import-position
 
-# Same GT/branch as test_reward so the in-process grader is exercised end-to-end.
+# Same GT/branch as test_reward so the in-process grader is exercised
+# end-to-end.
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
 PROBLEM = "Create def f(x, y). The signature is def f(x, y)."

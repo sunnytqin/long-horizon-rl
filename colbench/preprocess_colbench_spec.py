@@ -48,8 +48,9 @@ _SPEC_KEYS = ("persona", "scenario", "requirements", "plot")
 def _usable(spec_row: dict) -> bool:
   """A spec row is usable iff it parsed ok and has non-empty requirements + plot.
 
-  Guards against the ~3/1000 rows that failed to parse (empty spec) and any row missing the two
-  fields the sim actually needs to behave (the substance + the arc).
+  Guards against the ~3/1000 rows that failed to parse (empty spec) and any row
+  missing the two fields the sim actually needs to behave (the substance + the
+  arc).
   """
   if not spec_row.get("ok", True):
     return False

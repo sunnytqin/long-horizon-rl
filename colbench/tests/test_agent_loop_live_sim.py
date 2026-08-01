@@ -26,9 +26,9 @@ os.environ.pop("CODECONTEST_EXEC_URL", None)
 
 pytest.importorskip("verl.experimental.agent_loop.agent_loop")
 
-from colbench import templates  # noqa: E402
-from colbench.colbench_agent import ColBenchAgentLoop  # noqa: E402
-from verl.workers.rollout.replica import TokenOutput  # noqa: E402
+from colbench import templates  # pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.colbench_agent import ColBenchAgentLoop  # pylint: disable=g-import-not-at-top,wrong-import-position
+from verl.workers.rollout.replica import TokenOutput  # pylint: disable=g-import-not-at-top,wrong-import-position
 
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 WRONG = "def f(x, y):\n    return x + y\n"  # ignores x<10 -> 0.5 pass-rate
@@ -50,17 +50,19 @@ class _FakeTokenizer:
     return bytes(ids).decode("utf-8", errors="ignore")
 
   def apply_chat_template(self, messages, **kwargs):
-    # Stand-in for the real template: concatenate contents. The live sim path routes its
-    # prompt through here (verl.utils.tokenizer.chat_template.apply_chat_template), so the
-    # test can assert on what the sim was actually asked.
+    # Stand-in for the real template: concatenate contents. The live sim path
+    # routes its prompt through here
+    # (verl.utils.tokenizer.chat_template.apply_chat_template), so the test can
+    # assert on what the sim was actually asked.
     return self.encode("".join(m.get("content", "") for m in messages))
 
 
 class _RoleAwareServerManager:
   """One engine serving BOTH roles -- exactly the sim_live topology.
 
-  Solver turns and sim turns are told apart by the request_id: the loop reuses ONE id for the
-  solver and mints a fresh one per sim call, so any id seen twice is the solver's.
+  Solver turns and sim turns are told apart by the request_id: the loop reuses
+  ONE id for the solver and mints a fresh one per sim call, so any id seen twice
+  is the solver's.
   """
 
   def __init__(self, tokenizer, solver_turns, sim_replies):
@@ -79,7 +81,8 @@ class _RoleAwareServerManager:
   async def generate(
       self, *, request_id, prompt_ids, sampling_params, **kwargs
   ):
-    # The solver's request_id is established on call 1 and reused; sim ids are always new.
+    # The solver's request_id is established on call 1 and reused; sim ids are
+    # always new.
     if not self.solver_ids or request_id == self.solver_ids[0]:
       self.solver_ids.append(request_id)
       text = self._solver[min(self._si, len(self._solver) - 1)]
@@ -95,8 +98,9 @@ class _RoleAwareServerManager:
         token_ids=ids,
         log_probs=[0.0] * len(ids),
         num_preempted=0,
-        # Deliberately non-zero: the loop must NOT let sim outputs set these (it reads the
-        # first min / last max it sees, which must come from solver turns only).
+        # Deliberately non-zero: the loop must NOT let sim outputs set these (it
+        # reads the first min / last max it sees, which must come from solver
+        # turns only).
         extra_fields={"min_global_steps": 7, "max_global_steps": 7},
     )
 
@@ -154,8 +158,9 @@ def _run(obj):
 
 
 def test_live_sim_generates_on_the_training_engine():
-  # The sim turn must come from server_manager.generate, with a request_id DISTINCT from the
-  # solver's shared one, and its reply must be injected at mask=0.
+  # The sim turn must come from server_manager.generate, with a request_id
+  # DISTINCT from the solver's shared one, and its reply must be injected at
+  # mask=0.
   obj = _make_loop(
       solver_turns=["What's the cutoff?", _answer_turn(GT)],
       sim_replies=["It's 10."],
@@ -178,7 +183,8 @@ def test_live_sim_prompt_carries_the_hidden_gt_and_never_leaks_into_the_solver()
   )
   out = _run(obj)
   sim_prompt = obj.server_manager.sim_prompts[0]
-  # Same prompt content the frozen path builds: sim system prompt + build_sim_user_message(GT).
+  # Same prompt content the frozen path builds: sim system prompt +
+  # build_sim_user_message(GT).
   expected_user = templates.build_sim_user_message(
       PROBLEM,
       GT,
@@ -189,13 +195,15 @@ def test_live_sim_prompt_carries_the_hidden_gt_and_never_leaks_into_the_solver()
   )
   assert sim_prompt == templates.SIM_SYSTEM_PROMPT + expected_user
   assert GT in sim_prompt  # the sim (and ONLY the sim) sees the ground truth
-  # The solver trajectory contains the GT only because the SOLVER wrote it, never as sim tokens:
-  # the sim generated 8 bytes ("It's 10.") and that is exactly what got mask=0.
+  # The solver trajectory contains the GT only because the SOLVER wrote it,
+  # never as sim tokens: the sim generated 8 bytes ("It's 10.") and that is
+  # exactly what got mask=0.
   assert out.response_mask.count(0) == 8
 
 
 def test_live_sim_uses_the_shared_sim_sampling_envs():
-  # Same SIM_* knobs as the frozen backend -> the arms differ only in which weights answer.
+  # Same SIM_* knobs as the frozen backend -> the arms differ only in which
+  # weights answer.
   os.environ["SIM_TEMPERATURE"] = "0.9"
   os.environ["SIM_MAX_TOKENS"] = "256"
   try:
@@ -213,17 +221,19 @@ def test_live_sim_uses_the_shared_sim_sampling_envs():
 
 
 def test_global_steps_come_from_solver_turns_only():
-  # The fake engine reports 7 for every call incl. the sim's. Off-policy staleness must still
-  # describe the trained turns -- assert the loop never picks a value up from a sim response.
+  # The fake engine reports 7 for every call incl. the sim's. Off-policy
+  # staleness must still describe the trained turns -- assert the loop never
+  # picks a value up from a sim response.
   obj = _make_loop(
       solver_turns=["Q?", _answer_turn(GT)], sim_replies=["It's 10."]
   )
   out = _run(obj)
   assert out.extra_fields["min_global_steps"] == 7
   assert out.extra_fields["max_global_steps"] == 7
-  # 2 solver calls + 1 sim call all report 7, so equality alone is weak; the real guarantee is
-  # structural (the sim backend discards extra_fields). Pin it so a refactor that starts
-  # threading sim outputs into the bookkeeping fails here.
+  # 2 solver calls + 1 sim call all report 7, so equality alone is weak; the
+  # real guarantee is structural (the sim backend discards extra_fields). Pin it
+  # so a refactor that starts threading sim outputs into the bookkeeping fails
+  # here.
   assert len(obj.server_manager.sim_ids) == 1
 
 
@@ -235,8 +245,9 @@ def test_sim_drift_metrics_present_on_every_rollout():
   assert rei["sim_live"] == 1.0
   assert rei["sim_reply_chars"] == float(len("It's 10."))
   assert rei["sim_leak_frac"] == 0.0
-  # A trajectory with NO sim turn (solver answers immediately) still carries all three keys --
-  # verl reads the reward_extra_info key set from the first sample.
+  # A trajectory with NO sim turn (solver answers immediately) still carries all
+  # three keys -- verl reads the reward_extra_info key set from the first
+  # sample.
   rei2 = _run(
       _make_loop(solver_turns=[_answer_turn(WRONG)], sim_replies=[])
   ).extra_fields["reward_extra_info"]
@@ -245,9 +256,10 @@ def test_sim_drift_metrics_present_on_every_rollout():
 
 
 def test_sim_leak_frac_catches_a_sim_that_hands_over_code():
-  # The live sim shares the solver's weights, so "the user starts writing the function" is the
-  # failure mode to watch. With rejection sampling OFF the monitor must report it (and the
-  # leaked code still only ever reaches the solver as text, never as trainable tokens).
+  # The live sim shares the solver's weights, so "the user starts writing the
+  # function" is the failure mode to watch. With rejection sampling OFF the
+  # monitor must report it (and the leaked code still only ever reaches the
+  # solver as text, never as trainable tokens).
   obj = _make_loop(
       solver_turns=["Just write it for me", _answer_turn(GT)],
       sim_replies=["sure: def f(x, y): return x + y"],
@@ -257,8 +269,9 @@ def test_sim_leak_frac_catches_a_sim_that_hands_over_code():
 
 
 def test_live_sim_rejection_sampling_resamples_until_clean():
-  # sim_reject_max_tries>0 on the live path: the async checked loop must resample the leaking
-  # reply and inject the clean one (tries counted in sim_reject_tries).
+  # sim_reject_max_tries>0 on the live path: the async checked loop must
+  # resample the leaking reply and inject the clean one (tries counted in
+  # sim_reject_tries).
   obj = _make_loop(
       solver_turns=["Just write it for me", _answer_turn(GT)],
       sim_replies=[
@@ -277,10 +290,11 @@ def test_live_sim_rejection_sampling_resamples_until_clean():
 
 
 def test_sim_timeout_is_observable_and_kills_the_episode_at_reward_zero():
-  # A slow sim is the live arm's main contention risk, and its damage is NOT "the step is slow":
-  # wait_for fires -> the loop breaks -> an unanswered episode trains at reward 0. That must be
-  # VISIBLE, so the flag rides reward_extra_info (AgentLoopOutput.metrics is a fixed-field
-  # pydantic model with extra='ignore' -- keys put there are silently dropped).
+  # A slow sim is the live arm's main contention risk, and its damage is NOT
+  # "the step is slow": wait_for fires -> the loop breaks -> an unanswered
+  # episode trains at reward 0. That must be VISIBLE, so the flag rides
+  # reward_extra_info (AgentLoopOutput.metrics is a fixed-field pydantic model
+  # with extra='ignore' -- keys put there are silently dropped).
   obj = _make_loop(
       solver_turns=["What's the cutoff?", _answer_turn(GT)],
       sim_replies=["It's 10."],
@@ -313,8 +327,9 @@ def test_sim_timeout_is_observable_and_kills_the_episode_at_reward_zero():
 
 
 def test_timeout_keys_present_on_the_happy_path():
-  # verl reads the reward_extra_info key set from the FIRST sample, so these must exist at 0.0
-  # on every normal rollout or the whole run loses the columns.
+  # verl reads the reward_extra_info key set from the FIRST sample, so these
+  # must exist at 0.0 on every normal rollout or the whole run loses the
+  # columns.
   obj = _make_loop(
       solver_turns=["Q?", _answer_turn(GT)], sim_replies=["It's 10."]
   )

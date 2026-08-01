@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Standalone throughput/health smoke test for the frozen ColBench user-simulator server.
 
-Invoked by xcloud_setup/entrypoint_colbench.sh in SIM_SERVER_ONLY + SIM_SMOKE=True mode, AFTER
-the SGLang server is healthy. It fires a concurrency sweep of chat-completion requests at the
-LOCAL server (127.0.0.1, network-free -> a pure model-serving number) and prints aggregate
-completion-token throughput + per-request latency percentiles. Use it to size a large sim (e.g.
+Invoked by xcloud_setup/entrypoint_colbench.sh in SIM_SERVER_ONLY +
+SIM_SMOKE=True mode, AFTER the SGLang server is healthy. It fires a concurrency
+sweep of chat-completion requests at the LOCAL server (127.0.0.1, network-free
+-> a pure model-serving number) and prints aggregate completion-token throughput
++ per-request latency percentiles. Use it to size a large sim (e.g.
 Qwen3-235B-A22B vs Llama-3.3-70B) BEFORE committing to a full training run.
 
 Deliberately depends only on `openai` (already a colbench dependency) + stdlib, so it runs in the
@@ -20,9 +21,10 @@ import time
 
 from openai import AsyncOpenAI
 
-# A sim turn is a smallish system+context prompt -> a short natural-language reply. We approximate
-# the prompt length by padding filler text to a target token count (~4 chars/token is close enough
-# for a sizing probe; exact tokenization does not change the throughput picture).
+# A sim turn is a smallish system+context prompt -> a short natural-language
+# reply. We approximate the prompt length by padding filler text to a target
+# token count (~4 chars/token is close enough for a sizing probe; exact
+# tokenization does not change the throughput picture).
 _FILLER_SENTENCE = (
     "The user is collaborating with an assistant to refine a solution. "
 )
@@ -67,7 +69,7 @@ async def _run_level(
                 client, model, prompt, output_tokens, temperature
             )
         )
-      except Exception as e:  # noqa: BLE001 - a probe should report, not crash
+      except Exception as e:  # pylint: disable=broad-exception-caught  # a probe should report, not crash
         errors += 1
         if errors <= 3:
           print(f"      request error: {type(e).__name__}: {e}")
@@ -146,11 +148,12 @@ async def _main_async(args):
   client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=args.timeout)
   prompt = _make_prompt(args.input_tokens)
 
-  # Correctness before throughput: a fast sim that emits reasoning as the user turn is useless.
+  # Correctness before throughput: a fast sim that emits reasoning as the user
+  # turn is useless.
   if not args.skip_thinking_check:
     try:
       _thinking_check()
-    except Exception as e:  # noqa: BLE001 - the probe is non-fatal by contract
+    except Exception as e:  # pylint: disable=broad-exception-caught  # the probe is non-fatal by contract
       print(f"  thinking check errored (non-fatal): {type(e).__name__}: {e}")
 
   print("=" * 78)

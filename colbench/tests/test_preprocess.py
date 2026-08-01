@@ -1,7 +1,8 @@
 """CPU test for colbench.preprocess_colbench schema mapping (no GPU).
 
-Applies the row map to a tiny slice of InfoPO's source parquet and asserts the emitted VERL
-schema + that the None-padded test_cases are filtered to non-empty call-strings.
+Applies the row map to a tiny slice of InfoPO's source parquet and asserts the
+emitted VERL schema + that the None-padded test_cases are filtered to non-empty
+call-strings.
 """
 
 import os
@@ -10,7 +11,8 @@ import pytest
 
 from colbench import preprocess_colbench as pp
 
-# Source parquet lives in the InfoPO data dir at the repo root (one level above verl/).
+# Source parquet lives in the InfoPO data dir at the repo root (one level above
+# verl/).
 _SRC = os.path.join(
     os.path.dirname(__file__),
     "..",

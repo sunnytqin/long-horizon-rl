@@ -54,8 +54,9 @@ from verl.workers.rollout.replica import TokenOutput
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# Conversation debug: dump the first N trajectories' full dialogues (see env.py for the sim
-# side). Logged at WARNING so it survives the Ray rollout workers (print() is swallowed).
+# Conversation debug: dump the first N trajectories' full dialogues (see env.py
+# for the sim side). Logged at WARNING so it survives the Ray rollout workers
+# (print() is swallowed).
 _DEBUG_CONVO = bool(int(os.getenv("COLBENCH_DEBUG_CONVO", "0") or "0"))
 _DEBUG_CONVO_N = int(os.getenv("COLBENCH_DEBUG_CONVO_N", "3") or "3")
 _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
@@ -70,7 +71,8 @@ class ColBenchAgentLoop(AgentLoopBase):
     self.prompt_length = self.rollout_config.prompt_length
     self.response_length = self.rollout_config.response_length
 
-    # Total solver turns (clarify + submit). ColBench default 10 (sweet_rl max_steps).
+    # Total solver turns (clarify + submit). ColBench default 10 (sweet_rl
+    # max_steps).
     self.max_assistant_turns = (
         self.rollout_config.multi_turn.max_assistant_turns or 10
     )
@@ -80,36 +82,41 @@ class ColBenchAgentLoop(AgentLoopBase):
     cc = {}
     try:
       cc = self.config.get("colbench", {}) or {}
-    except Exception:  # noqa: BLE001 - config may not define the block
+    except Exception:  # pylint: disable=broad-exception-caught  # config may not define the block
       cc = {}
-    # Per-turn solver generation cap (tokens). None -> use remaining response budget.
+    # Per-turn solver generation cap (tokens). None -> use remaining response
+    # budget.
     self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
-    # Hard wall (seconds) on a single blocking env call (sim HTTP turn or final grading).
+    # Hard wall (seconds) on a single blocking env call (sim HTTP turn or final
+    # grading).
     self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
     # Per-case exec timeout for the final GT grading.
     self.reward_time_limit = float(cc.get("reward_time_limit", 6.0))
-    # SET 2 gradient-masking arm (shared with codecontest): "all" or "final_only". The
-    # masked simulator turns are unaffected (already mask=0).
+    # SET 2 gradient-masking arm (shared with codecontest): "all" or
+    # "final_only". The masked simulator turns are unaffected (already mask=0).
     self.train_turns = cc.get("train_turns", "all")
     if self.train_turns not in TRAIN_TURNS_MODES:
       raise ValueError(
           f"colbench.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}"
       )
-    # User-sim rejection sampling: resample the sim turn up to N times until it contains no
-    # code leak. 0 (default) = off, and the rollout is byte-identical to before. On
-    # exhaustion the trajectory terminates with reward 0 -- see the loop below.
+    # User-sim rejection sampling: resample the sim turn up to N times until it
+    # contains no code leak. 0 (default) = off, and the rollout is
+    # byte-identical to before. On exhaustion the trajectory terminates with
+    # reward 0 -- see the loop below.
     self.sim_reject_max_tries = int(cc.get("sim_reject_max_tries", 0) or 0)
-    # LIVE-weights simulator: generate the user turn on the TRAINING rollout engine instead
-    # of calling the separate frozen server, i.e. keep ONE copy of the weights for the whole
-    # run. False = the frozen-server baseline (byte-identical rollout to before).
+    # LIVE-weights simulator: generate the user turn on the TRAINING rollout
+    # engine instead of calling the separate frozen server, i.e. keep ONE copy
+    # of the weights for the whole run. False = the frozen-server baseline
+    # (byte-identical rollout to before).
     self.sim_live = str(cc.get("sim_live", False)).lower() in ("true", "1")
 
   def _make_live_sim_backend(self):
     """Async sim backend that generates the user turn on the TRAINING rollout engine.
 
-    The simulator therefore speaks with the CURRENT policy weights (verl syncs FSDP -> the
-    rollout engine every step) -- one copy of the weights for both roles, no frozen anchor.
-    Three invariants keep this a pure swap of *who answers*:
+    The simulator therefore speaks with the CURRENT policy weights (verl syncs
+    FSDP -> the rollout engine every step) -- one copy of the weights for both
+    roles, no frozen anchor. Three invariants keep this a pure swap of *who
+    answers*:
 
       * FRESH ``request_id`` per sim call. The solver's turns deliberately share one
         request_id to reuse their KV prefix; the sim prompt is a different sequence (it
@@ -120,26 +127,29 @@ class ColBenchAgentLoop(AgentLoopBase):
       * ``min/max_global_steps`` from the sim's output are IGNORED: the trainer's staleness
         bookkeeping must describe the trained (solver) turns only.
 
-    Prompting matches the frozen path byte-for-byte (env._build_sim_prompt) and reuses the
-    same SIM_TEMPERATURE / SIM_TOP_P / SIM_TOP_K / SIM_MAX_TOKENS envs, so the two arms
-    differ ONLY in which weights answer. NB the chat template here is the SOLVER's (same
-    tokenizer, incl. data.apply_chat_template_kwargs) -- true by construction now that the
-    sim IS the solver.
+    Prompting matches the frozen path byte-for-byte (env._build_sim_prompt) and
+    reuses the same SIM_TEMPERATURE / SIM_TOP_P / SIM_TOP_K / SIM_MAX_TOKENS
+    envs, so the two arms differ ONLY in which weights answer. NB the chat
+    template here is the SOLVER's (same tokenizer, incl.
+    data.apply_chat_template_kwargs) -- true by construction now that the sim IS
+    the solver.
     """
     temperature, top_p, top_k, _min_p = _sim_sampling()
     sim_sampling_params = {
         "temperature": temperature,
         "top_p": top_p,
         "top_k": top_k,
-        # Same default as env.openai_sim_backend so the frozen and live arms are comparable.
+        # Same default as env.openai_sim_backend so the frozen and live arms are
+        # comparable.
         "max_new_tokens": int(
             os.environ.get("SIM_MAX_TOKENS", "4096") or "4096"
         ),
     }
 
     async def _live_sim_backend(system_content: str, user_content: str) -> str:
-      # NOT self.apply_chat_template: that caps the prompt at rollout.prompt_length (2048),
-      # which would silently truncate a sim prompt (problem + hidden GT + full dialogue).
+      # NOT self.apply_chat_template: that caps the prompt at
+      # rollout.prompt_length (2048), which would silently truncate a sim prompt
+      # (problem + hidden GT + full dialogue).
       messages = [
           {"role": "system", "content": system_content},
           {"role": "user", "content": user_content},
@@ -177,14 +187,16 @@ class ColBenchAgentLoop(AgentLoopBase):
     extra_info = kwargs.get("extra_info", {}) or {}
     index = int(kwargs.get("index", 0))
 
-    # The initial (public) problem turn = the last user message of the prompt. It seeds
-    # the simulator's dialogue history (sweet_rl reset()) -- it carries NO ground truth.
+    # The initial (public) problem turn = the last user message of the prompt.
+    # It seeds the simulator's dialogue history (sweet_rl reset()) -- it carries
+    # NO ground truth.
     problem_text = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"),
         "",
     )
 
-    # Task payload: prefer extra_info.ground_truth, fall back to reward_model.ground_truth.
+    # Task payload: prefer extra_info.ground_truth, fall back to
+    # reward_model.ground_truth.
     gt = extra_info.get("ground_truth")
     if gt is None:
       gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
@@ -210,8 +222,9 @@ class ColBenchAgentLoop(AgentLoopBase):
     response_logprobs: list[float] = []
     track_logprobs = True
 
-    # Running dialogue for the SIMULATOR prompt (problem + solver turns + user replies).
-    # Contains no GT; the GT is injected only inside env.generate_user_turn.
+    # Running dialogue for the SIMULATOR prompt (problem + solver turns + user
+    # replies). Contains no GT; the GT is injected only inside
+    # env.generate_user_turn.
     sim_dialogue: list[dict] = [{"role": "user", "content": problem_text}]
 
     assistant_turns = 0
@@ -242,8 +255,9 @@ class ColBenchAgentLoop(AgentLoopBase):
     solver_turn_lengths: list[int] = []
     solver_turn_spans: list[tuple[int, int]] = []
 
-    # Off-policy staleness bookkeeping the trainer requires. Only the solver turns update
-    # this -- the simulator turns are masked, so their weights-version is irrelevant.
+    # Off-policy staleness bookkeeping the trainer requires. Only the solver
+    # turns update this -- the simulator turns are masked, so their
+    # weights-version is irrelevant.
     min_global_steps = None
     max_global_steps = None
 
@@ -324,8 +338,9 @@ class ColBenchAgentLoop(AgentLoopBase):
         reward = float(result.get("pass_rate", 0.0))
         break
 
-      # No answer yet. On the last allowed turn, stop without injecting a reply we can't
-      # act on (reward stays 0 -- the solver never submitted anything usable).
+      # No answer yet. On the last allowed turn, stop without injecting a reply
+      # we can't act on (reward stays 0 -- the solver never submitted anything
+      # usable).
       if is_last:
         break
 
@@ -378,12 +393,13 @@ class ColBenchAgentLoop(AgentLoopBase):
       sim_seconds.append(self.loop.time() - _sim_t0)
       sim_reject_tries += res["tries"]
       if not res["accepted"]:
-        # Exhausted: every sample leaked code, i.e. the solver asked something the
-        # simulator can only answer WITH the solution ("just give me the final
-        # function"). End the conversation here. reward stays 0.0 -- the same outcome
-        # as running out of turns without submitting -- and the trajectory STAYS in the
-        # batch, so its solver turns take the group-relative negative advantage. That
-        # gradient is the point: it is what makes this differ from discarding.
+        # Exhausted: every sample leaked code, i.e. the solver asked something
+        # the simulator can only answer WITH the solution ("just give me the
+        # final function"). End the conversation here. reward stays 0.0 -- the
+        # same outcome as running out of turns without submitting -- and the
+        # trajectory STAYS in the batch, so its solver turns take the
+        # group-relative negative advantage. That gradient is the point: it is
+        # what makes this differ from discarding.
         sim_failed = True
         sim_failure_turn = turn
         break
@@ -415,7 +431,8 @@ class ColBenchAgentLoop(AgentLoopBase):
         response_logprobs += [0.0] * len(feedback_ids)
       user_turns += 1
 
-    # SET 2: restrict the loss to the selected solver turns ("all" default = no-op).
+    # SET 2: restrict the loss to the selected solver turns ("all" default =
+    # no-op).
     apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
 
     if _DEBUG_CONVO and index < _DEBUG_CONVO_N:
@@ -461,9 +478,10 @@ class ColBenchAgentLoop(AgentLoopBase):
                 "sim_failed": float(sim_failed),
                 "sim_failure_turn": float(sim_failure_turn),
                 "sim_reject_tries": float(sim_reject_tries),
-                # Sim drift (see the call site). Keys are emitted on EVERY rollout -- verl
-                # reads the reward_extra_info key set from the FIRST sample, so a key missing
-                # on the no-sim-turn path would break logging for the whole run.
+                # Sim drift (see the call site). Keys are emitted on EVERY
+                # rollout -- verl reads the reward_extra_info key set from the
+                # FIRST sample, so a key missing on the no-sim-turn path would
+                # break logging for the whole run.
                 "sim_live": float(self.sim_live),
                 "sim_reply_chars": (
                     sum(sim_reply_chars) / len(sim_reply_chars)
@@ -473,10 +491,11 @@ class ColBenchAgentLoop(AgentLoopBase):
                 "sim_leak_frac": (sim_leaks / len(sim_reply_chars))
                 if sim_reply_chars
                 else 0.0,
-                # Contention watch (see the declarations above). sim_seconds = MEAN wall time
-                # per sim call incl. rejection resamples; sim_turn_timeout meaned over the
-                # batch = fraction of trajectories KILLED by a slow sim (each of which trains
-                # at reward 0 if the solver had not submitted yet).
+                # Contention watch (see the declarations above). sim_seconds =
+                # MEAN wall time per sim call incl. rejection resamples;
+                # sim_turn_timeout meaned over the batch = fraction of
+                # trajectories KILLED by a slow sim (each of which trains at
+                # reward 0 if the solver had not submitted yet).
                 "sim_seconds": (
                     sum(sim_seconds) / len(sim_seconds) if sim_seconds else 0.0
                 ),

@@ -47,8 +47,9 @@ from verl.workers.rollout.replica import TokenOutput
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# Conversation debug: dump the first N trajectories' full dialogues. Logged at WARNING so it
-# survives the Ray rollout workers (print() is swallowed). Mirrors colbench_agent.
+# Conversation debug: dump the first N trajectories' full dialogues. Logged at
+# WARNING so it survives the Ray rollout workers (print() is swallowed). Mirrors
+# colbench_agent.
 _DEBUG_CONVO = bool(int(os.getenv("COLBENCH_DEBUG_CONVO", "0") or "0"))
 _DEBUG_CONVO_N = int(os.getenv("COLBENCH_DEBUG_CONVO_N", "3") or "3")
 _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
@@ -63,7 +64,8 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     self.prompt_length = self.rollout_config.prompt_length
     self.response_length = self.rollout_config.response_length
 
-    # Total solver turns (clarify + propose). ColBench default 10 (sweet_rl max_steps).
+    # Total solver turns (clarify + propose). ColBench default 10 (sweet_rl
+    # max_steps).
     self.max_assistant_turns = (
         self.rollout_config.multi_turn.max_assistant_turns or 10
     )
@@ -73,11 +75,13 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     cc = {}
     try:
       cc = self.config.get("colbench", {}) or {}
-    except Exception:  # noqa: BLE001 - config may not define the block
+    except Exception:  # pylint: disable=broad-exception-caught  # config may not define the block
       cc = {}
-    # Per-turn solver generation cap (tokens). None -> use remaining response budget.
+    # Per-turn solver generation cap (tokens). None -> use remaining response
+    # budget.
     self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
-    # Hard wall (seconds) on a single blocking env call (sim HTTP turn or final grading).
+    # Hard wall (seconds) on a single blocking env call (sim HTTP turn or final
+    # grading).
     self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
     # Per-case exec timeout for the final GT grading.
     self.reward_time_limit = float(cc.get("reward_time_limit", 6.0))
@@ -110,25 +114,30 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # Guardrail: max ```python proposals before the loop force-grades the last one (default 2,
     # reduced from 3 after eval). New spec-path knob.
     self.max_code_proposals = int(cc.get("max_code_proposals", 2) or 2)
-    # Sim reject-sampling budget: re-query the sim up to N times if it writes code (an ordinary
-    # user never pastes a function). On exhaustion the conversation is aborted. Default 8.
+    # Sim reject-sampling budget: re-query the sim up to N times if it writes
+    # code (an ordinary user never pastes a function). On exhaustion the
+    # conversation is aborted. Default 8.
     self.sim_max_tries = int(cc.get("sim_max_tries", 8) or 8)
-    # Terminate-on-all-pass (TRAINING-only rollout cleanup; needs the GT oracle). Once the
-    # solver's latest code passes ALL tests, end the episode immediately (never consult the sim
-    # again) so the frozen sim cannot press on correct code and elicit a post-code capitulation
-    # ramble that the flat reward would reinforce (the free-ride). Purely additive early-exit;
-    # the shared sim env is untouched, and eval (validate_colbench_spec) runs its own loop and
-    # never sees this flag. OFF by default -> baseline byte-identical.
+    # Terminate-on-all-pass (TRAINING-only rollout cleanup; needs the GT
+    # oracle). Once the solver's latest code passes ALL tests, end the episode
+    # immediately (never consult the sim again) so the frozen sim cannot press
+    # on correct code and elicit a post-code capitulation ramble that the flat
+    # reward would reinforce (the free-ride). Purely additive early-exit; the
+    # shared sim env is untouched, and eval (validate_colbench_spec) runs its
+    # own loop and never sees this flag. OFF by default -> baseline
+    # byte-identical.
     _tap = cc.get("terminate_on_allpass", False)
     self.terminate_on_allpass = (
         _tap
         if isinstance(_tap, bool)
         else str(_tap).strip().lower() in ("1", "true", "yes", "on")
     )
-    # Binary reward: reward = 1.0 iff the graded code passes ALL tests, else 0.0 (vs the default
-    # fractional pass_rate). Cleaner objective proxy + suppresses partial-credit reinforcement of
-    # mediocre-code-plus-ramble. The raw fractional pass_rate is ALWAYS kept as a metric. OFF by
-    # default. Independent of terminate_on_allpass (they clean complementary contamination paths).
+    # Binary reward: reward = 1.0 iff the graded code passes ALL tests, else 0.0
+    # (vs the default fractional pass_rate). Cleaner objective proxy +
+    # suppresses partial-credit reinforcement of mediocre-code-plus-ramble. The
+    # raw fractional pass_rate is ALWAYS kept as a metric. OFF by default.
+    # Independent of terminate_on_allpass (they clean complementary
+    # contamination paths).
     _br = cc.get("binary_reward", False)
     self.binary_reward = (
         _br
@@ -157,18 +166,20 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     extra_info = kwargs.get("extra_info", {}) or {}
     index = int(kwargs.get("index", 0))
 
-    # The initial (public) problem turn = the last user message of the prompt. It seeds the
-    # simulator's dialogue history -- it carries NO ground truth.
+    # The initial (public) problem turn = the last user message of the prompt.
+    # It seeds the simulator's dialogue history -- it carries NO ground truth.
     problem_text = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"),
         "",
     )
 
-    # Task payload: prefer extra_info.ground_truth, fall back to reward_model.ground_truth.
+    # Task payload: prefer extra_info.ground_truth, fall back to
+    # reward_model.ground_truth.
     gt = extra_info.get("ground_truth")
     if gt is None:
       gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
-    # The authored spec the sim conditions on (persona/scenario/requirements/plot). NEVER GT.
+    # The authored spec the sim conditions on
+    # (persona/scenario/requirements/plot). NEVER GT.
     spec = extra_info.get("spec", {}) or {}
     # verl (HF datasets) hands test_cases as a plain list; a pandas reader would give an
     # np.ndarray. Convert via an explicit None check (an ndarray would raise under `or []`).
@@ -192,38 +203,42 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     response_logprobs: list[float] = []
     track_logprobs = True
 
-    # Running dialogue for the SIMULATOR prompt (problem + solver turns + user replies).
-    # Contains no GT; the GT is used only inside env.score.
+    # Running dialogue for the SIMULATOR prompt (problem + solver turns + user
+    # replies). Contains no GT; the GT is used only inside env.score.
     sim_dialogue: list[dict] = [{"role": "user", "content": problem_text}]
 
     assistant_turns = 0
     user_turns = 0
     overflow = False
-    # Spec-path termination bookkeeping (mirrors validate_colbench_spec / drive).
+    # Spec-path termination bookkeeping (mirrors validate_colbench_spec /
+    # drive).
     code_proposals = 0
     showed_code = False
     last_code = ""
-    # Solver-turn ordinal of the last code proposal (index into solver_turn_spans). Stays
-    # None until the solver shows code; consumed by the "upto_last_code" gradient mask.
+    # Solver-turn ordinal of the last code proposal (index into
+    # solver_turn_spans). Stays None until the solver shows code; consumed by
+    # the "upto_last_code" gradient mask.
     last_code_turn_idx = None
     first_code = ""
     sim_code_rejected = 0
-    # Total characters of the sim replies actually injected into the solver's context (paired
-    # with user_turns to give a mean). Watches whether the SIM_MAX_TOKENS bound + the prompt's
-    # brevity instruction are holding -- the spec path has no post-hoc char cap.
+    # Total characters of the sim replies actually injected into the solver's
+    # context (paired with user_turns to give a mean). Watches whether the
+    # SIM_MAX_TOKENS bound + the prompt's brevity instruction are holding -- the
+    # spec path has no post-hoc char cap.
     sim_reply_chars_total = 0
     terminated_by = None
     reward = 0.0
     result: dict[str, Any] = {}
-    # Grade cached by the terminate-on-all-pass mid-loop check (for the current last_code), so
-    # the end-of-episode grading reuses it instead of re-scoring the same code. None when the
-    # flag is off or the mid-loop grade timed out.
+    # Grade cached by the terminate-on-all-pass mid-loop check (for the current
+    # last_code), so the end-of-episode grading reuses it instead of re-scoring
+    # the same code. None when the flag is off or the mid-loop grade timed out.
     graded_result: dict[str, Any] | None = None
     solver_turn_lengths: list[int] = []
     solver_turn_spans: list[tuple[int, int]] = []
 
-    # Off-policy staleness bookkeeping the trainer requires. Only the solver turns update
-    # this -- the simulator turns are masked, so their weights-version is irrelevant.
+    # Off-policy staleness bookkeeping the trainer requires. Only the solver
+    # turns update this -- the simulator turns are masked, so their
+    # weights-version is irrelevant.
     min_global_steps = None
     max_global_steps = None
 
@@ -282,8 +297,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       if templates.contains_code(assistant_text):
         showed_code = True
         last_code = templates.extract_last_code(sim_dialogue)
-        # This turn's span was just appended above, so its ordinal is len-1. The LAST
-        # time this fires is the turn extract_last_code grades -> kept span == graded code.
+        # This turn's span was just appended above, so its ordinal is len-1. The
+        # LAST time this fires is the turn extract_last_code grades -> kept span
+        # == graded code.
         last_code_turn_idx = len(solver_turn_spans) - 1
         code_proposals += 1
         if not first_code:
@@ -343,8 +359,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       raw = env.last_sim_raw
 
       if env.last_sim_code_reject_exhausted:
-        # Every retry still wrote code -> the sim can only answer this turn WITH code.
-        # Abort here; grade the last function the solver showed (0 if none).
+        # Every retry still wrote code -> the sim can only answer this turn WITH
+        # code. Abort here; grade the last function the solver showed (0 if
+        # none).
         terminated_by = "sim_code_reject"
         break
 
@@ -373,7 +390,8 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     if terminated_by is None:  # defensive: the turn-cap branch always sets it
       terminated_by = "turn_cap" if showed_code else "no_code"
 
-    # Grade the last function shown, once, at whatever stop. Reward 0 iff no code was shown.
+    # Grade the last function shown, once, at whatever stop. Reward 0 iff no
+    # code was shown.
     first_code_pass_rate = 0.0
     raw_pass_rate = 0.0  # raw fractional pass-rate; always kept as a metric (even under binary reward)
     if showed_code and last_code:
@@ -399,15 +417,16 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 "n": 0,
             }
       raw_pass_rate = float(result.get("pass_rate", 0.0))
-      # Binary reward -> 1.0 iff all tests pass, else the fractional pass_rate. pass_rate metric
-      # stays raw either way (see below).
+      # Binary reward -> 1.0 iff all tests pass, else the fractional pass_rate.
+      # pass_rate metric stays raw either way (see below).
       reward = (
           float(bool(result.get("all_pass", False)))
           if self.binary_reward
           else raw_pass_rate
       )
-      # Feedback-lift diagnostic: pass-rate of the FIRST proposal. Reuse the raw pass_rate when
-      # the solver only ever showed one function (the common case) to avoid a second exec call.
+      # Feedback-lift diagnostic: pass-rate of the FIRST proposal. Reuse the raw
+      # pass_rate when the solver only ever showed one function (the common
+      # case) to avoid a second exec call.
       if first_code and first_code != last_code:
         try:
           fres = await asyncio.wait_for(
@@ -420,10 +439,11 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       else:
         first_code_pass_rate = raw_pass_rate
 
-    # Intervention 1.5: length penalty on the TRAJECTORY reward (no-op when coef==0, i.e. Int-1).
-    # pass_rate keeps the raw graded quality (for the pass_rate metric); reward_score is the
-    # penalized training signal. solver_tokens = total SOLVER-generated tokens (response_mask=1
-    # spans, before the train_turns mask). Penalty = coef*clip((tok-cap)/cap, 0, 1).
+    # Intervention 1.5: length penalty on the TRAJECTORY reward (no-op when
+    # coef==0, i.e. Int-1). pass_rate keeps the raw graded quality (for the
+    # pass_rate metric); reward_score is the penalized training signal.
+    # solver_tokens = total SOLVER-generated tokens (response_mask=1 spans,
+    # before the train_turns mask). Penalty = coef*clip((tok-cap)/cap, 0, 1).
     pass_rate = raw_pass_rate
     solver_tokens = sum(solver_turn_lengths)
     length_penalty = 0.0
@@ -513,7 +533,8 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                     terminated_by == "user"
                     and bool(result.get("all_pass", False))
                 ),
-                # Mean chars per injected sim reply (0 if the sim never got to speak).
+                # Mean chars per injected sim reply (0 if the sim never got to
+                # speak).
                 "sim_reply_chars": float(sim_reply_chars_total / user_turns)
                 if user_turns
                 else 0.0,

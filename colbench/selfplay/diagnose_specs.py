@@ -5,9 +5,10 @@ the code, and grade it against the UNCHANGED GT ``test_cases`` via the existing 
 (``colbench.reward.grade``). Run it on one or more spec files (e.g. strong-gen and self-gen)
 and it prints a solve rate per file -- the ceiling the Phase-1 dialogue rollout could reach.
 
-Interpretation: a low self-gen number that TRACKS a low strong-gen number => the solver/task
-is the bottleneck (the spec is fine); a self-gen number well BELOW strong-gen => self-authored
-spec quality is the bottleneck. This is a diagnostic, not a filter: nothing is dropped.
+Interpretation: a low self-gen number that TRACKS a low strong-gen number => the
+solver/task is the bottleneck (the spec is fine); a self-gen number well BELOW
+strong-gen => self-authored spec quality is the bottleneck. This is a
+diagnostic, not a filter: nothing is dropped.
 
 Example:
     python -m colbench.selfplay.diagnose_specs \
@@ -39,9 +40,9 @@ def _solve_and_grade(
 ) -> dict:
   """One sample: the authored ``requirements`` -> solver code -> grade against GT test_cases.
 
-  This is the full-spec faithfulness check: can a solver reconstruct GT behavior from the
-  authored requirements alone. (The plot only shapes the Phase-1 dialogue; it is not a
-  self-contained spec and is not graded here.)
+  This is the full-spec faithfulness check: can a solver reconstruct GT behavior
+  from the authored requirements alone. (The plot only shapes the Phase-1
+  dialogue; it is not a self-contained spec and is not graded here.)
   """
   messages = spec_templates.build_full_spec_solver_messages(
       task["problem_description"], spec

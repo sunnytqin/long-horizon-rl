@@ -107,18 +107,22 @@ def test_plot_author_messages_ask_for_direction_not_script():
   assert '"requirements"' in user and '"plot"' in user
   # the plot must be a DIRECTION, explicitly not a turn-by-turn script
   assert "DIRECTION" in user and "turn-by-turn" in user.lower()
-  # reveal mechanisms are CONDITIONAL on the assistant (never assume it asks); user can't test
+  # reveal mechanisms are CONDITIONAL on the assistant (never assume it asks);
+  # user can't test
   assert "if the assistant asks" in user.lower()
   assert "never assume" in user.lower()
   assert "never runs, tests, or executes" in user.lower()
-  # requirements describe the user's needs in the third person (consistent with the plot)
+  # requirements describe the user's needs in the third person (consistent with
+  # the plot)
   assert "third person" in user.lower() and "the user needs" in user.lower()
-  # the plot is written as an instruction to the user-simulator ("the user would...")
+  # the plot is written as an instruction to the user-simulator ("the user
+  # would...")
   assert "instruction to the user-simulator" in user.lower()
 
 
 def test_plot_solver_still_uses_requirements():
-  # the diagnostic solver reads requirements (unchanged full-spec solver), not the plot
+  # the diagnostic solver reads requirements (unchanged full-spec solver), not
+  # the plot
   spec = {
       "persona": "a home user",
       "scenario": "boot issue",

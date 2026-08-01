@@ -167,7 +167,8 @@ def report2(trajs):
       pressed_n[correct1] += 1
       if cp >= 2:
         final_ok = bool(t.get("all_pass"))
-        # correct-first: ok=still-correct, not-ok=made-worse ; incorrect-first: ok=fixed, not-ok=still-wrong
+        # correct-first: ok=still-correct, not-ok=made-worse ; incorrect-first:
+        # ok=fixed, not-ok=still-wrong
         key = "fixed_or_stillcorrect" if final_ok else "worse"
         if not correct1 and not final_ok:
           key = "worse"  # "still wrong" shares the "worse" slot label below

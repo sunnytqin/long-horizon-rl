@@ -21,10 +21,11 @@ rollout), so it runs in the very same SGLang container as training -- no vLLM de
 The frozen user simulator is a SEPARATE SGLang OpenAI server (the entrypoint brings it up and
 exports OPENAI_BASE_URL), exactly as in training.
 
-The one intentional difference vs the RL loop (shared with codecontest/validate_codecontest.py):
-we re-render the full message list with the chat template each turn (clean, inspectable
-conversations) instead of appending raw token ids. The model sees an equivalent prompt; there
-are no train-time masks to keep aligned here.
+The one intentional difference vs the RL loop (shared with
+codecontest/validate_codecontest.py): we re-render the full message list with
+the chat template each turn (clean, inspectable conversations) instead of
+appending raw token ids. The model sees an equivalent prompt; there are no
+train-time masks to keep aligned here.
 
 Reward convention: the trajectory reward is the final submission's FRACTIONAL pass-rate in
 [0, 1] (mean per-case functional equivalence vs the hidden GT), matching training.
@@ -59,10 +60,10 @@ from colbench.env import ColBenchUserSimEnv
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-# Small safety margin so input+completion stays STRICTLY under the engine context window:
-# SGLang rejects a request whose input_len + max_new_tokens EQUALS the context length (not
-# just exceeds), and our token count can drift a little from the engine's. Matches the
-# codecontest validator's guard.
+# Small safety margin so input+completion stays STRICTLY under the engine
+# context window: SGLang rejects a request whose input_len + max_new_tokens
+# EQUALS the context length (not just exceeds), and our token count can drift a
+# little from the engine's. Matches the codecontest validator's guard.
 CTX_MARGIN = 8
 
 
@@ -85,11 +86,13 @@ class Trajectory:
     self.row_index = row_index
     self.task_id = task_id
     self.sample_idx = sample_idx
-    # Full SOLVER conversation: starts with [system, user(problem)] from the parquet.
+    # Full SOLVER conversation: starts with [system, user(problem)] from the
+    # parquet.
     self.messages = [dict(m) for m in messages]
-    # The SIMULATOR's running dialogue (problem + solver turns + user replies). Contains
-    # NO ground truth -- byte-identical to what ColBenchAgentLoop.run builds and passes to
-    # env.generate_user_turn (which injects the hidden GT only inside its own prompt).
+    # The SIMULATOR's running dialogue (problem + solver turns + user replies).
+    # Contains NO ground truth -- byte-identical to what ColBenchAgentLoop.run
+    # builds and passes to env.generate_user_turn (which injects the hidden GT
+    # only inside its own prompt).
     self.sim_dialogue = [{"role": "user", "content": problem_text}]
     self.env = env
     self.response_budget = (
@@ -108,14 +111,15 @@ class Trajectory:
     self.num_test_cases = 0
     self.final_answer = None
     self.final_code = None
-    # Simulation-failure category: the sim could not produce a code-free reply within the
-    # rejection-sampling budget, so the conversation was terminated. This is a THIRD
-    # outcome on top of pass/fail -- excluded from the pass-rate denominator so a bad sim
-    # is never scored as a solver failure. (Stays False when rejection sampling is off.)
+    # Simulation-failure category: the sim could not produce a code-free reply
+    # within the rejection-sampling budget, so the conversation was terminated.
+    # This is a THIRD outcome on top of pass/fail -- excluded from the pass-rate
+    # denominator so a bad sim is never scored as a solver failure. (Stays False
+    # when rejection sampling is off.)
     self.sim_failed = False
     self.sim_failure_turn = -1
-    # Per-user-turn rejection audit: one entry per injected sim reply,
-    # {"turn": int, "tries": int, "reasons": [str, ...]}. tries==1 & empty reasons means
+    # Per-user-turn rejection audit: one entry per injected sim reply, {"turn":
+    # int, "tries": int, "reasons": [str, ...]}. tries==1 & empty reasons means
     # the first sample was clean (no rejection needed).
     self.sim_reject_events = []
     # Per-turn audit trail.
@@ -161,14 +165,16 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
     task_id = extra_info.get("task_id", extra_info.get("index", row_index))
     # parquet stores the chat prompt as a list/array of {role, content} dicts.
     messages = [dict(m) for m in row["prompt"]]
-    # The initial (public) problem turn = the last user message of the prompt; it seeds
-    # the simulator's dialogue and carries NO ground truth (mirrors ColBenchAgentLoop).
+    # The initial (public) problem turn = the last user message of the prompt;
+    # it seeds the simulator's dialogue and carries NO ground truth (mirrors
+    # ColBenchAgentLoop).
     problem_text = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"),
         "",
     )
-    # verl (HF datasets) hands test_cases as a plain list; a pandas reader gives np.ndarray.
-    # Convert via an explicit None check to stay safe under both (per env.py / reward.py).
+    # verl (HF datasets) hands test_cases as a plain list; a pandas reader gives
+    # np.ndarray. Convert via an explicit None check to stay safe under both
+    # (per env.py / reward.py).
     _tc = gt.get("test_cases")
     for s in range(n_samples):
       env = ColBenchUserSimEnv(
@@ -197,7 +203,8 @@ def eval_tagged_path(
     base_out, turns, n_samples, temperature, sim_reject_max_tries=0
 ):
   """Insert a '_turns<N>_n<K>_t<temp>[_reject<R>]' tag before the extension so each eval
-  config gets its own self-documenting file (and can never clobber a different config).
+  config gets its own self-documenting file (and can never clobber a different
+  config).
 
   ``n_samples`` is the temperature-adjusted value actually used (t=0 is forced to 1), so
   the tag faithfully records what was run. A '_reject<R>' suffix is added ONLY when
@@ -218,14 +225,16 @@ def eval_tagged_path(
 def _solver_template_kwargs():
   """Resolve apply_chat_template kwargs for the SOLVER from SOLVER_ENABLE_THINKING.
 
-  The solver-side mirror of env._sim_extra_body, and the eval counterpart of training's
-  data.apply_chat_template_kwargs (set from the same env by run_colbench_grpo.sh) -- eval MUST
-  template the solver the way training did, or a hybrid checkpoint is scored off-distribution.
+  The solver-side mirror of env._sim_extra_body, and the eval counterpart of
+  training's data.apply_chat_template_kwargs (set from the same env by
+  run_colbench_grpo.sh) -- eval MUST template the solver the way training did,
+  or a hybrid checkpoint is scored off-distribution.
 
   Default (unset) -> {}: send NO thinking kwarg, safe for every model (Qwen2.5,
-  Qwen3-Instruct-2507, non-Qwen), whose chat templates error on the kwarg. Only a HYBRID Qwen3
-  solver (Qwen3-14B/32B) that would otherwise emit <think> needs SOLVER_ENABLE_THINKING=false;
-  the entrypoint sets it from the model registry's THINKING field.
+  Qwen3-Instruct-2507, non-Qwen), whose chat templates error on the kwarg. Only
+  a HYBRID Qwen3 solver (Qwen3-14B/32B) that would otherwise emit <think> needs
+  SOLVER_ENABLE_THINKING=false; the entrypoint sets it from the model registry's
+  THINKING field.
   """
   v = os.environ.get("SOLVER_ENABLE_THINKING", "").strip().lower()
   if v in ("true", "1"):
@@ -267,8 +276,9 @@ def run_eval(
   }
 
   trajs = build_trajectories(val_df, n_samples, args, sim_backend=sim_backend)
-  # Rejection-sample the sim reply this run? (>0 tries). Constant across turns; defined here
-  # so it is always bound for the aggregate section even if the turn loop breaks early.
+  # Rejection-sample the sim reply this run? (>0 tries). Constant across turns;
+  # defined here so it is always bound for the aggregate section even if the
+  # turn loop breaks early.
   reject = bool(args.sim_reject_max_tries and args.sim_reject_max_tries > 0)
   # One pool, reused for the two blocking env calls (grading + sim HTTP turns).
   pool = ThreadPoolExecutor(max_workers=max(1, args.grade_concurrency))
@@ -283,7 +293,8 @@ def run_eval(
     if not active:
       break
 
-    # Respect the cumulative response-token budget per trajectory (overflow = stop).
+    # Respect the cumulative response-token budget per trajectory (overflow =
+    # stop).
     gen_batch = []
     for t in active:
       if t.response_tokens >= t.response_budget:
@@ -294,9 +305,10 @@ def run_eval(
     if not gen_batch:
       break
 
-    # Assemble each prompt and clamp its completion budget to the room left in the model's
-    # context window (a fixed max_new_tokens on later turns could exceed context and make
-    # SGLang raise, killing the run). Same guard as validate_codecontest.py.
+    # Assemble each prompt and clamp its completion budget to the room left in
+    # the model's context window (a fixed max_new_tokens on later turns could
+    # exceed context and make SGLang raise, killing the run). Same guard as
+    # validate_codecontest.py.
     prompts, per_req_params, kept = [], [], []
     for t in gen_batch:
       prompt_text = tokenizer.apply_chat_template(
@@ -388,8 +400,9 @@ def run_eval(
 
     for t, res in pool.map(_sim, pending):
       if not res["accepted"]:
-        # Simulation failure: the sim only ever produced code within the budget. End the
-        # conversation and mark it as its own outcome (NOT a solver failure / reward 0).
+        # Simulation failure: the sim only ever produced code within the budget.
+        # End the conversation and mark it as its own outcome (NOT a solver
+        # failure / reward 0).
         t.sim_failed = True
         t.sim_failure_turn = turn
         t.sim_reject_events.append(
@@ -457,8 +470,9 @@ def run_eval(
       if answered_trajs
       else None
   )
-  # Per-problem best (max over VALID samples) -> mean. The pass@n analog for a fractional
-  # reward. Problems with no valid sample (all sim-failed) drop out of the denominator.
+  # Per-problem best (max over VALID samples) -> mean. The pass@n analog for a
+  # fractional reward. Problems with no valid sample (all sim-failed) drop out
+  # of the denominator.
   mean_best_pass_rate = sum(
       max(t.reward for t in grp) for grp in valid_by_problem.values()
   ) / max(1, len(valid_by_problem))
@@ -616,9 +630,10 @@ def main():
       "still computed over ALL trajectories. <0 = save all.",
   )
 
-  # User-simulator rejection sampling (EVAL only). Resample the sim's reply until it contains
-  # no leaked code (templates.detect_code_leak), so the frozen sim can't just hand the solver
-  # the solution. Off by default (0 tries) => single-shot turns, byte-identical to training.
+  # User-simulator rejection sampling (EVAL only). Resample the sim's reply
+  # until it contains no leaked code (templates.detect_code_leak), so the frozen
+  # sim can't just hand the solver the solution. Off by default (0 tries) =>
+  # single-shot turns, byte-identical to training.
   ap.add_argument(
       "--sim_reject_max_tries",
       type=int,
@@ -643,8 +658,8 @@ def main():
       "it fires on copied EXPRESSIONS, not prose that shares identifiers.",
   )
 
-  # Inference hyper-parameters (defaults match run_colbench_grpo.sh so a checkpoint is
-  # evaluated with the same budgets it trained under).
+  # Inference hyper-parameters (defaults match run_colbench_grpo.sh so a
+  # checkpoint is evaluated with the same budgets it trained under).
   ap.add_argument(
       "--temperature",
       type=float,
@@ -747,8 +762,9 @@ def main():
   max_model_len = args.max_prompt_length + args.max_response_length
   llm, tokenizer = _load_engine(args, max_model_len)
 
-  # Resolve the temperature sweep: --temperatures wins, else the single --temperature.
-  # De-dup while preserving order so a stray repeat doesn't run (and overwrite) twice.
+  # Resolve the temperature sweep: --temperatures wins, else the single
+  # --temperature. De-dup while preserving order so a stray repeat doesn't run
+  # (and overwrite) twice.
   temps = args.temperatures if args.temperatures else [args.temperature]
   _seen = set()
   temps = [t for t in temps if not (t in _seen or _seen.add(t))]
@@ -758,7 +774,8 @@ def main():
 
   results_index = []
   for temperature in temps:
-    # Greedy decoding produces identical samples, so multiple samples are degenerate.
+    # Greedy decoding produces identical samples, so multiple samples are
+    # degenerate.
     n_samples = 1 if temperature == 0.0 else args.n_samples
     if temperature == 0.0 and args.n_samples > 1:
       print(

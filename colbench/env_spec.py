@@ -34,9 +34,10 @@ from typing import Optional
 
 from colbench import reward, templates
 
-# Reuse the GT env's frozen-sim HTTP backend + sampling resolution verbatim -- only the PROMPT
-# built here differs (spec vs GT source). Keeps sim sampling / thinking-kwarg behavior identical.
-from colbench.env import SimBackend, _sim_extra_body, _sim_sampling, openai_sim_backend  # noqa: F401
+# Reuse the GT env's frozen-sim HTTP backend + sampling resolution verbatim --
+# only the PROMPT built here differs (spec vs GT source). Keeps sim sampling /
+# thinking-kwarg behavior identical.
+from colbench.env import SimBackend, _sim_extra_body, _sim_sampling, openai_sim_backend  # pylint: disable=unused-import
 
 
 def make_openai_sim_backend(
@@ -70,8 +71,9 @@ def make_openai_sim_backend(
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
     ]
-    # Start with the standard-chat schema; peel off fields the model rejects (GPT-5/reasoning
-    # models: token-limit param is renamed, sampling params are fixed at default).
+    # Start with the standard-chat schema; peel off fields the model rejects
+    # (GPT-5/reasoning models: token-limit param is renamed, sampling params are
+    # fixed at default).
     params = {
         "model": model,
         "messages": messages,
@@ -84,10 +86,11 @@ def make_openai_sim_backend(
       try:
         completion = client.chat.completions.create(**params)
         return completion.choices[0].message.content or ""
-      except Exception as e:  # noqa: BLE001 - degrade to a default, never crash rollout
+      except Exception as e:  # pylint: disable=broad-exception-caught  # degrade to a default, never crash rollout
         msg = str(e).lower()
-        # Adapt the request to this model family's schema, then retry (no attempt spent
-        # "for real" -- we only fall through to the warning once nothing more can be pared).
+        # Adapt the request to this model family's schema, then retry (no
+        # attempt spent "for real" -- we only fall through to the warning once
+        # nothing more can be pared).
         if "max_tokens" in msg and "max_tokens" in params:
           params["max_completion_tokens"] = params.pop("max_tokens")
           continue
@@ -110,8 +113,9 @@ def make_openai_sim_backend(
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# Conversation debug (mirrors env._DEBUG_SIM). Dumps the SPEC the sim conditions on + raw reply,
-# so the user can eyeball that (a) the GT never enters the sim prompt and (b) the sim behaves.
+# Conversation debug (mirrors env._DEBUG_SIM). Dumps the SPEC the sim conditions
+# on + raw reply, so the user can eyeball that (a) the GT never enters the sim
+# prompt and (b) the sim behaves.
 _DEBUG_SIM = bool(int(os.getenv("COLBENCH_DEBUG_SIM", "0") or "0"))
 _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
@@ -141,24 +145,29 @@ class ColBenchSpecUserSimEnv:
   max_steps: int = 10
   reward_time_limit: float = 6.0
   sim_backend: Optional[SimBackend] = None
-  # Reject-sample the sim if it writes code (an ordinary user describes in words, never pastes a
-  # function). Re-query up to this many times; if ALL still contain a code fence, the loop aborts
-  # the episode (see last_sim_code_reject_exhausted) rather than injecting/stripping a bad reply.
+  # Reject-sample the sim if it writes code (an ordinary user describes in
+  # words, never pastes a function). Re-query up to this many times; if ALL
+  # still contain a code fence, the loop aborts the episode (see
+  # last_sim_code_reject_exhausted) rather than injecting/stripping a bad reply.
   sim_max_tries: int = 8
-  # GROUNDED mode (+colbench.grounded_sim): condition the sim on the hidden GT function source +
-  # spec["plot"] instead of persona/scenario/requirements. Everything else about this env is
-  # unchanged. When True the GT IS in the sim's prompt, so the sim_wrote_code rejection above
-  # becomes the load-bearing leak defense rather than a character guard.
+  # GROUNDED mode (+colbench.grounded_sim): condition the sim on the hidden GT
+  # function source + spec["plot"] instead of persona/scenario/requirements.
+  # Everything else about this env is unchanged. When True the GT IS in the
+  # sim's prompt, so the sim_wrote_code rejection above becomes the load-bearing
+  # leak defense rather than a character guard.
   grounded: bool = False
-  # Populated on the last generate_user_turn call, for the loop's debug dump / audit.
+  # Populated on the last generate_user_turn call, for the loop's debug dump /
+  # audit.
   last_sim_reply: str = field(default="", repr=False)
   # The most recent RAW (uncapped, but <think>-stripped) sim reply, so the loop can string-match
   # [TERMINATE] on the sim's true output before the injected turn is char-capped.
   last_sim_raw: str = field(default="", repr=False)
-  # How many code-writing sim replies were discarded on the last generate_user_turn (diagnostic).
+  # How many code-writing sim replies were discarded on the last
+  # generate_user_turn (diagnostic).
   last_sim_code_rejected: int = field(default=0, repr=False)
-  # True iff EVERY try on the last generate_user_turn still wrote code -> the loop should abort
-  # this conversation (terminated_by "sim_code_reject") so it can be read, NOT inject a bad turn.
+  # True iff EVERY try on the last generate_user_turn still wrote code -> the
+  # loop should abort this conversation (terminated_by "sim_code_reject") so it
+  # can be read, NOT inject a bad turn.
   last_sim_code_reject_exhausted: bool = field(default=False, repr=False)
 
   def __post_init__(self):
@@ -187,10 +196,11 @@ class ColBenchSpecUserSimEnv:
       system_content, user_content = templates.build_spec_sim_messages(
           self.spec, messages
       )
-    # Rejection sampling: an ordinary user never pastes code. If the sim writes a code fence,
-    # re-query (sampling temperature makes retries differ). If EVERY try still contains code,
-    # we do NOT strip or inject it (stripping yields weird half-sentences) -- we flag
-    # exhaustion so the loop aborts the conversation for the user to read.
+    # Rejection sampling: an ordinary user never pastes code. If the sim writes
+    # a code fence, re-query (sampling temperature makes retries differ). If
+    # EVERY try still contains code, we do NOT strip or inject it (stripping
+    # yields weird half-sentences) -- we flag exhaustion so the loop aborts the
+    # conversation for the user to read.
     rejected = 0
     raw = ""
     stripped = ""
@@ -204,10 +214,11 @@ class ColBenchSpecUserSimEnv:
       rejected += 1
     self.last_sim_code_rejected = rejected
     self.last_sim_code_reject_exhausted = exhausted
-    # No post-hoc character truncation: the old HUMAN_RESPONSE_CHARACTER_LIMIT slice chopped
-    # verbose replies mid-sentence (the solver then saw fragments). Brevity is enforced at the
-    # source instead -- by the "one or two short sentences" instruction and the SIM_MAX_TOKENS
-    # generation bound in the backend. The full (think-stripped) reply is injected as-is.
+    # No post-hoc character truncation: the old HUMAN_RESPONSE_CHARACTER_LIMIT
+    # slice chopped verbose replies mid-sentence (the solver then saw
+    # fragments). Brevity is enforced at the source instead -- by the "one or
+    # two short sentences" instruction and the SIM_MAX_TOKENS generation bound
+    # in the backend. The full (think-stripped) reply is injected as-is.
     reply = stripped
     self.last_sim_raw = stripped
     self.last_sim_reply = reply
@@ -232,8 +243,9 @@ class ColBenchSpecUserSimEnv:
   def score(self, answer_text: str) -> dict:
     """Grade the submitted answer against the GT. Returns reward.grade's dict.
 
-    Identical to the GT env: the answer is fence-stripped to code, then compared to the GT
-    function on every call-string via the sandboxed exec sidecar (functional equivalence).
+    Identical to the GT env: the answer is fence-stripped to code, then compared
+    to the GT function on every call-string via the sandboxed exec sidecar
+    (functional equivalence).
     """
     code = templates.extract_code_answer(answer_text)
     return reward.grade(

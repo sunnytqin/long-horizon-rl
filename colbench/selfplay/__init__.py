@@ -1,9 +1,10 @@
 """ColBench self-play spec setting (Phase 0: offline spec authoring + diagnostic).
 
-A CLEAN, SELF-CONTAINED alternative to the current GT-code-conditioned simulator. Instead of
-handing the frozen user simulator the hidden ground-truth *code* (which leaks), we author a
-natural-language **spec** (persona + scenario + complete requirements) offline and will later
-condition the simulator on that prose. This subpackage builds ONLY the Phase-0 pieces:
+A CLEAN, SELF-CONTAINED alternative to the current GT-code-conditioned
+simulator. Instead of handing the frozen user simulator the hidden ground-truth
+*code* (which leaks), we author a natural-language **spec** (persona + scenario
++ complete requirements) offline and will later condition the simulator on that
+prose. This subpackage builds ONLY the Phase-0 pieces:
 
   * ``generate_specs``  -- author one spec per task from (public problem + hidden GT code),
     with a pluggable backend: ``strong`` (external teacher) or ``selfplay`` (the trained

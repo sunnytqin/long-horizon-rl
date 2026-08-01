@@ -29,8 +29,9 @@ SPEC_AUTHOR_SYSTEM = (
     "detail of the intended behavior, and you never write code."
 )
 
-# {problem_description} = the public, under-specified ask (carries the required signature).
-# {ground_truth} = the hidden reference implementation (the source of the exact behavior).
+# {problem_description} = the public, under-specified ask (carries the required
+# signature). {ground_truth} = the hidden reference implementation (the source
+# of the exact behavior).
 SPEC_AUTHOR_USER = """A user needs a Python function. Here is their initial, rough request (this is all the \
 agent helping them will see up front):
 
@@ -245,7 +246,7 @@ def parse_spec(raw: str) -> dict:
   if m:
     try:
       obj = json.loads(m.group(0))
-    except Exception:  # noqa: BLE001 - tolerate malformed JSON, fall through to raw
+    except Exception:  # pylint: disable=broad-exception-caught  # tolerate malformed JSON, fall through to raw
       obj = None
   if isinstance(obj, dict):
     return {
@@ -315,7 +316,7 @@ def parse_plot_spec(raw: str) -> dict:
   if m:
     try:
       obj = json.loads(m.group(0))
-    except Exception:  # noqa: BLE001 - tolerate malformed JSON, fall through to raw
+    except Exception:  # pylint: disable=broad-exception-caught  # tolerate malformed JSON, fall through to raw
       obj = None
   if isinstance(obj, dict):
     requirements = str(obj.get("requirements", "") or "").strip()

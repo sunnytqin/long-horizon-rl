@@ -55,9 +55,9 @@ def _sim_extra_body():
   return None
 
 
-# A sim backend maps (system_content, user_content) -> raw reply text. The default is an
-# OpenAI-compatible HTTP call to a separate FROZEN sim server; tests inject a stub (no server,
-# no openai import).
+# A sim backend maps (system_content, user_content) -> raw reply text. The
+# default is an OpenAI-compatible HTTP call to a separate FROZEN sim server;
+# tests inject a stub (no server, no openai import).
 SimBackend = Callable[[str, str], str]
 # The async variant, used by the LIVE-weights arm: the agent loop injects a coroutine that
 # generates on the TRAINING rollout engine (current policy), so there is no frozen copy and no
@@ -97,9 +97,10 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
   base_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:8000/v1")
   model = os.environ.get("MULTITURN_MODEL_NAME", "")
   api_key = os.environ.get("OPENAI_API_KEY", "EMPTY")
-  # max_retries=0: the SDK otherwise adds its OWN exponentially-backed-off retries (default 2)
-  # on top of our manual loop below, so a slow/busy sim could fan a single call out to ~9 requests
-  # and stack timeouts into minutes. Keep our loop the SINGLE source of retry behavior.
+  # max_retries=0: the SDK otherwise adds its OWN exponentially-backed-off
+  # retries (default 2) on top of our manual loop below, so a slow/busy sim
+  # could fan a single call out to ~9 requests and stack timeouts into minutes.
+  # Keep our loop the SINGLE source of retry behavior.
   client = OpenAI(
       api_key=api_key,
       base_url=base_url,
@@ -122,15 +123,18 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
     # while `chat_template_kwargs: {enable_thinking: false}` works. Same trap as vLLM, which
     # declares no such field and sets extra="allow".
     extra_body["chat_template_kwargs"] = thinking
-  # SIM_MAX_TOKENS bounds the user turn at GENERATION time (default 4096 = unchanged). The spec
-  # path sets it small so a brief human-like reply is not chopped post-hoc (it replaces the old
-  # HUMAN_RESPONSE_CHARACTER_LIMIT slice, which truncated mid-sentence).
+  # SIM_MAX_TOKENS bounds the user turn at GENERATION time (default 4096 =
+  # unchanged). The spec path sets it small so a brief human-like reply is not
+  # chopped post-hoc (it replaces the old HUMAN_RESPONSE_CHARACTER_LIMIT slice,
+  # which truncated mid-sentence).
   sim_max_tokens = int(os.environ.get("SIM_MAX_TOKENS", "4096") or "4096")
-  # Per-request timeout to the sim server. Default 180s (was a hardcoded 60s): a large or busy
-  # frozen sim -- especially a big REMOTE model under bursty rollout concurrency where the sim is
-  # slower than the assistant rollouts -- has long tail latency, and a timeout here does not just
-  # slow the step, it POISONS the turn with the "No response." fallback below. Prefer a slow turn
-  # over a poisoned one. SIM_TIMEOUT overrides (bump higher for a very large/saturated sim).
+  # Per-request timeout to the sim server. Default 180s (was a hardcoded 60s): a
+  # large or busy frozen sim -- especially a big REMOTE model under bursty
+  # rollout concurrency where the sim is slower than the assistant rollouts --
+  # has long tail latency, and a timeout here does not just slow the step, it
+  # POISONS the turn with the "No response." fallback below. Prefer a slow turn
+  # over a poisoned one. SIM_TIMEOUT overrides (bump higher for a very
+  # large/saturated sim).
   sim_timeout = float(os.environ.get("SIM_TIMEOUT", "180") or "180")
   params = {
       "model": model,
@@ -146,7 +150,7 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
     try:
       completion = client.chat.completions.create(**params)
       return completion.choices[0].message.content or ""
-    except Exception as e:  # noqa: BLE001 - degrade to a default reply, never crash rollout
+    except Exception as e:  # pylint: disable=broad-exception-caught  # degrade to a default reply, never crash rollout
       logger.warning("[colbench] sim server call failed: %r", e)
   return "No response."
 
@@ -177,7 +181,8 @@ class ColBenchUserSimEnv:
   reward_time_limit: float = 6.0
   sim_backend: Optional[SimBackend] = None
   asim_backend: Optional[AsyncSimBackend] = None
-  # Populated on the last generate_user_turn call, for the agent loop's debug dump.
+  # Populated on the last generate_user_turn call, for the agent loop's debug
+  # dump.
   last_sim_reply: str = field(default="", repr=False)
 
   def __post_init__(self):
@@ -199,9 +204,9 @@ class ColBenchUserSimEnv:
   def _build_sim_prompt(self, messages: list[dict]) -> tuple[str, str]:
     """(system_content, user_content) for one sim call. The ONE place the GT is injected.
 
-    Kept separate from the sampling so the sync (frozen-server) and async (live-weights)
-    paths build a BYTE-IDENTICAL prompt -- the two arms must differ only in which weights
-    answer it.
+    Kept separate from the sampling so the sync (frozen-server) and async
+    (live-weights) paths build a BYTE-IDENTICAL prompt -- the two arms must
+    differ only in which weights answer it.
     """
     return templates.SIM_SYSTEM_PROMPT, templates.build_sim_user_message(
         self.problem_description, self.ground_truth, messages
@@ -297,10 +302,10 @@ class ColBenchUserSimEnv:
     ``accepted`` is False, ``reply`` is None (a "simulation failure" -- the caller
     terminates the trajectory), and ``reasons`` has one entry per try.
 
-    Both callers terminate on exhaustion, but score it differently: eval treats it as a
-    THIRD outcome excluded from the pass-rate denominator, while training keeps the
-    trajectory in the batch at reward 0 so the offending solver turn takes a negative
-    advantage (see colbench_agent.py).
+    Both callers terminate on exhaustion, but score it differently: eval treats
+    it as a THIRD outcome excluded from the pass-rate denominator, while
+    training keeps the trajectory in the batch at reward 0 so the offending
+    solver turn takes a negative advantage (see colbench_agent.py).
     """
     reasons: list[str] = []
     for i in range(1, max_tries + 1):
@@ -339,9 +344,10 @@ class ColBenchUserSimEnv:
   ) -> dict:
     """LIVE-weights twin of ``generate_user_turn_checked`` (identical record contract).
 
-    Rejection sampling matters MORE here than on the frozen path: a live simulator shares the
-    solver's weights and its incentive-free view of the GT, so if the policy drifts toward
-    dumping code the "user" drifts with it. Same accept/exhaust semantics as the sync method.
+    Rejection sampling matters MORE here than on the frozen path: a live
+    simulator shares the solver's weights and its incentive-free view of the GT,
+    so if the policy drifts toward dumping code the "user" drifts with it. Same
+    accept/exhaust semantics as the sync method.
     """
     reasons: list[str] = []
     for i in range(1, max_tries + 1):
@@ -368,8 +374,8 @@ class ColBenchUserSimEnv:
   def score(self, answer_text: str) -> dict:
     """Grade the submitted answer against the GT. Returns reward.grade's dict.
 
-    The answer is fence-stripped to code, then compared to the GT function on every
-    call-string via the sandboxed exec sidecar (functional equivalence).
+    The answer is fence-stripped to code, then compared to the GT function on
+    every call-string via the sandboxed exec sidecar (functional equivalence).
     """
     code = templates.extract_code_answer(answer_text)
     return reward.grade(

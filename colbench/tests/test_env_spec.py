@@ -13,8 +13,8 @@ import os
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench import templates  # noqa: E402
-from colbench.env_spec import ColBenchSpecUserSimEnv  # noqa: E402
+from colbench import templates  # pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.env_spec import ColBenchSpecUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
 
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 WRONG = "def f(x, y):\n    return x + y\n"  # ignores the x<10 branch -> 0.5 pass-rate
@@ -88,8 +88,9 @@ def test_spec_prompt_has_no_gt():
 
 
 def test_generate_user_turn_no_char_truncation():
-  # The old HUMAN_RESPONSE_CHARACTER_LIMIT post-hoc slice is gone: a long reply is injected in
-  # full (brevity is enforced at generation via SIM_MAX_TOKENS + the prompt, not by chopping).
+  # The old HUMAN_RESPONSE_CHARACTER_LIMIT post-hoc slice is gone: a long reply
+  # is injected in full (brevity is enforced at generation via SIM_MAX_TOKENS +
+  # the prompt, not by chopping).
   long_reply = (
       "x" * (templates.HUMAN_RESPONSE_CHARACTER_LIMIT + 800) + " [TERMINATE]"
   )
@@ -153,7 +154,8 @@ def test_sim_wrote_code_detects_fence():
 
 
 def test_generate_user_turn_rejection_samples_code():
-  # First reply writes code (rejected), second is natural language -> the NL one is returned.
+  # First reply writes code (rejected), second is natural language -> the NL one
+  # is returned.
   e = _env(
       sim_backend=_scripted_backend(
           [
@@ -168,8 +170,9 @@ def test_generate_user_turn_rejection_samples_code():
 
 
 def test_generate_user_turn_flags_exhaustion_when_all_tries_write_code():
-  # Every try writes code -> after sim_max_tries the env flags exhaustion (no strip/inject); the
-  # loop aborts the conversation for inspection. last_sim_raw keeps the offending reply verbatim.
+  # Every try writes code -> after sim_max_tries the env flags exhaustion (no
+  # strip/inject); the loop aborts the conversation for inspection. last_sim_raw
+  # keeps the offending reply verbatim.
   offending = "Do this: ```python\ndef f(): return 0\n``` ok?"
   e = ColBenchSpecUserSimEnv(
       problem_description=PROBLEM,
@@ -253,8 +256,9 @@ def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
 
 
 def test_gated_never_asked_terminates_on_imperfect_code():
-  # Solver never asks and shows WRONG code; a faithful gated sim has nothing to reveal and
-  # terminates -> we grade the imperfect code (0.5). This is the intended imperfect signal.
+  # Solver never asks and shows WRONG code; a faithful gated sim has nothing to
+  # reveal and terminates -> we grade the imperfect code (0.5). This is the
+  # intended imperfect signal.
   e = _env(
       sim_backend=_scripted_backend(["Looks fine to me, thanks! [TERMINATE]"])
   )
@@ -265,8 +269,8 @@ def test_gated_never_asked_terminates_on_imperfect_code():
 
 
 def test_correct_on_code_then_terminate():
-  # Wrong code -> one correction (no terminate) -> correct code -> terminate. Grade the correct
-  # code (1.0). Sim replies: correction, then [TERMINATE].
+  # Wrong code -> one correction (no terminate) -> correct code -> terminate.
+  # Grade the correct code (1.0). Sim replies: correction, then [TERMINATE].
   e = _env(
       sim_backend=_scripted_backend(
           [
@@ -282,7 +286,8 @@ def test_correct_on_code_then_terminate():
 
 
 def test_code_cap_forces_terminate():
-  # Sim never terminates; solver keeps proposing code -> code cap (3) fires -> grade last code.
+  # Sim never terminates; solver keeps proposing code -> code cap (3) fires ->
+  # grade last code.
   e = _env(sim_backend=_scripted_backend(["Hmm, not quite, keep trying."]))
   out = drive(
       e,
@@ -297,7 +302,8 @@ def test_code_cap_forces_terminate():
 
 
 def test_turn_cap_no_code_reward_zero():
-  # Solver only ever asks (no code); sim never terminates -> turn cap -> reward 0.
+  # Solver only ever asks (no code); sim never terminates -> turn cap -> reward
+  # 0.
   e = _env(
       sim_backend=_scripted_backend(["Above 10 we add, below we subtract."])
   )
@@ -352,8 +358,9 @@ def test_grounded_prompt_has_gt_and_plot_not_requirements():
   assert GT.strip() in sys_msg
   assert SPEC["plot"] in sys_msg
   assert PROBLEM in sys_msg
-  # ...and the spec's persona / scenario / requirements are NOT (this arm drops them, so a
-  # result is attributable to grounding rather than to persona style).
+  # ...and the spec's persona / scenario / requirements are NOT (this arm drops
+  # them, so a result is attributable to grounding rather than to persona
+  # style).
   assert SPEC["requirements"] not in sys_msg
   assert SPEC["scenario"] not in sys_msg
   assert "an analyst" not in sys_msg
@@ -374,8 +381,8 @@ def test_spec_mode_unchanged_when_not_grounded():
 
 
 def test_grounded_still_rejects_fenced_reply():
-  # Rejection sampling is the load-bearing leak defense in grounded mode (the sim can SEE the GT),
-  # so it must still fire there.
+  # Rejection sampling is the load-bearing leak defense in grounded mode (the
+  # sim can SEE the GT), so it must still fire there.
   e = ColBenchSpecUserSimEnv(
       problem_description=PROBLEM,
       spec=SPEC,
@@ -403,9 +410,10 @@ def test_grounded_still_rejects_fenced_reply():
 
 
 def test_grounded_leak_invariant_full_episode():
-  # THE test for this arm: over a whole episode the GT source (and any distinctive fragment of
-  # it) must never appear in a turn injected into the SOLVER's message list, even though the sim
-  # is reading it. Mirrors tests/test_env.py::test_leak_invariant_full_episode.
+  # THE test for this arm: over a whole episode the GT source (and any
+  # distinctive fragment of it) must never appear in a turn injected into the
+  # SOLVER's message list, even though the sim is reading it. Mirrors
+  # tests/test_env.py::test_leak_invariant_full_episode.
   e = _env(
       sim_backend=_scripted_backend(
           [

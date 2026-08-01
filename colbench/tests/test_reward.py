@@ -9,13 +9,15 @@ import os
 
 import pytest
 
-# Grade via the in-process exec fallback (no sidecar). Set BEFORE reward/exec_client run.
+# Grade via the in-process exec fallback (no sidecar). Set BEFORE
+# reward/exec_client run.
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench import reward  # noqa: E402
+from colbench import reward  # pylint: disable=g-import-not-at-top,wrong-import-position
 
-# A GT with a hidden branch (x >= 10) so a "sum only" candidate matches PART of the cases.
+# A GT with a hidden branch (x >= 10) so a "sum only" candidate matches PART of
+# the cases.
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 CALLS = [
     "f(1, 2)",
@@ -49,8 +51,9 @@ def test_wrong_impl_scores_zero():
 
 
 def test_candidate_stdout_is_suppressed():
-  # A correct impl that ALSO prints must still score 1.0 -- the harness suppresses candidate
-  # stdout so the sole harness output stays the boolean the sidecar compares to "True".
+  # A correct impl that ALSO prints must still score 1.0 -- the harness
+  # suppresses candidate stdout so the sole harness output stays the boolean the
+  # sidecar compares to "True".
   candidate = "def f(x, y):\n    print('noisy candidate output')\n    return x + y if x >= 10 else x - y\n"
   res = reward.grade(candidate, GT, CALLS)
   assert res["pass_rate"] == 1.0

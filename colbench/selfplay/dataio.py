@@ -52,7 +52,8 @@ def _resolve_gt(row) -> dict:
         "ground_truth": gt.get("ground_truth", ""),
         "test_cases": list(_tc) if _tc is not None else [],
     }
-  # Raw InfoPO schema: gt is the GT source string; test_cases nested in extra_info.
+  # Raw InfoPO schema: gt is the GT source string; test_cases nested in
+  # extra_info.
   return {
       "problem_description": rm.get("problem_description", ""),
       "ground_truth": gt if isinstance(gt, str) else rm.get("ground_truth", ""),

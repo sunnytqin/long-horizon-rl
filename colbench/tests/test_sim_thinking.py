@@ -124,8 +124,9 @@ def test_real_backend_payload_nests_it(monkeypatch):
 def test_tokenizer_kwargs_stay_flat(monkeypatch, mod_name, fn_name):
   """These feed tokenizer.apply_chat_template(**kwargs), which takes enable_thinking DIRECTLY.
 
-  Wrapping them in chat_template_kwargs would pass the tokenizer an unknown argument and
-  silently stop suppressing thinking in eval -- the same bug, newly introduced.
+  Wrapping them in chat_template_kwargs would pass the tokenizer an unknown
+  argument and silently stop suppressing thinking in eval -- the same bug, newly
+  introduced.
   """
   pytest.importorskip("transformers")
   mod = pytest.importorskip(mod_name)
@@ -147,8 +148,8 @@ def test_strip_think_closed_block():
 def test_strip_think_truncated_block_is_removed():
   """SIM_MAX_TOKENS=256 cannot fit a hybrid Qwen3's reasoning, so `</think>` never arrives.
 
-  Before the fix the regex required a closing tag, so the raw monologue was injected into the
-  conversation as the user's turn.
+  Before the fix the regex required a closing tag, so the raw monologue was
+  injected into the conversation as the user's turn.
   """
   truncated = "<think>Okay, the user is asking about a CSV parser. Let me consider whether they"
   assert (

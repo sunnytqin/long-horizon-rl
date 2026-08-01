@@ -7,10 +7,11 @@ Ported from ``sweet_rl`` (``prompts/{llm_agent_code_prompt,human_simulator_code_
 (``colbench_agent``) and the offline validator apply byte-identical text handling.
 """
 
-# The long lines in this file are prompt text inside string literals. Re-wrapping them would
-# change the exact bytes sent to the model and break comparability with completed runs, so
-# the line-length limit is disabled file-wide rather than reflowed. A per-line disable is not
-# an option here: the comment would land inside the prompt and be sent to the model.
+# The long lines in this file are prompt text inside string literals.
+# Re-wrapping them would change the exact bytes sent to the model and break
+# comparability with completed runs, so the line-length limit is disabled
+# file-wide rather than reflowed. A per-line disable is not an option here: the
+# comment would land inside the prompt and be sent to the model.
 # pylint: disable=line-too-long
 
 import re
@@ -37,8 +38,9 @@ Directly output the raw python code after "I WANT TO ANSWER:".
 Complete only the immediate agent response in this dialogue:
 {dialogue_history}"""
 
-# The solver's LIVE system prompt (used by the agent loop + preprocess_colbench). Bullets 1, 2, 4
-# and 5 are verbatim from the sweet_rl original above; two things deliberately differ:
+# The solver's LIVE system prompt (used by the agent loop +
+# preprocess_colbench). Bullets 1, 2, 4 and 5 are verbatim from the sweet_rl
+# original above; two things deliberately differ:
 #
 #  (a) The trailing "{dialogue_history}" placeholder is gone. sweet_rl formatted the whole
 #      conversation into it and called a COMPLETION endpoint; we use a real CHAT template and let
@@ -107,11 +109,13 @@ Now directly output your answer to the LLM agent IN TWO SENTENCES. DO NOT SAY AN
 # The sim's system message (verbatim from HumanInteractionEnv.invoke_model).
 SIM_SYSTEM_PROMPT = "You are a helpful assistant."
 
-# Cap on the simulator's reply, mirroring sweet_rl HUMAN_RESPONSE_CHARACTER_LIMIT. A brief,
-# human-like reply -- also bounds how much a single user turn can cost the solver's budget.
+# Cap on the simulator's reply, mirroring sweet_rl
+# HUMAN_RESPONSE_CHARACTER_LIMIT. A brief, human-like reply -- also bounds how
+# much a single user turn can cost the solver's budget.
 HUMAN_RESPONSE_CHARACTER_LIMIT = 400
 
-# The sentinel the solver emits to submit its final code (sweet_rl / InfoPO convention).
+# The sentinel the solver emits to submit its final code (sweet_rl / InfoPO
+# convention).
 ANSWER_MARKER = "I WANT TO ANSWER:"
 
 
@@ -131,8 +135,9 @@ _THINK_OPEN_UNCLOSED = re.compile(r"<think>(?!.*</think>).*\Z", re.DOTALL)
 def strip_think(text: str) -> str:
   """Remove ``<think>...</think>`` blocks, INCLUDING a trailing unterminated one.
 
-  Returns "" when the text is nothing but (truncated) reasoning -- callers treat an empty reply
-  as a failed turn rather than injecting reasoning fragments into the conversation.
+  Returns "" when the text is nothing but (truncated) reasoning -- callers treat
+  an empty reply as a failed turn rather than injecting reasoning fragments into
+  the conversation.
   """
   out = _THINK_BLOCK.sub("", text or "")
   out = _THINK_OPEN_UNCLOSED.sub("", out)
@@ -229,8 +234,9 @@ def extract_code_answer(answer_text: str) -> str:
 # span keeps the real expression leaks and spares prose.
 _DEF_SIGNATURE_RE = re.compile(r"\bdef\s+\w+\s*\(")
 _PY_FENCE_RE = re.compile(r"```python", re.IGNORECASE)
-# Arithmetic / comparison / bracket operators. Deliberately excludes ',' '.' ':' (common in
-# prose) so the operator gate keys on expression structure, not punctuation.
+# Arithmetic / comparison / bracket operators. Deliberately excludes ',' '.' ':'
+# (common in prose) so the operator gate keys on expression structure, not
+# punctuation.
 _CODE_OPERATORS = frozenset("+-*/%()[]=<>")
 
 
@@ -375,10 +381,11 @@ def build_sim_user_message(
   )
 
 
-# Injected as the very first solver user turn wrapping the problem statement. ColBench's
-# problem_description already reads as a direct user request ("Create a python function ..."),
-# so -- matching sweet_rl HumanInteractionEnv.reset, which seeds the dialogue with the raw
-# problem_description as the first user turn -- we pass it through unwrapped.
+# Injected as the very first solver user turn wrapping the problem statement.
+# ColBench's problem_description already reads as a direct user request ("Create
+# a python function ..."), so -- matching sweet_rl HumanInteractionEnv.reset,
+# which seeds the dialogue with the raw problem_description as the first user
+# turn -- we pass it through unwrapped.
 def build_initial_user_message(problem_description: str) -> str:
   return str(problem_description)
 
@@ -475,7 +482,8 @@ On (2): you are an ordinary user, not a code reviewer. You do not check it line 
 
 Keep every reply very SHORT -- usually one or two sentences. Only use [TERMINATE] once both conditions above are met."""
 
-# The sentinel the user-simulator emits to end the conversation (bare string match).
+# The sentinel the user-simulator emits to end the conversation (bare string
+# match).
 TERMINATE_MARKER = "[TERMINATE]"
 
 
@@ -535,8 +543,8 @@ def sim_terminated(reply: str) -> bool:
 def contains_code(text: str) -> bool:
   """True iff ``text`` looks like it proposes a function (a ```python fence or a ``def`` sig).
 
-  Reuses the same signals as the leak detector's (A)/(B); here they mark the solver's OWN
-  proposed code (the grading target), not a sim leak.
+  Reuses the same signals as the leak detector's (A)/(B); here they mark the
+  solver's OWN proposed code (the grading target), not a sim leak.
   """
   clean = strip_think(text)
   return bool(_PY_FENCE_RE.search(clean) or _DEF_SIGNATURE_RE.search(clean))

@@ -17,14 +17,16 @@ import pytest
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-# Skip the entire module unless the verl agent-loop stack is importable (container only).
+# Skip the entire module unless the verl agent-loop stack is importable
+# (container only).
 pytest.importorskip("verl.experimental.agent_loop.agent_loop")
 
-from colbench.colbench_spec_agent import ColBenchSpecAgentLoop  # noqa: E402
-from colbench.env_spec import ColBenchSpecUserSimEnv  # noqa: E402
-from verl.workers.rollout.replica import TokenOutput  # noqa: E402
+from colbench.colbench_spec_agent import ColBenchSpecAgentLoop  # pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.env_spec import ColBenchSpecUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
+from verl.workers.rollout.replica import TokenOutput  # pylint: disable=g-import-not-at-top,wrong-import-position
 
-# Reuse the env-level fixtures' shape (kept local to avoid importing a test module).
+# Reuse the env-level fixtures' shape (kept local to avoid importing a test
+# module).
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 WRONG = "def f(x, y):\n    return x + y\n"  # ignores x<10 -> 0.5 pass-rate
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
@@ -115,32 +117,38 @@ def _make_loop(
   obj.train_turns = train_turns
   obj.max_code_proposals = max_code_proposals
   obj.sim_max_tries = sim_max_tries
-  # Reward-shaping / rollout-cleaning knobs run() reads (default off = baseline behavior).
+  # Reward-shaping / rollout-cleaning knobs run() reads (default off = baseline
+  # behavior).
   obj.length_penalty_coef = 0.0
   obj.length_soft_cap = 2048.0
   obj.terminate_on_allpass = terminate_on_allpass
   obj.binary_reward = binary_reward
-  # NB: run() reads every attribute set here -- this fake bypasses __init__, so a knob added to
-  # the loop and NOT mirrored here raises AttributeError mid-rollout.
+  # NB: run() reads every attribute set here -- this fake bypasses __init__, so
+  # a knob added to the loop and NOT mirrored here raises AttributeError
+  # mid-rollout.
   obj.grounded_sim = grounded_sim
 
-  # apply_chat_template is normally an AgentLoopBase method; override on the instance with a
-  # byte-encoding stub (only token COUNTS + mask placement matter to the loop under test).
+  # apply_chat_template is normally an AgentLoopBase method; override on the
+  # instance with a byte-encoding stub (only token COUNTS + mask placement
+  # matter to the loop under test).
   async def _fake_act(messages, remove_system_prompt=False):
     text = "".join(m.get("content", "") for m in messages)
     return tok.encode(text)
 
   obj.apply_chat_template = _fake_act
 
-  # Bind a spec env with the scripted sim backend (the loop builds its own env in run(), but we
-  # inject the sim backend via extra_info-independent monkeypatch on ColBenchSpecUserSimEnv is
-  # awkward; instead patch the default backend by pre-seeding env creation through kwargs). The
-  # loop reads extra_info.spec + ground_truth; we route the scripted backend via a subclass.
+  # Bind a spec env with the scripted sim backend (the loop builds its own env
+  # in run(), but we inject the sim backend via extra_info-independent
+  # monkeypatch on ColBenchSpecUserSimEnv is awkward; instead patch the default
+  # backend by pre-seeding env creation through kwargs). The loop reads
+  # extra_info.spec + ground_truth; we route the scripted backend via a
+  # subclass.
   obj._test_sim_backend = _scripted_backend(sim_replies)
   return obj
 
 
-def _run(obj, spec=SPEC):
+def _run(obj, spec=None):
+  spec = SPEC if spec is None else spec
   kwargs = {
       "raw_prompt": [
           {"role": "system", "content": "sys"},
@@ -170,7 +178,8 @@ def _run(obj, spec=SPEC):
 
 
 def test_correct_code_then_user_terminate():
-  # Solver asks, sim answers, solver shows GT, sim [TERMINATE] -> reward 1.0, terminated_by user.
+  # Solver asks, sim answers, solver shows GT, sim [TERMINATE] -> reward 1.0,
+  # terminated_by user.
   obj = _make_loop(
       solver_turns=["What's the cutoff?", _code_turn(GT)],
       sim_replies=["It's 10.", "Perfect, thanks! [TERMINATE]"],
@@ -181,7 +190,8 @@ def test_correct_code_then_user_terminate():
   assert out.reward_score == 1.0
   assert rei["showed_code"] == 1.0
   assert rei["code_proposals"] == 1.0
-  # Mask: solver turns are 1, the injected sim turn is 0, and at least one of each exists.
+  # Mask: solver turns are 1, the injected sim turn is 0, and at least one of
+  # each exists.
   assert any(m == 1 for m in out.response_mask)
   assert any(m == 0 for m in out.response_mask)
 
@@ -213,7 +223,8 @@ def test_user_terminate_without_code_is_no_code_zero():
 
 
 def test_sim_code_reject_exhaustion_aborts():
-  # Sim always writes code -> exhaustion -> terminated_by sim_code_reject; grade last shown code.
+  # Sim always writes code -> exhaustion -> terminated_by sim_code_reject; grade
+  # last shown code.
   obj = _make_loop(
       solver_turns=[_code_turn(GT), "anything"],
       sim_replies=["```python\ndef f(x, y): return x + y\n```"],
@@ -227,7 +238,8 @@ def test_sim_code_reject_exhaustion_aborts():
 
 
 def test_all_turns_mask_keeps_every_solver_turn():
-  # train_turns='all' (default) -> every solver span stays 1; only sim turns are 0.
+  # train_turns='all' (default) -> every solver span stays 1; only sim turns are
+  # 0.
   obj = _make_loop(
       solver_turns=["What's the cutoff?", _code_turn(GT)],
       sim_replies=["It's 10.", "Great, thanks! [TERMINATE]"],
@@ -242,8 +254,9 @@ def test_all_turns_mask_keeps_every_solver_turn():
 
 
 def test_upto_last_code_zeros_trailing_post_code_turn():
-  # Solver: clarify -> code(GT) -> trailing ramble; sim keeps it going, then [TERMINATE].
-  # 'upto_last_code' must KEEP the clarify + code turns (mask=1) and ZERO the trailing ramble.
+  # Solver: clarify -> code(GT) -> trailing ramble; sim keeps it going, then
+  # [TERMINATE]. 'upto_last_code' must KEEP the clarify + code turns (mask=1)
+  # and ZERO the trailing ramble.
   clarify, code, ramble = (
       "What's the cutoff?",
       _code_turn(GT),
@@ -259,15 +272,17 @@ def test_upto_last_code_zeros_trailing_post_code_turn():
       train_turns="upto_last_code",
   )
   out = _run(obj)
-  # Kept solver 1s == clarify + code bytes; the trailing ramble turn is fully zeroed.
+  # Kept solver 1s == clarify + code bytes; the trailing ramble turn is fully
+  # zeroed.
   assert out.response_mask.count(1) == len((clarify + code).encode("utf-8"))
-  # Sanity: the graded reward is unaffected by masking (GT was the last code shown).
+  # Sanity: the graded reward is unaffected by masking (GT was the last code
+  # shown).
   assert out.reward_score == 1.0
 
 
 def test_upto_last_code_no_code_keeps_all():
-  # Never shows code -> last_code_idx is None -> fall back to 'all' (keep the solver span),
-  # preserving the negative advantage on a no-code ramble.
+  # Never shows code -> last_code_idx is None -> fall back to 'all' (keep the
+  # solver span), preserving the negative advantage on a no-code ramble.
   obj = _make_loop(
       solver_turns=["Tell me more?"],
       sim_replies=["I think you've got it. [TERMINATE]"],
@@ -279,9 +294,10 @@ def test_upto_last_code_no_code_keeps_all():
 
 
 def test_terminate_on_allpass_breaks_before_sim():
-  # GT code on turn 0. With terminate_on_allpass, the loop grades mid-loop, sees all_pass, and
-  # ends BEFORE the sim can press on -> terminated_by oracle_solved, reward 1.0, and NO sim turn
-  # is ever injected (response_mask has no zeros). The scripted sim reply is never consumed.
+  # GT code on turn 0. With terminate_on_allpass, the loop grades mid-loop, sees
+  # all_pass, and ends BEFORE the sim can press on -> terminated_by
+  # oracle_solved, reward 1.0, and NO sim turn is ever injected (response_mask
+  # has no zeros). The scripted sim reply is never consumed.
   obj = _make_loop(
       solver_turns=[_code_turn(GT)],
       sim_replies=["Are you sure? that looks off. [TERMINATE]"],
@@ -298,8 +314,9 @@ def test_terminate_on_allpass_breaks_before_sim():
 
 
 def test_terminate_on_allpass_partial_does_not_break():
-  # WRONG (partial=0.5) code never all-passes, so terminate_on_allpass must NOT fire; the loop
-  # runs to the code cap and grades normally, REUSING the cached mid-loop grade (reward 0.5).
+  # WRONG (partial=0.5) code never all-passes, so terminate_on_allpass must NOT
+  # fire; the loop runs to the code cap and grades normally, REUSING the cached
+  # mid-loop grade (reward 0.5).
   obj = _make_loop(
       solver_turns=[_code_turn(WRONG), _code_turn(WRONG)],
       sim_replies=["Not quite, try again."],
@@ -356,9 +373,10 @@ def _capturing_backend(replies):
 
 
 def test_grounded_sim_flag_reaches_the_sim_prompt():
-  # The loop's grounded_sim knob must land on the env it builds, i.e. the sim's SYSTEM prompt
-  # carries the GT source + plot instead of the spec's requirements/persona. The solver's own
-  # messages are unaffected (asserted by the env-level leak test).
+  # The loop's grounded_sim knob must land on the env it builds, i.e. the sim's
+  # SYSTEM prompt carries the GT source + plot instead of the spec's
+  # requirements/persona. The solver's own messages are unaffected (asserted by
+  # the env-level leak test).
   backend, seen = _capturing_backend(
       ["It's 10.", "Perfect, thanks! [TERMINATE]"]
   )
@@ -391,8 +409,9 @@ def test_grounded_sim_off_by_default_uses_spec_prompt():
 
 
 def test_new_reward_extra_info_scalars_present():
-  # user_term_and_allpass / sim_reply_chars must be emitted on EVERY rollout: verl reads the
-  # reward_extra_info key set from the first sample, so a key missing on some path breaks logging.
+  # user_term_and_allpass / sim_reply_chars must be emitted on EVERY rollout:
+  # verl reads the reward_extra_info key set from the first sample, so a key
+  # missing on some path breaks logging.
   obj = _make_loop(
       solver_turns=["What's the cutoff?", _code_turn(GT)],
       sim_replies=["It's 10.", "Perfect, thanks! [TERMINATE]"],

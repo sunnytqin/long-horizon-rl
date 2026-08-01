@@ -109,7 +109,7 @@ class ChatEndpoint:
         try:
           completion = client.chat.completions.create(**params)
           return completion.choices[0].message.content or ""
-        except Exception as e:  # noqa: BLE001 - degrade to empty, never crash the batch
+        except Exception as e:  # pylint: disable=broad-exception-caught  # degrade to empty, never crash the batch
           logger.warning(
               "[selfplay] chat call to %s failed: %r", self.base_url, e
           )

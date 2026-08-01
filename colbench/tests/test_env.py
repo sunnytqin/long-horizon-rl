@@ -1,8 +1,8 @@
 """CPU tests for colbench.env.ColBenchUserSimEnv (mocked simulator; no GPU, no server).
 
-Covers answer extraction / termination, the leak invariant (GT source never enters the
-solver's message list across a full mocked-sim episode), grading, and the COLBENCH_DEBUG_SIM
-dump. Grading uses the in-process exec fallback.
+Covers answer extraction / termination, the leak invariant (GT source never
+enters the solver's message list across a full mocked-sim episode), grading, and
+the COLBENCH_DEBUG_SIM dump. Grading uses the in-process exec fallback.
 """
 
 import logging
@@ -13,9 +13,9 @@ import pytest
 os.environ["CODECONTEST_ALLOW_INPROCESS"] = "1"
 os.environ.pop("CODECONTEST_EXEC_URL", None)
 
-from colbench import env as env_mod  # noqa: E402
-from colbench import templates  # noqa: E402
-from colbench.env import ColBenchUserSimEnv  # noqa: E402
+from colbench import env as env_mod  # pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench import templates  # pylint: disable=g-import-not-at-top,wrong-import-position
+from colbench.env import ColBenchUserSimEnv  # pylint: disable=g-import-not-at-top,wrong-import-position
 
 GT = "def f(x, y):\n    if x >= 10:\n        return x + y\n    else:\n        return x - y\n"
 CALLS = ["f(1, 2)", "f(20, 5)", "f(15, 15)", "f(3, 4)"]
@@ -25,8 +25,8 @@ PROBLEM = "Write a function f(x, y) with some personalized behavior."
 def _sim_stub(reply="The threshold is 10 and below it we subtract."):
   """A sim backend that records the prompt it received and returns a fixed short reply.
 
-  Crucially the reply contains NO ground-truth source, so if the GT ever shows up in a
-  solver-visible message it must have leaked through some other path.
+  Crucially the reply contains NO ground-truth source, so if the GT ever shows
+  up in a solver-visible message it must have leaked through some other path.
   """
   captured = {}
 
@@ -75,7 +75,8 @@ def test_no_marker_midturn_keeps_going():
 
 def test_final_turn_code_like_fallback():
   e, _ = _env()
-  # No marker, but it's the last turn and the response is code-like -> accept as the answer.
+  # No marker, but it's the last turn and the response is code-like -> accept as
+  # the answer.
   has, ans = e.is_answer("def f(x, y):\n    return x + y", episode_done=True)
   assert has is True
   assert "def f" in ans
@@ -110,11 +111,13 @@ def test_user_turn_capped_and_gt_only_in_sim_prompt():
 
 def test_sim_char_limit_env_overrides_the_slice(monkeypatch):
   """SIM_CHAR_LIMIT=0 disables the post-hoc slice, aligning the GT arm's user-turn budget
-  with the SPEC arm's (which has no slice at all and is bounded only by SIM_MAX_TOKENS).
+  with the SPEC arm's (which has no slice at all and is bounded only by
+  SIM_MAX_TOKENS).
 
-  Without this the GT user delivers <=400 chars/turn while the spec user delivers ~700-1000,
-  so a GT-vs-spec result would confound environment quality with how much the user may say.
-  Default (unset) stays 400, so every run that does not opt in is byte-identical.
+  Without this the GT user delivers <=400 chars/turn while the spec user
+  delivers ~700-1000, so a GT-vs-spec result would confound environment quality
+  with how much the user may say. Default (unset) stays 400, so every run that
+  does not opt in is byte-identical.
   """
   long_reply = "x" * 999
   messages = [{"role": "user", "content": PROBLEM}]
@@ -140,11 +143,11 @@ def test_sim_char_limit_env_overrides_the_slice(monkeypatch):
 def test_marker_answer_is_graded_as_code_by_the_spec_extractor():
   """A GT-protocol turn must yield VALID code when the SPEC path grades it.
 
-  Arm (1)'s policy is RL'd to emit "I WANT TO ANSWER:" + code, but the golden spec eval has no
-  marker convention and grades templates.extract_last_code. If the marker survived into the
-  graded string the sandbox would see a SyntaxError and the checkpoint would score ~0 for a
-  protocol reason -- indistinguishable from a genuine capability result in the cross-arm
-  comparison.
+  Arm (1)'s policy is RL'd to emit "I WANT TO ANSWER:" + code, but the golden
+  spec eval has no marker convention and grades templates.extract_last_code. If
+  the marker survived into the graded string the sandbox would see a SyntaxError
+  and the checkpoint would score ~0 for a protocol reason -- indistinguishable
+  from a genuine capability result in the cross-arm comparison.
   """
   code = "def f(x):\n    return x + 1"
   for turn in (
@@ -178,9 +181,10 @@ def test_marker_answer_is_graded_as_code_by_the_spec_extractor():
 def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
   """Only bullet 3 + the trailing paragraph may diverge from the sweet_rl original.
 
-  COLBENCH_AGENT_SYSTEM_PROMPT is no longer derived from _AGENT_PROMPT_RAW by string surgery, so
-  nothing else stops the two drifting apart. The unchanged bullets are what make arm (1) still
-  recognisably ColBench rather than a prompt we invented.
+  COLBENCH_AGENT_SYSTEM_PROMPT is no longer derived from _AGENT_PROMPT_RAW by
+  string surgery, so nothing else stops the two drifting apart. The unchanged
+  bullets are what make arm (1) still recognisably ColBench rather than a prompt
+  we invented.
   """
   raw, live = (
       templates._AGENT_PROMPT_RAW,
@@ -212,7 +216,8 @@ def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
         ),
         # Unterminated fence: the 1024-token per-turn cap cut the closing ``` off.
         ("```python\ndef f(x):\n    return x + 1", True),
-        # Legacy marker protocol must still submit (old parquets / old checkpoints).
+        # Legacy marker protocol must still submit (old parquets / old
+        # checkpoints).
         ("I WANT TO ANSWER:\ndef f(x):\n    return x + 1", True),
     ],
 )
@@ -258,7 +263,8 @@ def test_fence_wins_over_a_trailing_marker():
       )
       == code
   )
-  # Marker BEFORE a fence still works (the fence is what gets extracted either way).
+  # Marker BEFORE a fence still works (the fence is what gets extracted either
+  # way).
   assert (
       templates.extract_code_answer(
           f"I WANT TO ANSWER:\n```python\n{code}\n```"
@@ -273,11 +279,11 @@ def test_fence_wins_over_a_trailing_marker():
 def test_leak_invariant_full_episode():
   """Drive a full mocked episode and assert the GT never enters solver-visible messages.
 
-  Mirrors colbench_agent's message handling: the solver sees [system, problem, then
-  alternating assistant/user-reply]; the sim's dialogue view is separate. The GT is only
-  ever handed to the sim backend inside generate_user_turn.
+  Mirrors colbench_agent's message handling: the solver sees [system, problem,
+  then alternating assistant/user-reply]; the sim's dialogue view is separate.
+  The GT is only ever handed to the sim backend inside generate_user_turn.
   """
-  e, captured = _env()
+  e, _ = _env()
   solver_messages = [
       {"role": "system", "content": templates.COLBENCH_AGENT_SYSTEM_PROMPT},
       {"role": "user", "content": PROBLEM},
@@ -303,9 +309,10 @@ def test_leak_invariant_full_episode():
     solver_messages.append({"role": "assistant", "content": assistant_text})
     solver_messages.append({"role": "user", "content": reply})
 
-  # The final answer WAS the GT itself (submitted by the solver) -> full score. That is the
-  # solver's OWN output, not a leak; the invariant is about the HIDDEN GT reaching the solver
-  # via the environment/user turns, so we check only the injected user (sim) replies.
+  # The final answer WAS the GT itself (submitted by the solver) -> full score.
+  # That is the solver's OWN output, not a leak; the invariant is about the
+  # HIDDEN GT reaching the solver via the environment/user turns, so we check
+  # only the injected user (sim) replies.
   for m in solver_messages:
     if m["role"] == "user" and m["content"] != PROBLEM:
       assert GT not in m["content"], "GT leaked into an injected user turn"
@@ -358,8 +365,9 @@ def test_detect_ngram_expression_leak():
 
 
 def test_detect_prose_spec_not_flagged():
-  # A legitimate natural-language behavior description: shares identifiers with the GT but
-  # NOT a run of operators -> must NOT be flagged (the Ex4-style false positive we avoid).
+  # A legitimate natural-language behavior description: shares identifiers with
+  # the GT but NOT a run of operators -> must NOT be flagged (the Ex4-style
+  # false positive we avoid).
   gt = (
       "def check(platform, version):\n"
       "    if platform == 'Linux' and version in ['10.0', '10.1']:\n"
@@ -475,8 +483,6 @@ def test_sim_sampling_env_override(monkeypatch):
 
 
 if __name__ == "__main__":
-  import pytest  # noqa: F401
-
   for name, fn in sorted(globals().items()):
     if (
         name.startswith("test_")

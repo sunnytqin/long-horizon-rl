@@ -47,7 +47,8 @@ def _extract_test_cases(extra_info: dict) -> list:
   ) or {}
   task = create_kwargs.get("task", {}) or {}
   test_cases = task.get("test_cases", {}) or {}
-  # Keep only non-None values (parquet pads the dict with None keys for schema consistency).
+  # Keep only non-None values (parquet pads the dict with None keys for schema
+  # consistency).
   return [str(v) for v in test_cases.values() if v is not None]
 
 
@@ -131,8 +132,9 @@ def main(argv):
   print(f"Wrote {len(train)} train rows -> {train_path}")
   print(f"Wrote {len(val)} val rows   -> {val_path}")
 
-  # Light in-training validation set: a deterministic first-N slice of the full val set.
-  # The full test.parquet is reserved for the offline eval loop (colbench/validate_colbench.py).
+  # Light in-training validation set: a deterministic first-N slice of the full
+  # val set. The full test.parquet is reserved for the offline eval loop
+  # (colbench/validate_colbench.py).
   if 0 < FLAGS.val_small < len(val):
     val_small = val.select(range(FLAGS.val_small))
     val_small_path = os.path.join(local_dir, "test_small.parquet")
