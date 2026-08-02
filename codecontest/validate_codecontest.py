@@ -88,19 +88,18 @@ runs/eval_step120_turns4_n1_t0.json and runs/eval_step120_turns4_n8_t0.8.json
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
+from math import comb
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
-from math import comb
-
-import pandas as pd
-import sglang as sgl
-from transformers import AutoTokenizer
 
 from codecontest import templates
 from codecontest.env import GTOracleEnv
 from codecontest.local_exec import extract_code
+import pandas as pd
+import sglang as sgl
+from transformers import AutoTokenizer
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 

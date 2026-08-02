@@ -32,9 +32,9 @@ codecontest/preprocess_codecontests.py --local_dir /tmp/cc --max_train 20
 import argparse
 import os
 
+from codecontest.templates import CODE_PROMPT_TEMPLATE
+from codecontest.templates import SOLVER_SYSTEM_PROMPT
 import datasets
-
-from codecontest.templates import CODE_PROMPT_TEMPLATE, SOLVER_SYSTEM_PROMPT
 
 TRAIN_REPO = "Gen-Verse/CodeContests_train"
 VAL_REPO = "Gen-Verse/CodeContests"

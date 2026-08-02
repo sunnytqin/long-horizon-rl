@@ -1,24 +1,26 @@
-import os
-import re
-import io
-import sys
-import ast
-import json
-import time
-import random
-import typing
 import argparse
-import requests
-import numpy as np
-from openai import OpenAI
-from jinja2 import Template
-from termcolor import cprint
+import ast
+from concurrent.futures import as_completed
+from concurrent.futures import ThreadPoolExecutor
+import io
+import json
 import multiprocessing as mp
-from vllm import LLM, SamplingParams
-from transformers import AutoTokenizer
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import random
+import re
+import sys
+import time
+import typing
 
 import evaluation_config
+from jinja2 import Template
+import numpy as np
+from openai import OpenAI
+import requests
+from termcolor import cprint
+from transformers import AutoTokenizer
+from vllm import LLM
+from vllm import SamplingParams
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"

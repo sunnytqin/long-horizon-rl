@@ -46,8 +46,11 @@ from uuid import uuid4
 
 from codecontest import templates
 from codecontest.env import GTOracleEnv
-from codecontest.masking import TRAIN_TURNS_MODES, apply_train_turns_mask
-from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
+from codecontest.masking import apply_train_turns_mask
+from codecontest.masking import TRAIN_TURNS_MODES
+from verl.experimental.agent_loop.agent_loop import AgentLoopBase
+from verl.experimental.agent_loop.agent_loop import AgentLoopOutput
+from verl.experimental.agent_loop.agent_loop import register
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
 from verl.workers.rollout.replica import TokenOutput

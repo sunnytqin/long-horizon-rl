@@ -40,9 +40,10 @@ Endpoints:
                           failures: [[inp,act,exp]]}
 """
 
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 import json
 import os
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from codecontest import local_exec
 

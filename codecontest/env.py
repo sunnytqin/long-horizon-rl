@@ -31,13 +31,16 @@ tests). The agent loop turns the final ``solved`` into the binary 0/1 trajectory
 reward.
 """
 
+from dataclasses import dataclass
+from dataclasses import field
 import logging
 import os
 import random
-from dataclasses import dataclass, field
 from typing import Optional
 
-from codecontest import exec_client, local_exec, templates
+from codecontest import exec_client
+from codecontest import local_exec
+from codecontest import templates
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
