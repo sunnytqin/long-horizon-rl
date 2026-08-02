@@ -54,235 +54,277 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 @register("code_refine_agent")
 class CodeRefineAgentLoop(AgentLoopBase):
-    """Oracle multi-turn code-refinement loop (GT-test feedback, binary outcome reward)."""
+  """Oracle multi-turn code-refinement loop (GT-test feedback, binary outcome reward)."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.prompt_length = self.rollout_config.prompt_length
-        self.response_length = self.rollout_config.response_length
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.prompt_length = self.rollout_config.prompt_length
+    self.response_length = self.rollout_config.response_length
 
-        # Number of assistant (solver) turns: turn 0 + refinements. Default 3.
-        self.max_assistant_turns = self.rollout_config.multi_turn.max_assistant_turns or 3
+    # Number of assistant (solver) turns: turn 0 + refinements. Default 3.
+    self.max_assistant_turns = (
+        self.rollout_config.multi_turn.max_assistant_turns or 3
+    )
 
-        # CodeContests-specific knobs. Read from an optional `codecontest` config
-        # block (add via `+codecontest.key=value` on the CLI); fall back to defaults.
-        cc = {}
-        try:
-            cc = self.config.get("codecontest", {}) or {}
-        except Exception:  # noqa: BLE001 - config may not define the block
-            cc = {}
-        # Per-turn generation cap (tokens). None -> use remaining response budget.
-        self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
-        # Overflow handling: "end_zero_reward" (default) or "discard_sample".
-        self.on_overflow = cc.get("on_overflow", "end_zero_reward")
-        # Env defaults (per-sample values in extra_info take precedence).
-        self.default_exec_timeout = float(cc.get("exec_timeout", 6.0))
-        self.default_max_failures_shown = int(cc.get("max_failures_shown", 3))
-        self.default_max_gt_test = int(cc.get("max_gt_test", 20))
-        # Combined char budget for the injected feedback's failing-case fields. The
-        # feedback turn is checked against rollout.prompt_length (== data.max_prompt_length)
-        # and blindly tail-truncated above it (dropping the user-turn role framing), so we
-        # DERIVE the budget from that token cap instead of hardcoding. The cap is in tokens;
-        # convert with a conservative chars/token ratio for the digit/whitespace-heavy
-        # CodeContests I/O, times a fraction that leaves headroom for the chat-template
-        # wrapper + "Test i:"/"Input:" labels + indentation. Override (or pin an absolute
-        # value) with +codecontest.max_feedback_chars=<n>; <=0 falls back to the derived value.
-        _CHARS_PER_TOKEN = 3.0  # conservative for numeric/whitespace-heavy stdin/stdout
-        _FEEDBACK_BUDGET_FRACTION = 0.5  # share of prompt_length reserved for feedback content
-        _derived_max_feedback_chars = int(self.prompt_length * _CHARS_PER_TOKEN * _FEEDBACK_BUDGET_FRACTION)
-        _cfg_max_feedback_chars = int(cc.get("max_feedback_chars", 0) or 0)
-        self.default_max_feedback_chars = (
-            _cfg_max_feedback_chars if _cfg_max_feedback_chars > 0 else _derived_max_feedback_chars
-        )
-        # Hard wall on a single env.step (code grading). Backstop against a wedged
-        # sandbox: on timeout we end the trajectory unsolved rather than hang the
-        # whole rollout. Generous by default since grading can queue behind the
-        # global exec-concurrency cap under heavy fan-out.
-        self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
-        # SET 2 gradient-masking study: which solver turns get trained. "all" (default)
-        # reproduces prior behavior; "final_only" trains only the last solver turn (clean
-        # credit -- see codecontest/masking.py for why "refinement_only" was dropped).
-        self.train_turns = cc.get("train_turns", "all")
-        if self.train_turns not in TRAIN_TURNS_MODES:
-            raise ValueError(f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}")
+    # CodeContests-specific knobs. Read from an optional `codecontest` config
+    # block (add via `+codecontest.key=value` on the CLI); fall back to defaults.
+    cc = {}
+    try:
+      cc = self.config.get("codecontest", {}) or {}
+    except Exception:  # noqa: BLE001 - config may not define the block
+      cc = {}
+    # Per-turn generation cap (tokens). None -> use remaining response budget.
+    self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
+    # Overflow handling: "end_zero_reward" (default) or "discard_sample".
+    self.on_overflow = cc.get("on_overflow", "end_zero_reward")
+    # Env defaults (per-sample values in extra_info take precedence).
+    self.default_exec_timeout = float(cc.get("exec_timeout", 6.0))
+    self.default_max_failures_shown = int(cc.get("max_failures_shown", 3))
+    self.default_max_gt_test = int(cc.get("max_gt_test", 20))
+    # Combined char budget for the injected feedback's failing-case fields. The
+    # feedback turn is checked against rollout.prompt_length (== data.max_prompt_length)
+    # and blindly tail-truncated above it (dropping the user-turn role framing), so we
+    # DERIVE the budget from that token cap instead of hardcoding. The cap is in tokens;
+    # convert with a conservative chars/token ratio for the digit/whitespace-heavy
+    # CodeContests I/O, times a fraction that leaves headroom for the chat-template
+    # wrapper + "Test i:"/"Input:" labels + indentation. Override (or pin an absolute
+    # value) with +codecontest.max_feedback_chars=<n>; <=0 falls back to the derived value.
+    _CHARS_PER_TOKEN = (
+        3.0  # conservative for numeric/whitespace-heavy stdin/stdout
+    )
+    _FEEDBACK_BUDGET_FRACTION = (
+        0.5  # share of prompt_length reserved for feedback content
+    )
+    _derived_max_feedback_chars = int(
+        self.prompt_length * _CHARS_PER_TOKEN * _FEEDBACK_BUDGET_FRACTION
+    )
+    _cfg_max_feedback_chars = int(cc.get("max_feedback_chars", 0) or 0)
+    self.default_max_feedback_chars = (
+        _cfg_max_feedback_chars
+        if _cfg_max_feedback_chars > 0
+        else _derived_max_feedback_chars
+    )
+    # Hard wall on a single env.step (code grading). Backstop against a wedged
+    # sandbox: on timeout we end the trajectory unsolved rather than hang the
+    # whole rollout. Generous by default since grading can queue behind the
+    # global exec-concurrency cap under heavy fan-out.
+    self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
+    # SET 2 gradient-masking study: which solver turns get trained. "all" (default)
+    # reproduces prior behavior; "final_only" trains only the last solver turn (clean
+    # credit -- see codecontest/masking.py for why "refinement_only" was dropped).
+    self.train_turns = cc.get("train_turns", "all")
+    if self.train_turns not in TRAIN_TURNS_MODES:
+      raise ValueError(
+          f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}"
+      )
 
-    @rollout_trace_op
-    async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
-        messages = list(kwargs["raw_prompt"])
-        extra_info = kwargs.get("extra_info", {}) or {}
+  @rollout_trace_op
+  async def run(
+      self, sampling_params: dict[str, Any], **kwargs
+  ) -> AgentLoopOutput:
+    messages = list(kwargs["raw_prompt"])
+    extra_info = kwargs.get("extra_info", {}) or {}
 
-        # Ground-truth tests: prefer extra_info, fall back to reward_model.ground_truth.
-        gt = extra_info.get("ground_truth")
-        if gt is None:
-            gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
-        env = GTOracleEnv(
-            test_input=list(gt["test_input"]),
-            test_output=list(gt["test_output"]),
-            test_time_limit=float(gt.get("test_time_limit", self.default_exec_timeout)),
-            max_failures_shown=int(extra_info.get("max_failures_shown", self.default_max_failures_shown)),
-            max_gt_test=int(extra_info.get("max_gt_test", self.default_max_gt_test)),
-            max_feedback_chars=int(extra_info.get("max_feedback_chars", self.default_max_feedback_chars)),
-            seed=int(kwargs.get("index", 0)),
-        )
-
-        request_id = uuid4().hex
-        metrics: dict[str, Any] = {}
-
-        prompt_ids = await self.apply_chat_template(messages)
-        response_mask: list[int] = []
-        response_logprobs: list[float] = []
-        track_logprobs = True
-
-        assistant_turns = 0
-        user_turns = 0
-        solved = False
-        overflow = False
-        solved_at_turn = -1
-        # True solver-generated length per assistant turn, captured at generation time.
-        # Deliberately NOT derived from response_mask: the gradient-masking study mutates
-        # that mask, so it no longer reflects what the solver actually wrote.
-        solver_turn_lengths: list[int] = []
-        # (start, end) span of each solver turn within response_mask, for the SET 2
-        # gradient-masking policy applied after the loop (see codecontest/masking.py).
-        solver_turn_spans: list[tuple[int, int]] = []
-
-        # Off-policy staleness bookkeeping the trainer requires (see
-        # trainer_base._compute_metrics). Each server.generate() tags the output with the
-        # weights version it was produced on; we keep the oldest (min) and freshest (max)
-        # across turns. Must be plain ints, not None, or np.array(dtype=int) blows up.
-        min_global_steps = None
-        max_global_steps = None
-
-        for turn in range(self.max_assistant_turns):
-            remaining = self.response_length - len(response_mask)
-            if remaining <= 0:
-                overflow = True
-                break
-
-            # Bound this turn's generation so one turn can't consume the whole budget.
-            cap = remaining if self.max_new_tokens_per_turn is None else min(self.max_new_tokens_per_turn, remaining)
-            turn_sampling_params = {**sampling_params, "max_new_tokens": cap}
-
-            with simple_timer("generate_sequences", metrics):
-                output: TokenOutput = await self.server_manager.generate(
-                    request_id=request_id,
-                    prompt_ids=prompt_ids,
-                    sampling_params=turn_sampling_params,
-                    image_data=None,
-                    video_data=None,
-                    audio_data=None,
-                )
-            if metrics.get("num_preempted") is None:
-                metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
-
-            # Track weights-version span across turns (oldest stays, freshest advances).
-            turn_min = output.extra_fields.get("min_global_steps")
-            turn_max = output.extra_fields.get("max_global_steps")
-            if turn_min is not None and min_global_steps is None:
-                min_global_steps = turn_min
-            if turn_max is not None:
-                max_global_steps = turn_max
-
-            resp_ids = output.token_ids
-            prompt_ids += resp_ids
-            seg_start = len(response_mask)
-            response_mask += [1] * len(resp_ids)
-            solver_turn_spans.append((seg_start, len(response_mask)))
-            solver_turn_lengths.append(len(resp_ids))
-            if track_logprobs and output.log_probs:
-                response_logprobs += output.log_probs
-            else:
-                track_logprobs = False
-
-            assistant_turns += 1
-
-            # Grade only the latest submission (env extracts the last ```python block).
-            assistant_text = self.tokenizer.decode(resp_ids, skip_special_tokens=True)
-            with simple_timer("env_step", metrics):
-                try:
-                    step = await asyncio.wait_for(
-                        self.loop.run_in_executor(None, env.step, assistant_text),
-                        timeout=self.env_step_timeout,
-                    )
-                except asyncio.TimeoutError:
-                    # Sandbox wedged: end this trajectory unsolved (reward 0) instead of
-                    # silently stalling the rollout. The orphaned executor thread will
-                    # unwind on its own via the sandbox's per-case timeouts.
-                    logger.warning("env.step exceeded %.0fs; ending trajectory unsolved", self.env_step_timeout)
-                    metrics["env_step_timeout"] = 1
-                    break
-
-            if step.solved:
-                solved = True
-                solved_at_turn = turn
-                break
-
-            # Last allowed turn: stop without injecting feedback we cannot act on.
-            if turn == self.max_assistant_turns - 1:
-                break
-
-            # Inject the oracle feedback as a user turn (mask=0, not trained).
-            feedback_ids = await self.apply_chat_template(
-                [{"role": "user", "content": step.feedback}],
-                remove_system_prompt=True,
+    # Ground-truth tests: prefer extra_info, fall back to reward_model.ground_truth.
+    gt = extra_info.get("ground_truth")
+    if gt is None:
+      gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
+    env = GTOracleEnv(
+        test_input=list(gt["test_input"]),
+        test_output=list(gt["test_output"]),
+        test_time_limit=float(
+            gt.get("test_time_limit", self.default_exec_timeout)
+        ),
+        max_failures_shown=int(
+            extra_info.get(
+                "max_failures_shown", self.default_max_failures_shown
             )
-            if (
-                os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") not in ("0", "")
-                and len(feedback_ids) >= self.prompt_length
-            ):
-                # Only fires when the feedback turn actually hit the cap, i.e. it was
-                # left-truncated and the user turn is now corrupted -- see env.py dump
-                # for which raw field (usually `actual`, the model's stdout) caused it.
-                # logger is WARN by default so this surfaces; print() gets swallowed.
-                logger.warning(
-                    "[FEEDBACK_DBG] turn=%d TRUNCATED feedback_chars=%d feedback_tokens=%d prompt_length_cap=%d",
-                    turn, len(step.feedback), len(feedback_ids), self.prompt_length,
-                )
-            # Need room for the feedback AND at least one response token next turn.
-            if len(response_mask) + len(feedback_ids) >= self.response_length:
-                overflow = True
-                break
-            prompt_ids += feedback_ids
-            response_mask += [0] * len(feedback_ids)
-            if track_logprobs:
-                response_logprobs += [0.0] * len(feedback_ids)
-            user_turns += 1
+        ),
+        max_gt_test=int(
+            extra_info.get("max_gt_test", self.default_max_gt_test)
+        ),
+        max_feedback_chars=int(
+            extra_info.get(
+                "max_feedback_chars", self.default_max_feedback_chars
+            )
+        ),
+        seed=int(kwargs.get("index", 0)),
+    )
 
-        # Binary outcome reward. Overflow while unsolved -> 0 (never reward a run that
-        # did not cleanly solve within budget). "discard_sample" is treated as 0 here
-        # because the agent loop cannot drop a sample without breaking GRPO grouping;
-        # true discarding, if ever needed, must happen upstream in the trainer.
-        reward = 1.0 if solved else 0.0
+    request_id = uuid4().hex
+    metrics: dict[str, Any] = {}
 
-        # SET 2: restrict the training loss to the selected solver turns (no-op for
-        # the "all" default). Applied before truncation so the spans stay valid.
-        apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
+    prompt_ids = await self.apply_chat_template(messages)
+    response_mask: list[int] = []
+    response_logprobs: list[float] = []
+    track_logprobs = True
 
-        response_ids = prompt_ids[-len(response_mask):]
-        prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]
+    assistant_turns = 0
+    user_turns = 0
+    solved = False
+    overflow = False
+    solved_at_turn = -1
+    # True solver-generated length per assistant turn, captured at generation time.
+    # Deliberately NOT derived from response_mask: the gradient-masking study mutates
+    # that mask, so it no longer reflects what the solver actually wrote.
+    solver_turn_lengths: list[int] = []
+    # (start, end) span of each solver turn within response_mask, for the SET 2
+    # gradient-masking policy applied after the loop (see codecontest/masking.py).
+    solver_turn_spans: list[tuple[int, int]] = []
 
-        output = AgentLoopOutput(
-            prompt_ids=prompt_ids_out,
-            response_ids=response_ids[: self.response_length],
-            response_mask=response_mask[: self.response_length],
-            response_logprobs=response_logprobs[: self.response_length] if track_logprobs and response_logprobs else None,
-            reward_score=reward,
-            num_turns=assistant_turns + user_turns + 1,
-            metrics=metrics,
-            extra_fields={
-                "turn_scores": [],
-                "tool_rewards": [],
-                "min_global_steps": min_global_steps,
-                "max_global_steps": max_global_steps,
-                "solved": solved,
-                "solved_at_turn": solved_at_turn,
-                "num_assistant_turns": assistant_turns,
-                "overflow": overflow,
-                # Per-conversation mean assistant-turn length (tokens). Trainer averages this
-                # across conversations -> per-turn, across-turns-then-across-convos mega-avg.
-                "solver_resp_len_mean": (
-                    sum(solver_turn_lengths) / len(solver_turn_lengths) if solver_turn_lengths else 0.0
-                ),
-            },
+    # Off-policy staleness bookkeeping the trainer requires (see
+    # trainer_base._compute_metrics). Each server.generate() tags the output with the
+    # weights version it was produced on; we keep the oldest (min) and freshest (max)
+    # across turns. Must be plain ints, not None, or np.array(dtype=int) blows up.
+    min_global_steps = None
+    max_global_steps = None
+
+    for turn in range(self.max_assistant_turns):
+      remaining = self.response_length - len(response_mask)
+      if remaining <= 0:
+        overflow = True
+        break
+
+      # Bound this turn's generation so one turn can't consume the whole budget.
+      cap = (
+          remaining
+          if self.max_new_tokens_per_turn is None
+          else min(self.max_new_tokens_per_turn, remaining)
+      )
+      turn_sampling_params = {**sampling_params, "max_new_tokens": cap}
+
+      with simple_timer("generate_sequences", metrics):
+        output: TokenOutput = await self.server_manager.generate(
+            request_id=request_id,
+            prompt_ids=prompt_ids,
+            sampling_params=turn_sampling_params,
+            image_data=None,
+            video_data=None,
+            audio_data=None,
         )
-        return output
+      if metrics.get("num_preempted") is None:
+        metrics["num_preempted"] = (
+            output.num_preempted if output.num_preempted is not None else -1
+        )
+
+      # Track weights-version span across turns (oldest stays, freshest advances).
+      turn_min = output.extra_fields.get("min_global_steps")
+      turn_max = output.extra_fields.get("max_global_steps")
+      if turn_min is not None and min_global_steps is None:
+        min_global_steps = turn_min
+      if turn_max is not None:
+        max_global_steps = turn_max
+
+      resp_ids = output.token_ids
+      prompt_ids += resp_ids
+      seg_start = len(response_mask)
+      response_mask += [1] * len(resp_ids)
+      solver_turn_spans.append((seg_start, len(response_mask)))
+      solver_turn_lengths.append(len(resp_ids))
+      if track_logprobs and output.log_probs:
+        response_logprobs += output.log_probs
+      else:
+        track_logprobs = False
+
+      assistant_turns += 1
+
+      # Grade only the latest submission (env extracts the last ```python block).
+      assistant_text = self.tokenizer.decode(resp_ids, skip_special_tokens=True)
+      with simple_timer("env_step", metrics):
+        try:
+          step = await asyncio.wait_for(
+              self.loop.run_in_executor(None, env.step, assistant_text),
+              timeout=self.env_step_timeout,
+          )
+        except asyncio.TimeoutError:
+          # Sandbox wedged: end this trajectory unsolved (reward 0) instead of
+          # silently stalling the rollout. The orphaned executor thread will
+          # unwind on its own via the sandbox's per-case timeouts.
+          logger.warning(
+              "env.step exceeded %.0fs; ending trajectory unsolved",
+              self.env_step_timeout,
+          )
+          metrics["env_step_timeout"] = 1
+          break
+
+      if step.solved:
+        solved = True
+        solved_at_turn = turn
+        break
+
+      # Last allowed turn: stop without injecting feedback we cannot act on.
+      if turn == self.max_assistant_turns - 1:
+        break
+
+      # Inject the oracle feedback as a user turn (mask=0, not trained).
+      feedback_ids = await self.apply_chat_template(
+          [{"role": "user", "content": step.feedback}],
+          remove_system_prompt=True,
+      )
+      if (
+          os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") not in ("0", "")
+          and len(feedback_ids) >= self.prompt_length
+      ):
+        # Only fires when the feedback turn actually hit the cap, i.e. it was
+        # left-truncated and the user turn is now corrupted -- see env.py dump
+        # for which raw field (usually `actual`, the model's stdout) caused it.
+        # logger is WARN by default so this surfaces; print() gets swallowed.
+        logger.warning(
+            "[FEEDBACK_DBG] turn=%d TRUNCATED feedback_chars=%d feedback_tokens=%d prompt_length_cap=%d",
+            turn,
+            len(step.feedback),
+            len(feedback_ids),
+            self.prompt_length,
+        )
+      # Need room for the feedback AND at least one response token next turn.
+      if len(response_mask) + len(feedback_ids) >= self.response_length:
+        overflow = True
+        break
+      prompt_ids += feedback_ids
+      response_mask += [0] * len(feedback_ids)
+      if track_logprobs:
+        response_logprobs += [0.0] * len(feedback_ids)
+      user_turns += 1
+
+    # Binary outcome reward. Overflow while unsolved -> 0 (never reward a run that
+    # did not cleanly solve within budget). "discard_sample" is treated as 0 here
+    # because the agent loop cannot drop a sample without breaking GRPO grouping;
+    # true discarding, if ever needed, must happen upstream in the trainer.
+    reward = 1.0 if solved else 0.0
+
+    # SET 2: restrict the training loss to the selected solver turns (no-op for
+    # the "all" default). Applied before truncation so the spans stay valid.
+    apply_train_turns_mask(response_mask, solver_turn_spans, self.train_turns)
+
+    response_ids = prompt_ids[-len(response_mask) :]
+    prompt_ids_out = prompt_ids[: len(prompt_ids) - len(response_mask)]
+
+    output = AgentLoopOutput(
+        prompt_ids=prompt_ids_out,
+        response_ids=response_ids[: self.response_length],
+        response_mask=response_mask[: self.response_length],
+        response_logprobs=response_logprobs[: self.response_length]
+        if track_logprobs and response_logprobs
+        else None,
+        reward_score=reward,
+        num_turns=assistant_turns + user_turns + 1,
+        metrics=metrics,
+        extra_fields={
+            "turn_scores": [],
+            "tool_rewards": [],
+            "min_global_steps": min_global_steps,
+            "max_global_steps": max_global_steps,
+            "solved": solved,
+            "solved_at_turn": solved_at_turn,
+            "num_assistant_turns": assistant_turns,
+            "overflow": overflow,
+            # Per-conversation mean assistant-turn length (tokens). Trainer averages this
+            # across conversations -> per-turn, across-turns-then-across-convos mega-avg.
+            "solver_resp_len_mean": (
+                sum(solver_turn_lengths) / len(solver_turn_lengths)
+                if solver_turn_lengths
+                else 0.0
+            ),
+        },
+    )
+    return output

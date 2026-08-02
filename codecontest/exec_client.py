@@ -56,60 +56,70 @@ _warned_no_url = [False]
 
 
 def _server_url():
-    url = os.environ.get("CODECONTEST_EXEC_URL")
-    return url.rstrip("/") if url else None
+  url = os.environ.get("CODECONTEST_EXEC_URL")
+  return url.rstrip("/") if url else None
 
 
-def eval_code_on_tests(code, test_input, test_output, time_limit=6.0, max_gt_test=20):
-    """Drop-in remote replacement for ``local_exec.eval_code_on_tests``.
+def eval_code_on_tests(
+    code, test_input, test_output, time_limit=6.0, max_gt_test=20
+):
+  """Drop-in remote replacement for ``local_exec.eval_code_on_tests``.
 
-    Returns ``(all_pass, per_case, failures)`` where ``failures`` is a list of
-    ``(inp, actual, expected)`` tuples -- identical shape to the local path.
-    """
-    url = _server_url()
-    if not url:
-        # No sidecar configured. In-process exec (Phase 0) is strictly worse -- it's the
-        # mode where bad code can kill a rollout worker -- so we never use it silently.
-        # Allowed only as an explicit opt-in for the no-sidecar smoke/dev run.
-        if os.environ.get("CODECONTEST_ALLOW_INPROCESS") == "1":
-            return local_exec.eval_code_on_tests(code, test_input, test_output, time_limit, max_gt_test)
-        if not _warned_no_url[0]:
-            logger.error(
-                "CODECONTEST_EXEC_URL is unset and CODECONTEST_ALLOW_INPROCESS != 1: refusing "
-                "the strictly-worse in-process exec and grading every turn as UNSOLVED. Start "
-                "the sidecar (entrypoint.sh) or set CODECONTEST_ALLOW_INPROCESS=1 for dev/smoke."
-            )
-            _warned_no_url[0] = True
-        return False, [], []
-
-    payload = json.dumps(
-        {
-            "code": code,
-            "test_input": list(test_input),
-            "test_output": list(test_output),
-            "time_limit": time_limit,
-            "max_gt_test": max_gt_test,
-        }
-    ).encode("utf-8")
-
-    last_err = None
-    for attempt in range(_RETRIES):
-        try:
-            req = urllib.request.Request(
-                url + _GRADE_PATH,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
-                obj = json.loads(resp.read().decode("utf-8"))
-            # Rebuild tuples so callers (templates.format_oracle_feedback) see the
-            # exact same shape the local path returns.
-            return obj["all_pass"], obj["per_case"], [tuple(f) for f in obj["failures"]]
-        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:  # noqa: PERF203
-            last_err = e
-            if attempt + 1 < _RETRIES:
-                time.sleep(0.5 * (attempt + 1))
-
-    logger.warning("exec server %s unreachable (%r); grading turn as unsolved", url, last_err)
+  Returns ``(all_pass, per_case, failures)`` where ``failures`` is a list of
+  ``(inp, actual, expected)`` tuples -- identical shape to the local path.
+  """
+  url = _server_url()
+  if not url:
+    # No sidecar configured. In-process exec (Phase 0) is strictly worse -- it's the
+    # mode where bad code can kill a rollout worker -- so we never use it silently.
+    # Allowed only as an explicit opt-in for the no-sidecar smoke/dev run.
+    if os.environ.get("CODECONTEST_ALLOW_INPROCESS") == "1":
+      return local_exec.eval_code_on_tests(
+          code, test_input, test_output, time_limit, max_gt_test
+      )
+    if not _warned_no_url[0]:
+      logger.error(
+          "CODECONTEST_EXEC_URL is unset and CODECONTEST_ALLOW_INPROCESS != 1: refusing "
+          "the strictly-worse in-process exec and grading every turn as UNSOLVED. Start "
+          "the sidecar (entrypoint.sh) or set CODECONTEST_ALLOW_INPROCESS=1 for dev/smoke."
+      )
+      _warned_no_url[0] = True
     return False, [], []
+
+  payload = json.dumps(
+      {
+          "code": code,
+          "test_input": list(test_input),
+          "test_output": list(test_output),
+          "time_limit": time_limit,
+          "max_gt_test": max_gt_test,
+      }
+  ).encode("utf-8")
+
+  last_err = None
+  for attempt in range(_RETRIES):
+    try:
+      req = urllib.request.Request(
+          url + _GRADE_PATH,
+          data=payload,
+          headers={"Content-Type": "application/json"},
+          method="POST",
+      )
+      with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        obj = json.loads(resp.read().decode("utf-8"))
+      # Rebuild tuples so callers (templates.format_oracle_feedback) see the
+      # exact same shape the local path returns.
+      return (
+          obj["all_pass"],
+          obj["per_case"],
+          [tuple(f) for f in obj["failures"]],
+      )
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:  # noqa: PERF203
+      last_err = e
+      if attempt + 1 < _RETRIES:
+        time.sleep(0.5 * (attempt + 1))
+
+  logger.warning(
+      "exec server %s unreachable (%r); grading turn as unsolved", url, last_err
+  )
+  return False, [], []

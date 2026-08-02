@@ -69,36 +69,40 @@ this. Requires a reward rewrite (per-turn signal), so it is out of scope for Int
 TRAIN_TURNS_MODES = ("all", "final_only", "upto_last_code")
 
 
-def apply_train_turns_mask(response_mask, solver_spans, mode, last_code_idx=None):
-    """Zero out the solver-turn spans that `mode` excludes from training, IN PLACE.
+def apply_train_turns_mask(
+    response_mask, solver_spans, mode, last_code_idx=None
+):
+  """Zero out the solver-turn spans that `mode` excludes from training, IN PLACE.
 
-    Args:
-        response_mask: the full 0/1 loss mask being built (solver turns 1, feedback
-            turns 0). Mutated in place.
-        solver_spans: list of (start, end) half-open index ranges into
-            `response_mask`, one per solver turn, in emission order.
-        mode: one of TRAIN_TURNS_MODES -- "all" (no-op), "final_only", or "upto_last_code".
-        last_code_idx: for "upto_last_code" only, the index into `solver_spans` of the
-            solver turn that produced the graded code. None => no code shown => fall back
-            to "all" (keep everything). Ignored by the other modes.
-    """
-    if mode not in TRAIN_TURNS_MODES:
-        raise ValueError(f"train_turns must be one of {TRAIN_TURNS_MODES}, got {mode!r}")
-    if mode == "all" or not solver_spans:
-        return
-    if mode == "upto_last_code":
-        # Keep [0 .. last_code_idx], zero every turn AFTER the last code proposal. No code
-        # shown (idx None) -> keep all, so a no-code ramble keeps its negative advantage.
-        if last_code_idx is None:
-            return
-        for i, (start, end) in enumerate(solver_spans):
-            if i > last_code_idx:
-                for j in range(start, end):
-                    response_mask[j] = 0
-        return
-    # final_only: keep only the last solver turn.
-    keep = {len(solver_spans) - 1}
+  Args:
+      response_mask: the full 0/1 loss mask being built (solver turns 1, feedback
+          turns 0). Mutated in place.
+      solver_spans: list of (start, end) half-open index ranges into
+          `response_mask`, one per solver turn, in emission order.
+      mode: one of TRAIN_TURNS_MODES -- "all" (no-op), "final_only", or "upto_last_code".
+      last_code_idx: for "upto_last_code" only, the index into `solver_spans` of the
+          solver turn that produced the graded code. None => no code shown => fall back
+          to "all" (keep everything). Ignored by the other modes.
+  """
+  if mode not in TRAIN_TURNS_MODES:
+    raise ValueError(
+        f"train_turns must be one of {TRAIN_TURNS_MODES}, got {mode!r}"
+    )
+  if mode == "all" or not solver_spans:
+    return
+  if mode == "upto_last_code":
+    # Keep [0 .. last_code_idx], zero every turn AFTER the last code proposal. No code
+    # shown (idx None) -> keep all, so a no-code ramble keeps its negative advantage.
+    if last_code_idx is None:
+      return
     for i, (start, end) in enumerate(solver_spans):
-        if i not in keep:
-            for j in range(start, end):
-                response_mask[j] = 0
+      if i > last_code_idx:
+        for j in range(start, end):
+          response_mask[j] = 0
+    return
+  # final_only: keep only the last solver turn.
+  keep = {len(solver_spans) - 1}
+  for i, (start, end) in enumerate(solver_spans):
+    if i not in keep:
+      for j in range(start, end):
+        response_mask[j] = 0

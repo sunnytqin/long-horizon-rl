@@ -53,153 +53,170 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 # (a real program dumping data) vs. the exec service injecting something weird
 # (tracebacks, repeated error strings, etc.).
 _DEBUG_FEEDBACK = bool(int(os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") or "0"))
-_DEBUG_FEEDBACK_MIN_CHARS = int(os.getenv("CODECONTEST_DEBUG_FEEDBACK_MIN_CHARS", "8000") or "8000")
-_DEBUG_FEEDBACK_PREVIEW = int(os.getenv("CODECONTEST_DEBUG_FEEDBACK_PREVIEW", "200") or "200")
+_DEBUG_FEEDBACK_MIN_CHARS = int(
+    os.getenv("CODECONTEST_DEBUG_FEEDBACK_MIN_CHARS", "8000") or "8000"
+)
+_DEBUG_FEEDBACK_PREVIEW = int(
+    os.getenv("CODECONTEST_DEBUG_FEEDBACK_PREVIEW", "200") or "200"
+)
 
 
 @dataclass
 class StepResult:
-    """Outcome of evaluating one assistant submission.
+  """Outcome of evaluating one assistant submission.
 
-    Attributes:
-        solved: True iff the extracted code passed all executed GT tests.
-        should_terminate: True iff the conversation should stop now (solved, or no
-            code to refine).
-        feedback: the next user-turn text to inject when not terminating (else "").
-        num_failures_shown: how many failing cases were included in ``feedback``.
-        had_code: whether a ```python block was found in the submission.
-        failures: the shown (sampled) failing cases as (input, actual, expected) tuples.
-            Surfaced so a user-model feedback loop can build its own diagnosis prompt
-            without re-grading; the oracle path ignores it. Empty when solved/no code.
-        code: the extracted ```python submission (empty when no code was found).
-    """
+  Attributes:
+      solved: True iff the extracted code passed all executed GT tests.
+      should_terminate: True iff the conversation should stop now (solved, or no
+          code to refine).
+      feedback: the next user-turn text to inject when not terminating (else "").
+      num_failures_shown: how many failing cases were included in ``feedback``.
+      had_code: whether a ```python block was found in the submission.
+      failures: the shown (sampled) failing cases as (input, actual, expected) tuples.
+          Surfaced so a user-model feedback loop can build its own diagnosis prompt
+          without re-grading; the oracle path ignores it. Empty when solved/no code.
+      code: the extracted ```python submission (empty when no code was found).
+  """
 
-    solved: bool
-    should_terminate: bool
-    feedback: str = ""
-    num_failures_shown: int = 0
-    had_code: bool = False
-    failures: list = field(default_factory=list)
-    code: str = ""
+  solved: bool
+  should_terminate: bool
+  feedback: str = ""
+  num_failures_shown: int = 0
+  had_code: bool = False
+  failures: list = field(default_factory=list)
+  code: str = ""
 
 
 class BaseEnv:
-    """Interface for a between-turns environment (cf. BaseInteraction.generate_response)."""
+  """Interface for a between-turns environment (cf. BaseInteraction.generate_response)."""
 
-    def step(self, assistant_text: str) -> StepResult:
-        raise NotImplementedError
+  def step(self, assistant_text: str) -> StepResult:
+    raise NotImplementedError
 
 
 @dataclass
 class GTOracleEnv(BaseEnv):
-    """Oracle env: grade the latest code against ground-truth stdin/stdout tests.
+  """Oracle env: grade the latest code against ground-truth stdin/stdout tests.
 
-    Args:
-        test_input / test_output: ground-truth cases (same set used for feedback and
-            final reward, per the eval protocol).
-        test_time_limit: per-case execution timeout (seconds).
-        max_failures_shown: max failing cases revealed per turn (randomly sampled).
-        max_gt_test: cap on number of GT cases executed per turn.
-        max_feedback_chars: combined char budget for the failing-case fields in the
-            injected feedback. Over budget, a single water-filling cap clips only the
-            large fields (input/output/expected) so the feedback turn stays well under
-            rollout.prompt_length instead of being blindly tail-truncated. 0 disables.
-        seed: RNG seed for sampling which failures to show (deterministic per env).
-    """
+  Args:
+      test_input / test_output: ground-truth cases (same set used for feedback and
+          final reward, per the eval protocol).
+      test_time_limit: per-case execution timeout (seconds).
+      max_failures_shown: max failing cases revealed per turn (randomly sampled).
+      max_gt_test: cap on number of GT cases executed per turn.
+      max_feedback_chars: combined char budget for the failing-case fields in the
+          injected feedback. Over budget, a single water-filling cap clips only the
+          large fields (input/output/expected) so the feedback turn stays well under
+          rollout.prompt_length instead of being blindly tail-truncated. 0 disables.
+      seed: RNG seed for sampling which failures to show (deterministic per env).
+  """
 
-    test_input: list
-    test_output: list
-    test_time_limit: float = 6.0
-    max_failures_shown: int = 3
-    max_gt_test: int = 20
-    max_feedback_chars: int = 8000
-    seed: int = 0
-    _rng: random.Random = field(init=False, repr=False)
+  test_input: list
+  test_output: list
+  test_time_limit: float = 6.0
+  max_failures_shown: int = 3
+  max_gt_test: int = 20
+  max_feedback_chars: int = 8000
+  seed: int = 0
+  _rng: random.Random = field(init=False, repr=False)
 
-    def __post_init__(self):
-        self._rng = random.Random(self.seed)
+  def __post_init__(self):
+    self._rng = random.Random(self.seed)
 
-    def step(self, assistant_text: str) -> StepResult:
-        code = local_exec.extract_code(assistant_text)
-        if code is None:
-            # No parseable submission: nothing to grade or refine against.
-            return StepResult(
-                solved=False,
-                should_terminate=False,
-                feedback=(
-                    "Your previous response did not contain a ```python code block. "
-                    "Please provide a complete Python 3 solution in a single "
-                    "```python ... ``` code block."
-                ),
-                num_failures_shown=0,
-                had_code=False,
-            )
+  def step(self, assistant_text: str) -> StepResult:
+    code = local_exec.extract_code(assistant_text)
+    if code is None:
+      # No parseable submission: nothing to grade or refine against.
+      return StepResult(
+          solved=False,
+          should_terminate=False,
+          feedback=(
+              "Your previous response did not contain a ```python code block. "
+              "Please provide a complete Python 3 solution in a single "
+              "```python ... ``` code block."
+          ),
+          num_failures_shown=0,
+          had_code=False,
+      )
 
-        all_pass, _per_case, failures = exec_client.eval_code_on_tests(
-            code,
-            self.test_input,
-            self.test_output,
-            time_limit=self.test_time_limit,
-            max_gt_test=self.max_gt_test,
+    all_pass, _per_case, failures = exec_client.eval_code_on_tests(
+        code,
+        self.test_input,
+        self.test_output,
+        time_limit=self.test_time_limit,
+        max_gt_test=self.max_gt_test,
+    )
+
+    if all_pass:
+      return StepResult(
+          solved=True,
+          should_terminate=True,
+          feedback=templates.SOLVER_CORRECT_MESSAGE,
+          num_failures_shown=0,
+          had_code=True,
+      )
+
+    shown = failures
+    if len(failures) > self.max_failures_shown:
+      shown = self._rng.sample(failures, self.max_failures_shown)
+    feedback = templates.build_feedback_message(
+        shown, max_total_chars=(self.max_feedback_chars or None)
+    )
+
+    if _DEBUG_FEEDBACK and len(feedback) > _DEBUG_FEEDBACK_MIN_CHARS:
+      # Only the LONG outliers get here. Per-field char sizes + a head preview of
+      # each: inp (dataset), actual (MODEL stdout, unbounded), expected (dataset).
+      n = _DEBUG_FEEDBACK_PREVIEW
+      logger.warning(
+          "[FEEDBACK_DBG] LONG feedback: total_chars=%d failures_total=%d shown=%d",
+          len(feedback),
+          len(failures),
+          len(shown),
+      )
+      for i, (inp, actual, expected) in enumerate(shown, 1):
+        logger.warning(
+            "[FEEDBACK_DBG]   case%d sizes: inp=%d actual=%d expected=%d chars",
+            i,
+            len(str(inp)),
+            len(str(actual)),
+            len(str(expected)),
         )
-
-        if all_pass:
-            return StepResult(
-                solved=True,
-                should_terminate=True,
-                feedback=templates.SOLVER_CORRECT_MESSAGE,
-                num_failures_shown=0,
-                had_code=True,
-            )
-
-        shown = failures
-        if len(failures) > self.max_failures_shown:
-            shown = self._rng.sample(failures, self.max_failures_shown)
-        feedback = templates.build_feedback_message(
-            shown, max_total_chars=(self.max_feedback_chars or None)
+        logger.warning(
+            "[FEEDBACK_DBG]   case%d inp[:%d]=%r", i, n, str(inp)[:n]
         )
-
-        if _DEBUG_FEEDBACK and len(feedback) > _DEBUG_FEEDBACK_MIN_CHARS:
-            # Only the LONG outliers get here. Per-field char sizes + a head preview of
-            # each: inp (dataset), actual (MODEL stdout, unbounded), expected (dataset).
-            n = _DEBUG_FEEDBACK_PREVIEW
-            logger.warning(
-                "[FEEDBACK_DBG] LONG feedback: total_chars=%d failures_total=%d shown=%d",
-                len(feedback), len(failures), len(shown),
-            )
-            for i, (inp, actual, expected) in enumerate(shown, 1):
-                logger.warning(
-                    "[FEEDBACK_DBG]   case%d sizes: inp=%d actual=%d expected=%d chars",
-                    i, len(str(inp)), len(str(actual)), len(str(expected)),
-                )
-                logger.warning("[FEEDBACK_DBG]   case%d inp[:%d]=%r", i, n, str(inp)[:n])
-                logger.warning("[FEEDBACK_DBG]   case%d actual[:%d]=%r", i, n, str(actual)[:n])
-                logger.warning("[FEEDBACK_DBG]   case%d expected[:%d]=%r", i, n, str(expected)[:n])
-        return StepResult(
-            solved=False,
-            should_terminate=False,
-            feedback=feedback,
-            num_failures_shown=len(shown),
-            had_code=True,
-            failures=list(shown),
-            code=code,
+        logger.warning(
+            "[FEEDBACK_DBG]   case%d actual[:%d]=%r", i, n, str(actual)[:n]
         )
+        logger.warning(
+            "[FEEDBACK_DBG]   case%d expected[:%d]=%r", i, n, str(expected)[:n]
+        )
+    return StepResult(
+        solved=False,
+        should_terminate=False,
+        feedback=feedback,
+        num_failures_shown=len(shown),
+        had_code=True,
+        failures=list(shown),
+        code=code,
+    )
 
 
 @dataclass
 class TesterPolicyEnv(BaseEnv):
-    """Future hook: feedback produced by a tester policy instead of GT tests.
+  """Future hook: feedback produced by a tester policy instead of GT tests.
 
-    Not implemented yet. When co-training a tester+solver, ``step`` would (a) ask a
-    tester to generate targeted tests for the latest code, (b) run them, and (c)
-    return the results as feedback. For the shared-policy (CURE-style) setting the
-    tester turns are generated by the same actor and masked as trainable in the
-    agent loop; for separate policies a second model would be queried here. The
-    surrounding loop/masking interface is already compatible with this.
-    """
+  Not implemented yet. When co-training a tester+solver, ``step`` would (a) ask a
+  tester to generate targeted tests for the latest code, (b) run them, and (c)
+  return the results as feedback. For the shared-policy (CURE-style) setting the
+  tester turns are generated by the same actor and masked as trainable in the
+  agent loop; for separate policies a second model would be queried here. The
+  surrounding loop/masking interface is already compatible with this.
+  """
 
-    test_input: Optional[list] = None
-    test_output: Optional[list] = None
+  test_input: Optional[list] = None
+  test_output: Optional[list] = None
 
-    def step(self, assistant_text: str) -> StepResult:  # pragma: no cover - stub
-        raise NotImplementedError("TesterPolicyEnv is a placeholder for future tester+solver co-training.")
+  def step(self, assistant_text: str) -> StepResult:  # pragma: no cover - stub
+    raise NotImplementedError(
+        "TesterPolicyEnv is a placeholder for future tester+solver co-training."
+    )
