@@ -1,3 +1,22 @@
+"""Vendored reference copy of the Gen-Verse CodeContests eval harness.
+
+This file is kept verbatim for provenance: ``codecontest/local_exec.py`` ports
+its sandboxed-exec pattern and cites its functions (``worker``,
+``run_scripts_with_timeout``, ``modify``, ``test_if_eq``) by name. It is not
+part of the RL pipeline -- nothing imports it, no script invokes it, and it
+cannot even be imported here because the ``evaluation_config`` module it reads
+its argparse defaults from is not vendored alongside it.
+
+Linting it therefore describes upstream's style, not this project's, and
+editing it would destroy its value as a faithful copy to diff against. Two of
+its idioms account for most of the findings: ``globals().update(vars(args))``
+below publishes every argparse flag as a module global, which no static
+analyser can see (undefined-variable), and those globals are then shadowed by
+same-named function parameters (redefined-outer-name).
+"""
+
+# pylint: skip-file
+
 import argparse
 import ast
 from concurrent.futures import as_completed
