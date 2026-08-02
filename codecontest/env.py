@@ -13,16 +13,16 @@
 # limitations under the License.
 """Environment abstraction for the CodeContests multi-turn loop.
 
-The env is the pluggable "what happens between assistant turns" component. It is a
-direct analog of the (now-deprecated) ``BaseInteraction.generate_response``: given
-the conversation so far, it scores the latest submission and decides whether to
-stop and what feedback (the next user turn) to inject.
+The env is the pluggable "what happens between assistant turns" component. It is
+a direct analog of the (now-deprecated) ``BaseInteraction.generate_response``:
+given the conversation so far, it scores the latest submission and decides
+whether to stop and what feedback (the next user turn) to inject.
 
 - ``GTOracleEnv`` (used now): runs the model's code against ground-truth tests.
   Feedback = a few failing cases; terminates early when all tests pass. This is
   the RL analog of ``iterative_eval.run_oracle_iterative_eval``.
-- ``TesterPolicyEnv`` (future hook, not implemented): the next user turn would be
-  produced by a *tester* — either the same policy with a tester prompt
+- ``TesterPolicyEnv`` (future hook, not implemented): the next user turn
+  would be produced by a *tester* — either the same policy with a tester prompt
   (shared-policy / CURE-style) or a separate model. Kept as a stub so the agent
   loop's interface and token masking already accommodate it.
 
@@ -42,15 +42,16 @@ from codecontest import exec_client, local_exec, templates
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# Set CODECONTEST_DEBUG_FEEDBACK=1 to dump per-field feedback sizes (chars) so we can
-# see which field (raw test input, the model's program OUTPUT, or expected) is blowing
-# up the injected feedback turn. `actual` (model stdout) is unbounded and the usual
-# culprit -- a runaway/over-printing solution. Logged at WARNING so it surfaces under
-# the default VERL_LOGGING_LEVEL (plain print() gets swallowed by the Ray workers).
-# Only feedback whose total exceeds CODECONTEST_DEBUG_FEEDBACK_MIN_CHARS (default 8000,
-# ~2k tokens) is dumped -- healthy short episodes stay quiet. The dump includes a head
-# preview of each field so we can confirm the bloat is solver-written garbage output
-# (a real program dumping data) vs. the exec service injecting something weird
+# Set CODECONTEST_DEBUG_FEEDBACK=1 to dump per-field feedback sizes (chars) so
+# we can see which field (raw test input, the model's program OUTPUT, or
+# expected) is blowing up the injected feedback turn. `actual` (model stdout) is
+# unbounded and the usual culprit -- a runaway/over-printing solution. Logged at
+# WARNING so it surfaces under the default VERL_LOGGING_LEVEL (plain print()
+# gets swallowed by the Ray workers). Only feedback whose total exceeds
+# CODECONTEST_DEBUG_FEEDBACK_MIN_CHARS (default 8000, ~2k tokens) is dumped --
+# healthy short episodes stay quiet. The dump includes a head preview of each
+# field so we can confirm the bloat is solver-written garbage output (a real
+# program dumping data) vs. the exec service injecting something weird
 # (tracebacks, repeated error strings, etc.).
 _DEBUG_FEEDBACK = bool(int(os.getenv("CODECONTEST_DEBUG_FEEDBACK", "0") or "0"))
 _DEBUG_FEEDBACK_MIN_CHARS = int(
@@ -66,16 +67,17 @@ class StepResult:
   """Outcome of evaluating one assistant submission.
 
   Attributes:
-      solved: True iff the extracted code passed all executed GT tests.
-      should_terminate: True iff the conversation should stop now (solved, or no
-          code to refine).
-      feedback: the next user-turn text to inject when not terminating (else "").
-      num_failures_shown: how many failing cases were included in ``feedback``.
-      had_code: whether a ```python block was found in the submission.
-      failures: the shown (sampled) failing cases as (input, actual, expected) tuples.
-          Surfaced so a user-model feedback loop can build its own diagnosis prompt
-          without re-grading; the oracle path ignores it. Empty when solved/no code.
-      code: the extracted ```python submission (empty when no code was found).
+    solved: True iff the extracted code passed all executed GT tests.
+    should_terminate: True iff the conversation should stop now (solved, or no
+      code to refine).
+    feedback: the next user-turn text to inject when not terminating (else "").
+    num_failures_shown: how many failing cases were included in ``feedback``.
+    had_code: whether a ```python block was found in the submission.
+    failures: the shown (sampled) failing cases as (input, actual, expected)
+      tuples.
+      Surfaced so a user-model feedback loop can build its own diagnosis prompt
+      without re-grading; the oracle path ignores it. Empty when solved/no code.
+    code: the extracted ```python submission (empty when no code was found).
   """
 
   solved: bool
@@ -88,7 +90,7 @@ class StepResult:
 
 
 class BaseEnv:
-  """Interface for a between-turns environment (cf. BaseInteraction.generate_response)."""
+  """Interface for a between-turns env (cf. ``generate_response``)."""
 
   def step(self, assistant_text: str) -> StepResult:
     raise NotImplementedError
@@ -99,16 +101,16 @@ class GTOracleEnv(BaseEnv):
   """Oracle env: grade the latest code against ground-truth stdin/stdout tests.
 
   Args:
-      test_input / test_output: ground-truth cases (same set used for feedback and
-          final reward, per the eval protocol).
-      test_time_limit: per-case execution timeout (seconds).
-      max_failures_shown: max failing cases revealed per turn (randomly sampled).
-      max_gt_test: cap on number of GT cases executed per turn.
-      max_feedback_chars: combined char budget for the failing-case fields in the
-          injected feedback. Over budget, a single water-filling cap clips only the
-          large fields (input/output/expected) so the feedback turn stays well under
-          rollout.prompt_length instead of being blindly tail-truncated. 0 disables.
-      seed: RNG seed for sampling which failures to show (deterministic per env).
+    test_input / test_output: ground-truth cases (same set used for feedback and
+      final reward, per the eval protocol).
+    test_time_limit: per-case execution timeout (seconds).
+    max_failures_shown: max failing cases revealed per turn (randomly sampled).
+    max_gt_test: cap on number of GT cases executed per turn.
+    max_feedback_chars: combined char budget for the failing-case fields in the
+      injected feedback. Over budget, a single water-filling cap clips only the
+      large fields (input/output/expected) so the feedback turn stays well under
+      rollout.prompt_length instead of being blindly tail-truncated. 0 disables.
+    seed: RNG seed for sampling which failures to show (deterministic per env).
   """
 
   test_input: list
@@ -164,11 +166,13 @@ class GTOracleEnv(BaseEnv):
     )
 
     if _DEBUG_FEEDBACK and len(feedback) > _DEBUG_FEEDBACK_MIN_CHARS:
-      # Only the LONG outliers get here. Per-field char sizes + a head preview of
-      # each: inp (dataset), actual (MODEL stdout, unbounded), expected (dataset).
+      # Only the LONG outliers get here. Per-field char sizes + a head preview
+      # of each: inp (dataset), actual (MODEL stdout, unbounded), expected
+      # (dataset).
       n = _DEBUG_FEEDBACK_PREVIEW
       logger.warning(
-          "[FEEDBACK_DBG] LONG feedback: total_chars=%d failures_total=%d shown=%d",
+          "[FEEDBACK_DBG] LONG feedback: total_chars=%d failures_total=%d "
+          "shown=%d",
           len(feedback),
           len(failures),
           len(shown),
@@ -205,8 +209,8 @@ class GTOracleEnv(BaseEnv):
 class TesterPolicyEnv(BaseEnv):
   """Future hook: feedback produced by a tester policy instead of GT tests.
 
-  Not implemented yet. When co-training a tester+solver, ``step`` would (a) ask a
-  tester to generate targeted tests for the latest code, (b) run them, and (c)
+  Not implemented yet. When co-training a tester+solver, ``step`` would (a) ask
+  a tester to generate targeted tests for the latest code, (b) run them, and (c)
   return the results as feedback. For the shared-policy (CURE-style) setting the
   tester turns are generated by the same actor and masked as trainable in the
   agent loop; for separate policies a second model would be queried here. The

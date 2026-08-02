@@ -11,12 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Local subprocess sandbox for executing model-generated Python on stdin/stdout.
+"""Local subprocess sandbox for running model-generated Python on stdio.
 
-This replaces the internal "xbox" execution server used by the tunix eval harness
-with a self-contained local executor, reusing the multiprocessing-based exec
-pattern from ``codecontest/eval_example.py``. It is used both for mid-conversation
-oracle feedback and for the final binary reward.
+This replaces the internal "xbox" execution server used by the tunix eval
+harness with a self-contained local executor, reusing the multiprocessing-based
+exec pattern from ``codecontest/eval_example.py``. It is used both for
+mid-conversation oracle feedback and for the final binary reward.
 
 Security note: this runs untrusted model output in a child process guarded by a
 wall-clock timeout AND a per-process address-space cap (``RLIMIT_AS``), plus a
@@ -27,7 +27,8 @@ isolated research node; seccomp/container hardening (or a swap to SandboxFusion)
 is a follow-up if stronger isolation is needed.
 
 Tunables (env vars, read at import):
-  CODECONTEST_EXEC_MEM_GB        per-process address-space headroom cap (default 2)
+  CODECONTEST_EXEC_MEM_GB        per-process address-space headroom cap
+                                 (default 2)
   CODECONTEST_EXEC_CONCURRENCY   max concurrent child executions (default 64)
 """
 
@@ -41,19 +42,22 @@ import threading
 import time
 import typing
 
-# A spawn/fork-safe context. "fork" is fastest on Linux and matches eval_example.py.
-# We keep fork (no torch/CUDA re-import tax that `spawn` would incur from the trainer
-# process) and rely on a *relative* RLIMIT_AS in the child for memory safety.
+# A spawn/fork-safe context. "fork" is fastest on Linux and matches
+# eval_example.py. We keep fork (no torch/CUDA re-import tax that `spawn` would
+# incur from the trainer process) and rely on a *relative* RLIMIT_AS in the
+# child for memory safety.
 _MP_CTX = mp.get_context("fork")
 
-# Per-process memory headroom: a forked child inherits the parent's (possibly huge,
-# CUDA-reserved) virtual address space, so an absolute cap is meaningless. Instead we
-# cap *growth* beyond the child's startup VSZ, which a memory bomb trips as MemoryError.
+# Per-process memory headroom: a forked child inherits the parent's (possibly
+# huge, CUDA-reserved) virtual address space, so an absolute cap is meaningless.
+# Instead we cap *growth* beyond the child's startup VSZ, which a memory bomb
+# trips as MemoryError.
 _EXEC_MEM_LIMIT_BYTES = int(
     float(os.environ.get("CODECONTEST_EXEC_MEM_GB", "2")) * (1024**3)
 )
-# Global ceiling on concurrently-alive child processes across all agent-loop threads,
-# so a 200+-way rollout fan-out can't launch thousands of exec processes at once.
+# Global ceiling on concurrently-alive child processes across all agent-loop
+# threads, so a 200+-way rollout fan-out can't launch thousands of exec
+# processes at once.
 _EXEC_CONCURRENCY = int(os.environ.get("CODECONTEST_EXEC_CONCURRENCY", "64"))
 _EXEC_SLOTS = threading.BoundedSemaphore(_EXEC_CONCURRENCY)
 
@@ -61,8 +65,9 @@ _EXEC_SLOTS = threading.BoundedSemaphore(_EXEC_CONCURRENCY)
 def _apply_mem_limit() -> None:
   """Cap this (child) process's address-space growth to +_EXEC_MEM_LIMIT_BYTES.
 
-  Best-effort: any failure leaves the process uncapped rather than blocking exec.
-  Relative to startup VSZ so it works regardless of inherited CUDA VA reservations.
+  Best-effort: any failure leaves the process uncapped rather than blocking
+  exec. Relative to startup VSZ so it works regardless of inherited CUDA VA
+  reservations.
   """
   if _EXEC_MEM_LIMIT_BYTES <= 0:
     return
@@ -79,7 +84,8 @@ def _apply_mem_limit() -> None:
     pass
 
 
-# ── output normalization & comparison (matches eval_example.modify / test_if_eq) ──
+# ── output normalization & comparison ──
+# Matches eval_example.modify / test_if_eq.
 
 
 def normalise(s: str) -> str:
@@ -106,16 +112,18 @@ def extract_code(text: str) -> typing.Optional[str]:
   return matches[-1].strip() if matches else None
 
 
-# ── subprocess execution (ported from eval_example.worker / run_scripts_with_timeout) ──
+# ── subprocess execution ──
+# Ported from eval_example.worker / run_scripts_with_timeout.
 
 
-# BLAS/OpenMP thread caps applied in each exec child BEFORE the untrusted code can
-# `import numpy`. OpenBLAS otherwise starts one worker thread PER CPU core on import;
-# across many concurrent execs that exhausts thread/process limits (OpenBLAS
-# "pthread_create failed ... Resource temporarily unavailable" / "can't start new
-# thread") and address space from thread stacks (mmap "failed to map segment from
-# shared object"). 1 thread is correct and ample for grading. Set in the child only,
-# so the trainer's / sidecar-parent's own threading is untouched.
+# BLAS/OpenMP thread caps applied in each exec child BEFORE the untrusted code
+# can `import numpy`. OpenBLAS otherwise starts one worker thread PER CPU core
+# on import; across many concurrent execs that exhausts thread/process limits
+# (OpenBLAS "pthread_create failed ... Resource temporarily unavailable" /
+# "can't start new thread") and address space from thread stacks (mmap "failed
+# to map segment from shared object"). 1 thread is correct and ample for
+# grading. Set in the child only, so the trainer's / sidecar-parent's own
+# threading is untouched.
 _THREAD_CAP_ENV = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -126,10 +134,11 @@ _THREAD_CAP_ENV = (
 
 
 def _worker(script: str, stdin_str: str, output_queue):
-  """Execute ``script`` with ``stdin_str`` on stdin; put stdout (or error) on queue."""
+  """Executes ``script`` on ``stdin_str``; puts stdout (or error) on queue."""
   for _var in _THREAD_CAP_ENV:
     os.environ[_var] = "1"  # force single-thread BLAS before any numpy import
-  _apply_mem_limit()  # bound this child's RAM growth before running untrusted code
+  # Bound this child's RAM growth before running untrusted code.
+  _apply_mem_limit()
   input_lines = iter(stdin_str.splitlines())
 
   def fake_input(prompt=""):
@@ -155,19 +164,20 @@ def _worker(script: str, stdin_str: str, output_queue):
     output_queue.put(stdout_capture.getvalue())
   except SystemExit:
     output_queue.put(stdout_capture.getvalue())
-  except BaseException as e:  # noqa: BLE001 - sandbox: report any failure as text
+  except BaseException as e:  # noqa: BLE001 - sandbox: report failure as text
     output_queue.put(f"error: {e}")
   finally:
     sys.stdout, sys.stdin = original_stdout, original_stdin
 
 
 def _run_single(code: str, stdin_str: str, time_limit: float) -> str:
-  """Run one (code, stdin) in a child process, holding one global concurrency slot.
+  """Runs one (code, stdin) in a child process, holding one global slot.
 
-  Returns stdout, or "Timeout Error" / "error: ..." on failure. The slot bounds how
-  many child processes are alive at once across all calling threads; each call is
-  self-contained (acquire -> start -> reap -> release) so it can't deadlock against
-  other in-flight cases the way a batch holding several slots could.
+  Returns stdout, or "Timeout Error" / "error: ..." on failure. The slot bounds
+  how many child processes are alive at once across all calling threads; each
+  call is self-contained (acquire -> start -> reap -> release) so it can't
+  deadlock against other in-flight cases the way a batch holding several slots
+  could.
   """
   with _EXEC_SLOTS:
     q = _MP_CTX.Queue()
@@ -199,15 +209,15 @@ def _run_single(code: str, stdin_str: str, time_limit: float) -> str:
 
 
 def run_code_batch(codes, stdins, time_limits):
-  """Run a batch of (code, stdin) pairs in parallel, bounded by the global slot cap.
+  """Runs a batch of (code, stdin) pairs in parallel, bounded by the slot cap.
 
   Args:
-      codes: list[str] python sources.
-      stdins: list[str] stdin for each code.
-      time_limits: list[float] per-case wall-clock timeout (seconds).
+    codes: list[str] python sources.
+    stdins: list[str] stdin for each code.
+    time_limits: list[float] per-case wall-clock timeout (seconds).
 
   Returns:
-      list[str]: stdout for each case, or "Timeout Error" / "error: ..." on failure.
+    list[str]: stdout per case, or "Timeout Error" / "error: ..." on failure.
   """
   n = len(codes)
   results: list = [None] * n
@@ -216,7 +226,8 @@ def run_code_batch(codes, stdins, time_limits):
     results[i] = _run_single(codes[i], stdins[i], time_limits[i])
 
   # One thread per case; each blocks on the global semaphore before spawning its
-  # child, so within-trajectory parallelism is preserved up to the global ceiling.
+  # child, so within-trajectory parallelism is preserved up to the global
+  # ceiling.
   threads = [
       threading.Thread(target=runner, args=(i,), daemon=True) for i in range(n)
   ]
@@ -233,17 +244,17 @@ def eval_code_on_tests(
   """Run ``code`` against ground-truth (stdin -> expected stdout) cases.
 
   Args:
-      code: python source (may be None if extraction failed).
-      test_input: list[str] stdin strings.
-      test_output: list[str] expected stdout strings.
-      time_limit: per-case timeout in seconds (or a per-case list).
-      max_gt_test: cap on number of cases actually executed.
+    code: python source (may be None if extraction failed).
+    test_input: list[str] stdin strings.
+    test_output: list[str] expected stdout strings.
+    time_limit: per-case timeout in seconds (or a per-case list).
+    max_gt_test: cap on number of cases actually executed.
 
   Returns:
-      (all_pass, per_case, failures) where
-        all_pass : bool  - True iff every executed case matched (and >=1 case ran),
-        per_case : list[bool] - pass/fail per executed case,
-        failures : list[(inp, actual, expected)] - the cases that did not match.
+    (all_pass, per_case, failures) where
+      all_pass : bool  - True iff every executed case matched (>=1 case ran),
+      per_case : list[bool] - pass/fail per executed case,
+      failures : list[(inp, actual, expected)] - the cases that did not match.
   """
   if code is None:
     return False, [], []

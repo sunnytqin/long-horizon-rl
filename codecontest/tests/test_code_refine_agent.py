@@ -13,9 +13,10 @@
 # limitations under the License.
 """CPU unit test for CodeRefineAgentLoop control flow / masking / reward.
 
-The LLM server, tokenizer and chat-template are mocked so the test is pure-Python
-and deterministic. The env (GTOracleEnv) is REAL and runs the subprocess sandbox,
-so this also exercises the loop<->env<->local_exec integration end to end.
+The LLM server, tokenizer and chat-template are mocked so the test is
+pure-Python and deterministic. The env (GTOracleEnv) is REAL and runs the
+subprocess sandbox, so this also exercises the loop<->env<->local_exec
+integration end to end.
 """
 
 import asyncio
@@ -31,7 +32,10 @@ GROUND_TRUTH = {
     "test_time_limit": 4.0,
 }
 
-PASS_CODE = "```python\nimport sys\na,b=map(int,sys.stdin.read().split())\nprint(a+b)\n```"
+PASS_CODE = (
+    "```python\nimport sys\na,b=map(int,sys.stdin.read().split())\nprint(a+b)\n"
+    "```"
+)
 FAIL_CODE = "```python\nprint(0)\n```"
 
 FEEDBACK_IDS = [101, 102, 103]  # what the mocked apply_chat_template returns
@@ -105,14 +109,16 @@ def test_fail_fail_pass_gets_reward_1_and_correct_mask():
   assert out.extra_fields["solved"] is True
   assert out.extra_fields["solved_at_turn"] == 2
   assert out.extra_fields["num_assistant_turns"] == 3
-  # assistant token (1) + feedback(0,0,0) + assistant(1) + feedback(0,0,0) + assistant(1)
+  # assistant token (1) + feedback(0,0,0) + assistant(1) + feedback(0,0,0) +
+  # assistant(1)
   assert out.response_mask == [1, 0, 0, 0, 1, 0, 0, 0, 1]
   assert out.num_turns == 3 + 2 + 1
 
 
 def test_train_turns_final_only_trains_last_turn():
   # final_only zeroes every solver turn except the last; the rolled-out sequence
-  # (response_ids) is unchanged, only the loss mask differs. Feedback turns stay 0.
+  # (response_ids) is unchanged, only the loss mask differs. Feedback turns stay
+  # 0.
   out = _run(
       _build_loop(
           [([1], FAIL_CODE), ([2], FAIL_CODE), ([3], PASS_CODE)],
@@ -125,7 +131,8 @@ def test_train_turns_final_only_trains_last_turn():
 
 
 def test_train_turns_final_only_turn0_solve_trains_turn0():
-  # Solving at turn 0: the last (== only) solver turn IS turn 0, so it stays trained.
+  # Solving at turn 0: the last (== only) solver turn IS turn 0, so it stays
+  # trained.
   out = _run(_build_loop([([7], PASS_CODE)], train_turns="final_only"))
   assert out.reward_score == 1.0
   assert out.extra_fields["solved_at_turn"] == 0
@@ -153,7 +160,8 @@ def test_solved_on_turn_0():
 
 
 def test_overflow_before_solve_gives_reward_0():
-  # response_length=4: turn-0 emits 2 tokens, feedback(3) would push to 5 -> overflow.
+  # response_length=4: turn-0 emits 2 tokens, feedback(3) would push to 5 ->
+  # overflow.
   loop = _build_loop(
       [([1, 1], FAIL_CODE), ([2, 2], FAIL_CODE)], response_length=4
   )

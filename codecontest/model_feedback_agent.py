@@ -13,25 +13,29 @@
 # limitations under the License.
 """Multi-turn code-refinement agent loop with a MODEL-written "user" turn.
 
-A variant of ``code_refine_agent.CodeRefineAgentLoop``. The structure is identical
-(solver writes code, an oracle env grades it against ground-truth tests, binary
-outcome reward), with ONE difference in the between-turns feedback:
+A variant of ``code_refine_agent.CodeRefineAgentLoop``. The structure is
+identical (solver writes code, an oracle env grades it against ground-truth
+tests, binary outcome reward), with ONE difference in the between-turns
+feedback:
 
-  oracle loop : the failing GT cases are injected verbatim and the SOLVER is asked
-                to reflect on them (3 bullets) before rewriting.
-  this loop   : a second inference call -- the SAME policy run as a "user model" --
-                reads (problem, failed code, failing cases) and writes the 3-bullet
-                diagnosis. ONLY that diagnosis is injected as the next user turn; the
-                raw failing cases are not shown to the solver.
+  oracle loop : the failing GT cases are injected verbatim and the SOLVER is
+                asked to reflect on them (3 bullets) before rewriting.
+  this loop   : a second inference call -- the SAME policy run as a "user
+                model" -- reads (problem, failed code, failing cases) and
+                writes the 3-bullet diagnosis. ONLY that diagnosis is injected
+                as the next user turn; the raw failing cases are not shown to
+                the solver.
 
-Training is still SOLVER-ONLY. The user-model diagnosis is injected with mask=0 (no
-gradient), exactly like the deterministic oracle feedback. The feedback inference is
-a separate, throwaway sequence (its own request_id): its prompt/response tokens never
-enter the solver trajectory and its weights-version is not tracked (masked tokens
-carry no gradient, so staleness is irrelevant to them).
+Training is still SOLVER-ONLY. The user-model diagnosis is injected with mask=0
+(no gradient), exactly like the deterministic oracle feedback. The feedback
+inference is a separate, throwaway sequence (its own request_id): its
+prompt/response tokens never enter the solver trajectory and its weights-version
+is not tracked (masked tokens carry no gradient, so staleness is irrelevant to
+them).
 
-No new config knobs: the feedback call reuses the solver ``sampling_params`` (same
-temperature/top_p) and the existing per-turn length cap ``max_new_tokens_per_turn``.
+No new config knobs: the feedback call reuses the solver ``sampling_params``
+(same temperature/top_p) and the existing per-turn length cap
+``max_new_tokens_per_turn``.
 """
 
 import asyncio
@@ -58,17 +62,18 @@ _DEBUG_FEEDBACK_PREVIEW = int(
     os.getenv("CODECONTEST_DEBUG_FEEDBACK_PREVIEW", "200") or "200"
 )
 
-# Conservative chars/token ratio for the digit/whitespace-heavy CodeContests I/O; used to
-# size char budgets from the token-based prompt_length cap.
+# Conservative chars/token ratio for the digit/whitespace-heavy CodeContests
+# I/O; used to size char budgets from the token-based prompt_length cap.
 _CHARS_PER_TOKEN = 3.0
-# Safety margin (tokens) kept free between a feedback request's prompt+completion and the
-# engine context window, since the engine rejects prompt_len+max_new_tokens == context_length.
+# Safety margin (tokens) kept free between a feedback request's
+# prompt+completion and the engine context window, since the engine rejects
+# prompt_len+max_new_tokens == context_length.
 _CTX_MARGIN = 8
 
 
 @register("model_feedback_agent")
 class ModelFeedbackAgentLoop(AgentLoopBase):
-  """Multi-turn code-refinement loop where the feedback turn is written by the policy."""
+  """Code-refinement loop whose feedback turn is written by the policy."""
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
@@ -81,14 +86,15 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
     )
 
     # CodeContests-specific knobs. Read from an optional `codecontest` config
-    # block (add via `+codecontest.key=value` on the CLI); fall back to defaults.
+    # block (add via `+codecontest.key=value` on the CLI); fall back to
+    # defaults.
     cc = {}
     try:
       cc = self.config.get("codecontest", {}) or {}
     except Exception:  # noqa: BLE001 - config may not define the block
       cc = {}
-    # Per-turn generation cap (tokens). None -> use remaining response budget. The
-    # user-model feedback call reuses this same cap (no separate knob).
+    # Per-turn generation cap (tokens). None -> use remaining response budget.
+    # The user-model feedback call reuses this same cap (no separate knob).
     self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
     # Overflow handling: "end_zero_reward" (default) or "discard_sample".
     self.on_overflow = cc.get("on_overflow", "end_zero_reward")
@@ -96,12 +102,13 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
     self.default_exec_timeout = float(cc.get("exec_timeout", 6.0))
     self.default_max_failures_shown = int(cc.get("max_failures_shown", 3))
     self.default_max_gt_test = int(cc.get("max_gt_test", 20))
-    # Combined char budget for the failing-case fields inside the FEEDBACK MODEL
-    # PROMPT (problem + code + failures). Because those failures now live only in the
-    # user model's single-turn prompt -- NOT the solver's cumulative conversation --
-    # this can be set generously; the only ceiling is that problem+code+failures must
-    # still fit prompt_length (else the agent loop left-truncates the problem). Derived
-    # from prompt_length by default; pin an absolute value via +codecontest.max_feedback_chars.
+    # Combined char budget for the failing-case fields inside the FEEDBACK
+    # MODEL PROMPT (problem + code + failures). Because those failures now live
+    # only in the user model's single-turn prompt -- NOT the solver's
+    # cumulative conversation -- this can be set generously; the only ceiling
+    # is that problem+code+failures must still fit prompt_length (else the
+    # agent loop left-truncates the problem). Derived from prompt_length by
+    # default; pin an absolute value via +codecontest.max_feedback_chars.
     _FEEDBACK_BUDGET_FRACTION = 0.5
     _derived_max_feedback_chars = int(
         self.prompt_length * _CHARS_PER_TOKEN * _FEEDBACK_BUDGET_FRACTION
@@ -112,38 +119,43 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
         if _cfg_max_feedback_chars > 0
         else _derived_max_feedback_chars
     )
-    # Max NEW tokens the user model may generate for its diagnosis. Exact, hard bound on
-    # the diagnosis length: the injected solver turn is the fixed skeleton (~50 tokens)
-    # plus <= this, so it stays far under prompt_length and the agent loop never left-
-    # truncates it. The cap only bites when the model WOULD write more (diagnoses are
-    # prompted "Be concise", so it usually won't). IMPORTANT: the diagnosis lands in the
-    # solver's response tail, so it shares response_length with ALL solver code turns +
-    # all feedback turns. With response_length=8192 and up to 3 feedback turns, 2048 each
-    # already reserves 6144 for feedback -- push higher only if you also raise
-    # MAX_RESPONSE_LENGTH, else the solver starves and overflows (unsolved => reward 0).
+    # Max NEW tokens the user model may generate for its diagnosis. Exact, hard
+    # bound on the diagnosis length: the injected solver turn is the fixed
+    # skeleton (~50 tokens) plus <= this, so it stays far under prompt_length
+    # and the agent loop never left-truncates it. The cap only bites when the
+    # model WOULD write more (diagnoses are prompted "Be concise", so it
+    # usually won't). IMPORTANT: the diagnosis lands in the solver's response
+    # tail, so it shares response_length with ALL solver code turns + all
+    # feedback turns. With response_length=8192 and up to 3 feedback turns,
+    # 2048 each already reserves 6144 for feedback -- push higher only if you
+    # also raise MAX_RESPONSE_LENGTH, else the solver starves and overflows
+    # (unsolved => reward 0).
     # Watch feedback_resp_len_mean (logged) for actual usage. Pin via
     # +codecontest.max_feedback_tokens.
     self.max_feedback_tokens = int(cc.get("max_feedback_tokens", 2048))
     # Hard wall on a single env.step (code grading). See code_refine_agent.
     self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
-    # SET 2 gradient-masking study: which solver turns get trained. "all" (default)
-    # reproduces prior behavior; "final_only" trains only the last solver turn (clean
-    # credit -- see codecontest/masking.py for why "refinement_only" was dropped). The
-    # masked user-model feedback turns are unaffected -- they are already mask=0.
+    # SET 2 gradient-masking study: which solver turns get trained. "all"
+    # (default) reproduces prior behavior; "final_only" trains only the last
+    # solver turn (clean credit -- see codecontest/masking.py for why
+    # "refinement_only" was dropped). The masked user-model feedback turns are
+    # unaffected -- they are already mask=0.
     self.train_turns = cc.get("train_turns", "all")
     if self.train_turns not in TRAIN_TURNS_MODES:
       raise ValueError(
-          f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}"
+          f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, "
+          f"got {self.train_turns!r}"
       )
 
   async def _tokenize_uncapped(self, messages: list[dict]) -> list[int]:
     """Tokenize a chat-message list WITHOUT the solver's prompt_length cap.
 
     ``AgentLoopBase.apply_chat_template`` left-truncates any prompt over
-    ``rollout.prompt_length`` -- correct for the solver's trajectory, wrong for the
-    user model's throwaway feedback prompt (it would drop the problem statement). This
-    variant returns the full ids; the caller bounds generation so prompt+gen fit the
-    engine context. Text-only path (``self.processor`` is None for this model).
+    ``rollout.prompt_length`` -- correct for the solver's trajectory, wrong for
+    the user model's throwaway feedback prompt (it would drop the problem
+    statement). This variant returns the full ids; the caller bounds generation
+    so prompt+gen fit the engine context. Text-only path (``self.processor`` is
+    None for this model).
     """
     ids = await self.loop.run_in_executor(
         None,
@@ -160,14 +172,16 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
     messages = list(kwargs["raw_prompt"])
     extra_info = kwargs.get("extra_info", {}) or {}
 
-    # Problem text for the user-model prompt: the initial solver user turn (it already
-    # wraps the problem statement via CODE_PROMPT_TEMPLATE). Captured once up front.
+    # Problem text for the user-model prompt: the initial solver user turn (it
+    # already wraps the problem statement via CODE_PROMPT_TEMPLATE). Captured
+    # once up front.
     problem_text = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"),
         "",
     )
 
-    # Ground-truth tests: prefer extra_info, fall back to reward_model.ground_truth.
+    # Ground-truth tests: prefer extra_info, fall back to
+    # reward_model.ground_truth.
     gt = extra_info.get("ground_truth")
     if gt is None:
       gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
@@ -206,19 +220,21 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
     solved = False
     overflow = False
     solved_at_turn = -1
-    # True solver-generated length per assistant turn, captured at generation time.
+    # True solver-generated length per assistant turn, captured at generation
+    # time.
     solver_turn_lengths: list[int] = []
     # (start, end) span of each solver turn within response_mask, for the SET 2
-    # gradient-masking policy applied after the loop (see codecontest/masking.py).
+    # gradient-masking policy applied after the loop (see
+    # codecontest/masking.py).
     solver_turn_spans: list[tuple[int, int]] = []
     # User-model diagnosis length per feedback turn, and degeneracy counters.
     feedback_turn_lengths: list[int] = []
     feedback_empty = 0
     feedback_overflow = 0
 
-    # Off-policy staleness bookkeeping the trainer requires. ONLY the solver-turn
-    # outputs update this -- the feedback turns are masked, so their weights-version
-    # is irrelevant.
+    # Off-policy staleness bookkeeping the trainer requires. ONLY the
+    # solver-turn outputs update this -- the feedback turns are masked, so their
+    # weights-version is irrelevant.
     min_global_steps = None
     max_global_steps = None
 
@@ -250,7 +266,8 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
             output.num_preempted if output.num_preempted is not None else -1
         )
 
-      # Track weights-version span across turns (oldest stays, freshest advances).
+      # Track weights-version span across turns (oldest stays, freshest
+      # advances).
       turn_min = output.extra_fields.get("min_global_steps")
       turn_max = output.extra_fields.get("max_global_steps")
       if turn_min is not None and min_global_steps is None:
@@ -271,7 +288,8 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
 
       assistant_turns += 1
 
-      # Grade only the latest submission (env extracts the last ```python block).
+      # Grade only the latest submission (env extracts the last ```python
+      # block).
       assistant_text = self.tokenizer.decode(resp_ids, skip_special_tokens=True)
       with simple_timer("env_step", metrics):
         try:
@@ -299,7 +317,8 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
       # ── Build the user turn: a MODEL-written diagnosis (this is the only
       # ── difference from the oracle loop). When there is no parseable code to
       # ── diagnose (no failing cases surfaced), fall back to the env's fixed
-      # ── "no code block" message rather than prompting the user model on nothing.
+      # ── "no code block" message rather than prompting the user model on
+      # ── nothing.
       if step.failures:
         fb_messages = templates.build_feedback_model_messages(
             step.failures,
@@ -307,36 +326,41 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
             code=step.code,
             max_total_chars=(self.default_max_feedback_chars or None),
         )
-        # The user-model prompt is a throwaway inference on a SEPARATE sequence, so
-        # it does NOT go through the solver's prompt_length cap (which would left-
-        # truncate the problem). Tokenize it uncapped; its only real ceiling is the
-        # SGLang engine context window (prompt_length + response_length).
+        # The user-model prompt is a throwaway inference on a SEPARATE
+        # sequence, so it does NOT go through the solver's prompt_length cap
+        # (which would left-truncate the problem). Tokenize it uncapped; its
+        # only real ceiling is the SGLang engine context window
+        # (prompt_length + response_length).
         fb_prompt_ids = await self._tokenize_uncapped(fb_messages)
-        # Cap the diagnosis at max_feedback_tokens (exact token bound => the injected
-        # solver turn is skeleton + <= this, well under prompt_length). Never exceed
-        # the remaining solver response budget (the diagnosis lands in the response
-        # tail) nor overflow the engine context on this generate call.
+        # Cap the diagnosis at max_feedback_tokens (exact token bound => the
+        # injected solver turn is skeleton + <= this, well under prompt_length).
+        # Never exceed the remaining solver response budget (the diagnosis lands
+        # in the response tail) nor overflow the engine context on this generate
+        # call.
         engine_ctx = self.prompt_length + self.response_length
         fb_remaining = self.response_length - len(response_mask)
-        # Leave a margin so input+completion stays STRICTLY under engine_ctx: SGLang
-        # rejects a request whose prompt_len + max_new_tokens EQUALS the context length.
+        # Leave a margin so input+completion stays STRICTLY under engine_ctx:
+        # SGLang rejects a request whose prompt_len + max_new_tokens EQUALS the
+        # context length.
         fb_cap = min(
             self.max_feedback_tokens,
             fb_remaining,
             engine_ctx - len(fb_prompt_ids) - _CTX_MARGIN,
         )
         if fb_cap < 1:
-          # The problem+code+failures prompt nearly fills the context (or the solver
-          # response budget is spent), leaving no room to generate a diagnosis. Skip
-          # the user-model call and fall back to the generic instruction (no raw cases
-          # leaked) rather than issuing an over-context request that would crash.
+          # The problem+code+failures prompt nearly fills the context (or the
+          # solver response budget is spent), leaving no room to generate a
+          # diagnosis. Skip the user-model call and fall back to the generic
+          # instruction (no raw cases leaked) rather than issuing an
+          # over-context request that would crash.
           analysis = templates.EMPTY_DIAGNOSIS_FALLBACK
           feedback_empty += 1
         else:
           fb_sampling_params = {**sampling_params, "max_new_tokens": fb_cap}
           with simple_timer("generate_feedback", metrics):
             fb_output: TokenOutput = await self.server_manager.generate(
-                request_id=uuid4().hex,  # throwaway: not part of the solver sequence
+                # Throwaway: not part of the solver sequence.
+                request_id=uuid4().hex,
                 prompt_ids=fb_prompt_ids,
                 sampling_params=fb_sampling_params,
                 image_data=None,
@@ -348,17 +372,19 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
               fb_output.token_ids, skip_special_tokens=True
           )
           # Shared normalization (<think>-strip + empty fallback) so the offline
-          # validator injects byte-identical feedback. See templates.normalize_diagnosis.
+          # validator injects byte-identical feedback. See
+          # templates.normalize_diagnosis.
           analysis, was_empty = templates.normalize_diagnosis(raw_analysis)
           if was_empty:
             feedback_empty += 1
         if _DEBUG_FEEDBACK:
           # Distinct tag from env.py's [FEEDBACK_DBG] failing-case dump so the
-          # user-model diagnosis is unambiguous in the logs. This is the text the
-          # solver actually sees next turn.
+          # user-model diagnosis is unambiguous in the logs. This is the text
+          # the solver actually sees next turn.
           n = _DEBUG_FEEDBACK_PREVIEW
           logger.warning(
-              "[MODELFB_DBG] turn=%d n_failures=%d analysis_chars=%d analysis[:%d]=%r",
+              "[MODELFB_DBG] turn=%d n_failures=%d analysis_chars=%d "
+              "analysis[:%d]=%r",
               turn,
               len(step.failures),
               len(analysis),
@@ -367,7 +393,8 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
           )
         user_content = templates.build_model_feedback_user_message(analysis)
       else:
-        # No code / nothing to diagnose: use the env's fixed instruction verbatim.
+        # No code / nothing to diagnose: use the env's fixed instruction
+        # verbatim.
         user_content = step.feedback
 
       feedback_ids = await self.apply_chat_template(
@@ -419,15 +446,16 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
                 if solver_turn_lengths
                 else 0.0
             ),
-            # Per-conversation mean user-model diagnosis length (tokens). Averaged by
-            # the trainer across conversations. 0 when no feedback turn ran.
+            # Per-conversation mean user-model diagnosis length (tokens).
+            # Averaged by the trainer across conversations. 0 when no feedback
+            # turn ran.
             "feedback_resp_len_mean": (
                 sum(feedback_turn_lengths) / len(feedback_turn_lengths)
                 if feedback_turn_lengths
                 else 0.0
             ),
-            # Degeneracy guards: empty diagnoses (user said nothing) and feedback
-            # turns that overflowed the response budget.
+            # Degeneracy guards: empty diagnoses (user said nothing) and
+            # feedback turns that overflowed the response budget.
             "feedback_empty": feedback_empty,
             "feedback_overflow": feedback_overflow,
         },

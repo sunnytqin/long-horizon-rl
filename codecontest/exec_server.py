@@ -13,16 +13,18 @@
 # limitations under the License.
 """HTTP wrapper around ``local_exec`` for the sandboxed code-exec sidecar.
 
-Runs inside a slim, isolated container (no torch/CUDA -- stdlib only). The trainer's
-env POSTs a ``(code, tests)`` payload; we run the untrusted code with ``local_exec``'s
-existing multiprocessing + per-process RLIMIT guards and return the SAME
-``(all_pass, per_case, failures)`` that ``local_exec.eval_code_on_tests`` produces --
-so reward semantics are byte-identical to the in-process path, but the ``exec()`` now
-happens behind the container boundary instead of inside the trainer process.
+Runs inside a slim, isolated container (no torch/CUDA -- stdlib only). The
+trainer's env POSTs a ``(code, tests)`` payload; we run the untrusted code with
+``local_exec``'s existing multiprocessing + per-process RLIMIT guards and
+return the SAME ``(all_pass, per_case, failures)`` that
+``local_exec.eval_code_on_tests`` produces -- so reward semantics are
+byte-identical to the in-process path, but the ``exec()`` now happens behind
+the container boundary instead of inside the trainer process.
 
-Strong isolation is the *container's* job (cgroup ``--memory`` / ``--pids-limit`` /
-``--cpus``, ``--network`` internal-or-none, ``--read-only`` + ``--tmpfs``). This process
-only adds per-case timeouts and the global concurrency cap via ``local_exec``.
+Strong isolation is the *container's* job (cgroup ``--memory`` /
+``--pids-limit`` / ``--cpus``, ``--network`` internal-or-none, ``--read-only``
++ ``--tmpfs``). This process only adds per-case timeouts and the global
+concurrency cap via ``local_exec``.
 
 Env vars:
   CODECONTEST_EXEC_HOST          bind address (default 0.0.0.0)
@@ -32,8 +34,10 @@ Env vars:
 
 Endpoints:
   GET  /health  -> {"status": "ok", "concurrency": int}
-  POST /grade   -> body {code, test_input, test_output, time_limit?, max_gt_test?}
-                   reply {all_pass: bool, per_case: [bool], failures: [[inp,act,exp]]}
+  POST /grade   -> body  {code, test_input, test_output, time_limit?,
+                          max_gt_test?}
+                   reply {all_pass: bool, per_case: [bool],
+                          failures: [[inp,act,exp]]}
 """
 
 import json
@@ -87,7 +91,7 @@ class _Handler(BaseHTTPRequestHandler):
               "failures": [list(f) for f in failures],  # tuples -> JSON arrays
           },
       )
-    except Exception as e:  # noqa: BLE001 - one bad grade must not kill the server
+    except Exception as e:  # noqa: BLE001 - one bad grade must not kill it
       self._send(500, {"error": repr(e)})
 
   def log_message(self, *args):  # silence per-request stderr spam
@@ -97,13 +101,14 @@ class _Handler(BaseHTTPRequestHandler):
 class _Server(ThreadingHTTPServer):
   daemon_threads = True  # don't let in-flight grades block shutdown
   allow_reuse_address = True
-  # Kernel accept-queue depth (socketserver passes this to listen()). The default of
-  # 5 is overflowed by the rollout connect burst -- hundreds of trajectories POST a
-  # grade at their turn boundaries near-simultaneously, and connects past depth-5 get
-  # RST'd / dropped, surfacing in the trainer as ConnectionResetError(104) /
-  # TimeoutError(110) and a turn graded UNSOLVED with no feedback (a corrupted reward
-  # + an empty failing-case feedback turn). 1024 parks the burst instead of bouncing
-  # it; the kernel still clamps to net.core.somaxconn (4096 default), so this is safe.
+  # Kernel accept-queue depth (socketserver passes this to listen()). The
+  # default of 5 is overflowed by the rollout connect burst -- hundreds of
+  # trajectories POST a grade at their turn boundaries near-simultaneously, and
+  # connects past depth-5 get RST'd / dropped, surfacing in the trainer as
+  # ConnectionResetError(104) / TimeoutError(110) and a turn graded UNSOLVED
+  # with no feedback (a corrupted reward + an empty failing-case feedback
+  # turn). 1024 parks the burst instead of bouncing it; the kernel still clamps
+  # to net.core.somaxconn (4096 default), so this is safe.
   request_queue_size = 1024
 
 

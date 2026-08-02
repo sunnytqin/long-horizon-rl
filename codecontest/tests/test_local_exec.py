@@ -79,7 +79,7 @@ def test_timeout_is_handled():
 
 
 def test_memory_bomb_is_contained():
-  """A memory-bomb generation must hit the RLIMIT_AS cap (MemoryError -> failure),
+  """A memory-bomb generation must hit the RLIMIT_AS cap (MemoryError),
   NOT consume host RAM. Use a small cap (0.5GB) and a modest bomb (1.5GB) so the
   test is safe even if the cap somehow doesn't apply on this platform."""
   os.environ["CODECONTEST_EXEC_MEM_GB"] = "0.5"
@@ -103,7 +103,7 @@ def test_memory_bomb_is_contained():
 
 
 def test_concurrency_cap_bounds_live_processes():
-  """With EXEC_CONCURRENCY=2, a batch of 6 sleepy cases must serialize through the
+  """With EXEC_CONCURRENCY=2, 6 sleepy cases must serialize through the
   cap: 6 cases / 2 slots * ~1s each => well over 1s total (vs ~1s if unbounded).
   """
   os.environ["CODECONTEST_EXEC_CONCURRENCY"] = "2"

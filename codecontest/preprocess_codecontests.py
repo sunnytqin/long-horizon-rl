@@ -19,13 +19,14 @@ Both expose: question, task_id, test_input[list], test_output[list],
 
 Each output row carries the ground-truth tests in BOTH:
   - reward_model.ground_truth  (standard VERL reward channel), and
-  - extra_info.ground_truth    (read by codecontest.code_refine_agent at rollout)
+  - extra_info.ground_truth   (read by codecontest.code_refine_agent at
+                               rollout)
 so the same GT set drives mid-turn oracle feedback and the final binary reward.
 
-Usage:
-    python codecontest/preprocess_codecontests.py --local_dir ~/data/codecontests
-    # quick smoke slice:
-    python codecontest/preprocess_codecontests.py --local_dir /tmp/cc --max_train 20 --max_val 20
+Usage: python codecontest/preprocess_codecontests.py --local_dir
+~/data/codecontests # quick smoke slice: python
+codecontest/preprocess_codecontests.py --local_dir /tmp/cc --max_train 20
+--max_val 20
 """
 
 import argparse

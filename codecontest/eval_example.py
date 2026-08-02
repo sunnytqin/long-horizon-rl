@@ -268,7 +268,9 @@ def generate_by_openai_batch(prompts):
   batch_id = batch.id
   cprint(f"batch id: {batch_id}", color="green")
   cprint(
-      "You can check https://platform.openai.com/docs/guides/batch?lang=python to learn how to monitor and cancel this batch job with batch id and file id.",
+      "You can check "
+      "https://platform.openai.com/docs/guides/batch?lang=python to learn "
+      "how to monitor and cancel this batch job with batch id and file id.",
       color="green",
   )
 
@@ -298,7 +300,8 @@ def generate_by_openai_batch(prompts):
       total_num = batch.request_counts.total
       failed_num = batch.request_counts.failed
       print(
-          f"{idx * min_interval} minutes passed, {num_completed}/{total_num} completed, {failed_num} failed, {batch.status}"
+          f"{idx * min_interval} minutes passed, {num_completed}/"
+          f"{total_num} completed, {failed_num} failed, {batch.status}"
       )
 
   cprint(f"takes {time.time() - start_time}s to complete!", color="green")
@@ -466,12 +469,19 @@ def get_scaling_prompt(data_i, method):
     if n_example == 0:
       example_intro = """ """
     if n_example == 1:
-      example_intro = """We already have one test sample:\n Its input is {{example_input}}. Its output is {{example_output}}.\n"""
+      example_intro = (
+          "We already have one test sample:\n Its input is"
+          " {{example_input}}. Its output is {{example_output}}.\n"
+      )
       example_intro = Template(example_intro).render(
           example_input=example_input, example_output=example_output
       )
     if n_example > 1:
-      example_intro = """We already have {{n_sample}} test samples:\n The inputs are, respectively, {{example_input}}. The corresponding outputs are {{example_output}}.\n"""
+      example_intro = (
+          "We already have {{n_sample}} test samples:\n The inputs are,"
+          " respectively, {{example_input}}. The corresponding outputs are"
+          " {{example_output}}.\n"
+      )
       example_intro = Template(example_intro).render(
           n_sample=n_example,
           example_input=example_input,
@@ -499,7 +509,8 @@ def extract_test_cases(full_output):
   matches_input = re.findall(pattern_input_backticks, full_output, re.DOTALL)
   matches_output = re.findall(pattern_output_backticks, full_output, re.DOTALL)
 
-  # For Test Input: either use the updated triple-backtick version or fallback to plain text
+  # For Test Input: either use the updated triple-backtick version or fallback
+  # to plain text
   if matches_input:
     test_input = [modify(matches_input[-1].lstrip("\n"))]
   else:
@@ -515,12 +526,16 @@ def extract_test_cases(full_output):
     else:
       test_input = []
 
-  # For Test Output: either use the updated triple-backtick version or fallback to plain text
+  # For Test Output: either use the updated triple-backtick version or fallback
+  # to plain text
   if matches_output:
     test_output = [modify(matches_output[-1].lstrip("\n"))]
   else:
     # Fallback: capture until the **Explanation:** marker or end-of-string
-    pattern_output_plain = r"\*\*Test Output:\*\*\s*([\s\S]*?)(?=\*\*Explanation:|\*\*Test Input:|$)"
+    pattern_output_plain = (
+        r"\*\*Test Output:\*\*\s*([\s\S]*?)(?=\*\*Explanation:|\*\*Test "
+        r"Input:|$)"
+    )
     matches_output_plain = re.findall(
         pattern_output_plain, full_output, re.DOTALL
     )
@@ -1029,12 +1044,18 @@ def execute_scripts(outputs_name, num_chunks):
     p_00 = safe_divide(p_00_score, p_00_num)
 
     save_and_print(
-        f"code acc (average proportion of tasks the generated code can pass): {code_acc}\ncode accumulate acc (average proportion of unit tests the generated code can pass): {code_acc_acc}"
+        f"code acc (average proportion of tasks the generated code can "
+        f"pass): {code_acc}\ncode accumulate acc (average proportion of "
+        f"unit tests the generated code can pass): {code_acc_acc}"
     )
 
     if single_eval == False:
       save_and_print(
-          f"estimated unit test acc (average proportion of tasks that the generated unit test can pass all correct code): {case_acc}\nestimated unit test accumulate acc (average proportion of correct code that the generated unit test can pass): {case_acc_acc}"
+          f"estimated unit test acc (average proportion of tasks that the "
+          f"generated unit test can pass all correct code): {case_acc}\n"
+          f"estimated unit test accumulate acc (average proportion of "
+          f"correct code that the generated unit test can pass): "
+          f"{case_acc_acc}"
       )
 
       save_and_print(f"estimated p_01: {1 - p_01}")
@@ -1048,7 +1069,8 @@ def execute_scripts(outputs_name, num_chunks):
         save_and_print(f"acc: {acc}, accumulate acc: {acc_acc}")
 
       save_and_print(
-          f"code average response length: {mean_code}, unit test average response length: {mean_case}"
+          f"code average response length: {mean_code}, unit test average "
+          f"response length: {mean_case}"
       )
     else:
       save_and_print(f"code average response length: {mean_code}")

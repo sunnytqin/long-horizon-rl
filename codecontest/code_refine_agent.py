@@ -13,14 +13,16 @@
 # limitations under the License.
 """Multi-turn oracle code-refinement agent loop for CodeContests.
 
-A custom ``AgentLoopBase`` that reproduces ``run_oracle_iterative_eval`` as an RL
-rollout:
+A custom ``AgentLoopBase`` that reproduces ``run_oracle_iterative_eval`` as an
+RL rollout:
 
-  turn 0      : the solver writes code from the problem statement (assistant, mask=1)
-  turn 1..N-1 : env runs the code vs ground-truth tests; on failure it injects the
-                failing cases as a user turn (mask=0) and the solver refines.
-  termination : all GT tests pass (early stop), max assistant turns reached, or the
-                response budget would overflow.
+  turn 0      : the solver writes code from the problem statement
+                (assistant, mask=1)
+  turn 1..N-1 : env runs the code vs ground-truth tests; on failure it
+                injects the failing cases as a user turn (mask=0) and the
+                solver refines.
+  termination : all GT tests pass (early stop), max assistant turns reached,
+                or the response budget would overflow.
 
 Final reward (written to the last token via ``AgentLoopOutput.reward_score``):
   1.0 iff the model's final code passed all GT tests, else 0.0.
@@ -54,7 +56,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 @register("code_refine_agent")
 class CodeRefineAgentLoop(AgentLoopBase):
-  """Oracle multi-turn code-refinement loop (GT-test feedback, binary outcome reward)."""
+  """Oracle multi-turn refinement loop (GT-test feedback, binary reward)."""
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
@@ -67,7 +69,8 @@ class CodeRefineAgentLoop(AgentLoopBase):
     )
 
     # CodeContests-specific knobs. Read from an optional `codecontest` config
-    # block (add via `+codecontest.key=value` on the CLI); fall back to defaults.
+    # block (add via `+codecontest.key=value` on the CLI); fall back to
+    # defaults.
     cc = {}
     try:
       cc = self.config.get("codecontest", {}) or {}
@@ -82,13 +85,15 @@ class CodeRefineAgentLoop(AgentLoopBase):
     self.default_max_failures_shown = int(cc.get("max_failures_shown", 3))
     self.default_max_gt_test = int(cc.get("max_gt_test", 20))
     # Combined char budget for the injected feedback's failing-case fields. The
-    # feedback turn is checked against rollout.prompt_length (== data.max_prompt_length)
-    # and blindly tail-truncated above it (dropping the user-turn role framing), so we
-    # DERIVE the budget from that token cap instead of hardcoding. The cap is in tokens;
-    # convert with a conservative chars/token ratio for the digit/whitespace-heavy
-    # CodeContests I/O, times a fraction that leaves headroom for the chat-template
-    # wrapper + "Test i:"/"Input:" labels + indentation. Override (or pin an absolute
-    # value) with +codecontest.max_feedback_chars=<n>; <=0 falls back to the derived value.
+    # feedback turn is checked against rollout.prompt_length (==
+    # data.max_prompt_length) and blindly tail-truncated above it (dropping the
+    # user-turn role framing), so we DERIVE the budget from that token cap
+    # instead of hardcoding. The cap is in tokens; convert with a conservative
+    # chars/token ratio for the digit/whitespace-heavy CodeContests I/O, times a
+    # fraction that leaves headroom for the chat-template wrapper + "Test
+    # i:"/"Input:" labels + indentation. Override (or pin an absolute value)
+    # with +codecontest.max_feedback_chars=<n>; <=0 falls back to the derived
+    # value.
     _CHARS_PER_TOKEN = (
         3.0  # conservative for numeric/whitespace-heavy stdin/stdout
     )
@@ -109,13 +114,15 @@ class CodeRefineAgentLoop(AgentLoopBase):
     # whole rollout. Generous by default since grading can queue behind the
     # global exec-concurrency cap under heavy fan-out.
     self.env_step_timeout = float(cc.get("env_step_timeout", 180.0))
-    # SET 2 gradient-masking study: which solver turns get trained. "all" (default)
-    # reproduces prior behavior; "final_only" trains only the last solver turn (clean
-    # credit -- see codecontest/masking.py for why "refinement_only" was dropped).
+    # SET 2 gradient-masking study: which solver turns get trained. "all"
+    # (default) reproduces prior behavior; "final_only" trains only the last
+    # solver turn (clean credit -- see codecontest/masking.py for why
+    # "refinement_only" was dropped).
     self.train_turns = cc.get("train_turns", "all")
     if self.train_turns not in TRAIN_TURNS_MODES:
       raise ValueError(
-          f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, got {self.train_turns!r}"
+          f"codecontest.train_turns must be one of {TRAIN_TURNS_MODES}, "
+          f"got {self.train_turns!r}"
       )
 
   @rollout_trace_op
@@ -125,7 +132,8 @@ class CodeRefineAgentLoop(AgentLoopBase):
     messages = list(kwargs["raw_prompt"])
     extra_info = kwargs.get("extra_info", {}) or {}
 
-    # Ground-truth tests: prefer extra_info, fall back to reward_model.ground_truth.
+    # Ground-truth tests: prefer extra_info, fall back to
+    # reward_model.ground_truth.
     gt = extra_info.get("ground_truth")
     if gt is None:
       gt = (kwargs.get("reward_model", {}) or {}).get("ground_truth", {})
@@ -164,18 +172,21 @@ class CodeRefineAgentLoop(AgentLoopBase):
     solved = False
     overflow = False
     solved_at_turn = -1
-    # True solver-generated length per assistant turn, captured at generation time.
-    # Deliberately NOT derived from response_mask: the gradient-masking study mutates
-    # that mask, so it no longer reflects what the solver actually wrote.
+    # True solver-generated length per assistant turn, captured at generation
+    # time. Deliberately NOT derived from response_mask: the gradient-masking
+    # study mutates that mask, so it no longer reflects what the solver actually
+    # wrote.
     solver_turn_lengths: list[int] = []
     # (start, end) span of each solver turn within response_mask, for the SET 2
-    # gradient-masking policy applied after the loop (see codecontest/masking.py).
+    # gradient-masking policy applied after the loop (see
+    # codecontest/masking.py).
     solver_turn_spans: list[tuple[int, int]] = []
 
     # Off-policy staleness bookkeeping the trainer requires (see
-    # trainer_base._compute_metrics). Each server.generate() tags the output with the
-    # weights version it was produced on; we keep the oldest (min) and freshest (max)
-    # across turns. Must be plain ints, not None, or np.array(dtype=int) blows up.
+    # trainer_base._compute_metrics). Each server.generate() tags the output
+    # with the weights version it was produced on; we keep the oldest (min) and
+    # freshest (max) across turns. Must be plain ints, not None, or
+    # np.array(dtype=int) blows up.
     min_global_steps = None
     max_global_steps = None
 
@@ -207,7 +218,8 @@ class CodeRefineAgentLoop(AgentLoopBase):
             output.num_preempted if output.num_preempted is not None else -1
         )
 
-      # Track weights-version span across turns (oldest stays, freshest advances).
+      # Track weights-version span across turns (oldest stays, freshest
+      # advances).
       turn_min = output.extra_fields.get("min_global_steps")
       turn_max = output.extra_fields.get("max_global_steps")
       if turn_min is not None and min_global_steps is None:
@@ -228,7 +240,8 @@ class CodeRefineAgentLoop(AgentLoopBase):
 
       assistant_turns += 1
 
-      # Grade only the latest submission (env extracts the last ```python block).
+      # Grade only the latest submission (env extracts the last ```python
+      # block).
       assistant_text = self.tokenizer.decode(resp_ids, skip_special_tokens=True)
       with simple_timer("env_step", metrics):
         try:
@@ -270,7 +283,8 @@ class CodeRefineAgentLoop(AgentLoopBase):
         # for which raw field (usually `actual`, the model's stdout) caused it.
         # logger is WARN by default so this surfaces; print() gets swallowed.
         logger.warning(
-            "[FEEDBACK_DBG] turn=%d TRUNCATED feedback_chars=%d feedback_tokens=%d prompt_length_cap=%d",
+            "[FEEDBACK_DBG] turn=%d TRUNCATED feedback_chars=%d "
+            "feedback_tokens=%d prompt_length_cap=%d",
             turn,
             len(step.feedback),
             len(feedback_ids),
@@ -286,10 +300,11 @@ class CodeRefineAgentLoop(AgentLoopBase):
         response_logprobs += [0.0] * len(feedback_ids)
       user_turns += 1
 
-    # Binary outcome reward. Overflow while unsolved -> 0 (never reward a run that
-    # did not cleanly solve within budget). "discard_sample" is treated as 0 here
-    # because the agent loop cannot drop a sample without breaking GRPO grouping;
-    # true discarding, if ever needed, must happen upstream in the trainer.
+    # Binary outcome reward. Overflow while unsolved -> 0 (never reward a run
+    # that did not cleanly solve within budget). "discard_sample" is treated as
+    # 0 here because the agent loop cannot drop a sample without breaking GRPO
+    # grouping; true discarding, if ever needed, must happen upstream in the
+    # trainer.
     reward = 1.0 if solved else 0.0
 
     # SET 2: restrict the training loss to the selected solver turns (no-op for
@@ -318,8 +333,9 @@ class CodeRefineAgentLoop(AgentLoopBase):
             "solved_at_turn": solved_at_turn,
             "num_assistant_turns": assistant_turns,
             "overflow": overflow,
-            # Per-conversation mean assistant-turn length (tokens). Trainer averages this
-            # across conversations -> per-turn, across-turns-then-across-convos mega-avg.
+            # Per-conversation mean assistant-turn length (tokens). Trainer
+            # averages this across conversations -> per-turn,
+            # across-turns-then-across-convos mega-avg.
             "solver_resp_len_mean": (
                 sum(solver_turn_lengths) / len(solver_turn_lengths)
                 if solver_turn_lengths

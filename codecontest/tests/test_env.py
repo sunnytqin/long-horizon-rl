@@ -19,7 +19,10 @@ from codecontest.env import GTOracleEnv
 GT_IN = ["2 3\n", "10 20\n", "1 1\n", "4 5\n"]
 GT_OUT = ["5\n", "30\n", "2\n", "9\n"]
 
-GOOD = "```python\nimport sys\na,b=map(int,sys.stdin.read().split())\nprint(a+b)\n```"
+GOOD = (
+    "```python\nimport sys\na,b=map(int,sys.stdin.read().split())\nprint(a+b)\n"
+    "```"
+)
 BAD = "Here is my attempt:\n```python\nprint(0)\n```"
 NO_CODE = "I think the answer is to add the numbers."
 

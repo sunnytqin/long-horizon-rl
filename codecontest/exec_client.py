@@ -13,25 +13,27 @@
 # limitations under the License.
 """Client shim: route untrusted code grading to the sandbox exec server.
 
-``GTOracleEnv`` calls ``eval_code_on_tests`` here instead of ``local_exec`` so the
-actual ``exec()`` of model output happens inside an isolated sibling container, not
-in the trainer process. The wire format mirrors ``local_exec.eval_code_on_tests``
-exactly (same args in, same ``(all_pass, per_case, failures)`` out, with the same
-``normalise``/``outputs_match`` comparison run server-side), so reward semantics are
-identical to the in-process path.
+``GTOracleEnv`` calls ``eval_code_on_tests`` here instead of ``local_exec`` so
+the actual ``exec()`` of model output happens inside an isolated sibling
+container, not in the trainer process. The wire format mirrors
+``local_exec.eval_code_on_tests`` exactly (same args in, same ``(all_pass,
+per_case, failures)`` out, with the same ``normalise``/``outputs_match``
+comparison run server-side), so reward semantics are identical to the in-process
+path.
 
-In-process mode is STRICTLY WORSE (it is the mode where bad model code can kill a
-rollout worker), so it is never used silently. It runs only when explicitly opted in
-via ``CODECONTEST_ALLOW_INPROCESS=1`` -- which the no-sidecar smoke/dev run sets. A
-real training job instead guarantees the sidecar is up (entrypoint.sh hard-fails if
-it is not), so ``CODECONTEST_EXEC_URL`` is always set there.
+In-process mode is STRICTLY WORSE (it is the mode where bad model code can kill
+a rollout worker), so it is never used silently. It runs only when explicitly
+opted in via ``CODECONTEST_ALLOW_INPROCESS=1`` -- which the no-sidecar smoke/dev
+run sets. A real training job instead guarantees the sidecar is up
+(entrypoint.sh hard-fails if it is not), so ``CODECONTEST_EXEC_URL`` is always
+set there.
 
 Failure policy: a grade request must NEVER raise. The agent loop
-(``code_refine_agent.run``) only catches ``asyncio.TimeoutError`` around ``env.step``;
-any other exception would crash the whole rollout. So on a server blip we retry, and
-if still unreachable we grade the turn as unsolved-with-no-feedback. A persistently
-down server therefore shows up as all-zero reward (loudly visible) rather than a
-crash.
+(``code_refine_agent.run``) only catches ``asyncio.TimeoutError`` around
+``env.step``; any other exception would crash the whole rollout. So on a server
+blip we retry, and if still unreachable we grade the turn as
+unsolved-with-no-feedback. A persistently down server therefore shows up as
+all-zero reward (loudly visible) rather than a crash.
 """
 
 import json
@@ -46,12 +48,14 @@ from codecontest import local_exec
 logger = logging.getLogger(__name__)
 
 _GRADE_PATH = "/grade"
-# Client-side wall on one grade request. Keep under the agent loop's env_step_timeout
-# (default 180s) so a slow server surfaces as a normal unsolved turn, not a hang.
+# Client-side wall on one grade request. Keep under the agent loop's
+# env_step_timeout (default 180s) so a slow server surfaces as a normal unsolved
+# turn, not a hang.
 _HTTP_TIMEOUT = float(os.environ.get("CODECONTEST_EXEC_HTTP_TIMEOUT", "150"))
 _RETRIES = int(os.environ.get("CODECONTEST_EXEC_HTTP_RETRIES", "3"))
 
-# One-shot guard so a misconfigured run logs the refusal once, not once per grade.
+# One-shot guard so a misconfigured run logs the refusal once, not once per
+# grade.
 _warned_no_url = [False]
 
 
@@ -70,18 +74,20 @@ def eval_code_on_tests(
   """
   url = _server_url()
   if not url:
-    # No sidecar configured. In-process exec (Phase 0) is strictly worse -- it's the
-    # mode where bad code can kill a rollout worker -- so we never use it silently.
-    # Allowed only as an explicit opt-in for the no-sidecar smoke/dev run.
+    # No sidecar configured. In-process exec (Phase 0) is strictly worse -- it's
+    # the mode where bad code can kill a rollout worker -- so we never use it
+    # silently. Allowed only as an explicit opt-in for the no-sidecar smoke/dev
+    # run.
     if os.environ.get("CODECONTEST_ALLOW_INPROCESS") == "1":
       return local_exec.eval_code_on_tests(
           code, test_input, test_output, time_limit, max_gt_test
       )
     if not _warned_no_url[0]:
       logger.error(
-          "CODECONTEST_EXEC_URL is unset and CODECONTEST_ALLOW_INPROCESS != 1: refusing "
-          "the strictly-worse in-process exec and grading every turn as UNSOLVED. Start "
-          "the sidecar (entrypoint.sh) or set CODECONTEST_ALLOW_INPROCESS=1 for dev/smoke."
+          "CODECONTEST_EXEC_URL is unset and CODECONTEST_ALLOW_INPROCESS != 1:"
+          " refusing the strictly-worse in-process exec and grading every turn"
+          " as UNSOLVED. Start the sidecar (entrypoint.sh) or set"
+          " CODECONTEST_ALLOW_INPROCESS=1 for dev/smoke."
       )
       _warned_no_url[0] = True
     return False, [], []
@@ -114,7 +120,12 @@ def eval_code_on_tests(
           obj["per_case"],
           [tuple(f) for f in obj["failures"]],
       )
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:  # noqa: PERF203
+    except (  # noqa: PERF203
+        urllib.error.URLError,
+        OSError,
+        ValueError,
+        KeyError,
+    ) as e:
       last_err = e
       if attempt + 1 < _RETRIES:
         time.sleep(0.5 * (attempt + 1))
