@@ -15,8 +15,8 @@
 
 This replaces the internal "xbox" execution server used by the tunix eval
 harness with a self-contained local executor, reusing the multiprocessing-based
-exec pattern from ``codecontest/eval_example.py``. It is used both for
-mid-conversation oracle feedback and for the final binary reward.
+exec pattern from Gen-Verse's ``eval_example.py`` (not vendored). It is used
+both for mid-conversation oracle feedback and for the final binary reward.
 
 Security note: this runs untrusted model output in a child process guarded by a
 wall-clock timeout AND a per-process address-space cap (``RLIMIT_AS``), plus a
@@ -42,10 +42,10 @@ import threading
 import time
 import typing
 
-# A spawn/fork-safe context. "fork" is fastest on Linux and matches
-# eval_example.py. We keep fork (no torch/CUDA re-import tax that `spawn` would
-# incur from the trainer process) and rely on a *relative* RLIMIT_AS in the
-# child for memory safety.
+# A spawn/fork-safe context. "fork" is fastest on Linux and matches the
+# upstream harness. We keep fork (no torch/CUDA re-import tax that `spawn`
+# would incur from the trainer process) and rely on a *relative* RLIMIT_AS in
+# the child for memory safety.
 _MP_CTX = mp.get_context("fork")
 
 # Per-process memory headroom: a forked child inherits the parent's (possibly
@@ -85,7 +85,7 @@ def _apply_mem_limit() -> None:
 
 
 # ── output normalization & comparison ──
-# Matches eval_example.modify / test_if_eq.
+# Matches the upstream harness's modify / test_if_eq.
 
 
 def normalise(s: str) -> str:
@@ -97,7 +97,7 @@ def normalise(s: str) -> str:
 
 
 def outputs_match(actual: str, expected: str) -> bool:
-  """Whitespace-insensitive equality, identical to eval_example.test_if_eq."""
+  """Whitespace-insensitive equality, identical to upstream's test_if_eq."""
   return " ".join(str(actual).split()) == " ".join(str(expected).split())
 
 
@@ -113,7 +113,7 @@ def extract_code(text: str) -> typing.Optional[str]:
 
 
 # ── subprocess execution ──
-# Ported from eval_example.worker / run_scripts_with_timeout.
+# Ported from the upstream harness's worker / run_scripts_with_timeout.
 
 
 # BLAS/OpenMP thread caps applied in each exec child BEFORE the untrusted code

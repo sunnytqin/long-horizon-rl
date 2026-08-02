@@ -150,3 +150,9 @@ colbench/runs/spec/spec_eval_selfplay_1k_*
 # Pure execution side-effects, always 0 bytes -- never source.
 *.db
 *.sqlite
+
+# Vendored Gen-Verse CodeContests eval harness, kept locally as the reference
+# that codecontest/local_exec.py ports its exec pattern from. Never imported or
+# run by this project (its evaluation_config defaults module is not vendored),
+# so it is not tracked -- see codecontest/local_exec.py for what was ported.
+codecontest/eval_example.py
