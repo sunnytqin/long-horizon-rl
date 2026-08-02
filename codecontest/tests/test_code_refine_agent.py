@@ -106,7 +106,7 @@ def test_fail_fail_pass_gets_reward_1_and_correct_mask():
       _build_loop([([1], FAIL_CODE), ([2], FAIL_CODE), ([3], PASS_CODE)])
   )
   assert out.reward_score == 1.0
-  assert out.extra_fields["solved"] is True
+  assert out.extra_fields["solved"]
   assert out.extra_fields["solved_at_turn"] == 2
   assert out.extra_fields["num_assistant_turns"] == 3
   # assistant token (1) + feedback(0,0,0) + assistant(1) + feedback(0,0,0) +
@@ -144,7 +144,7 @@ def test_all_fail_gets_reward_0_no_trailing_feedback():
       _build_loop([([1], FAIL_CODE), ([2], FAIL_CODE), ([3], FAIL_CODE)])
   )
   assert out.reward_score == 0.0
-  assert out.extra_fields["solved"] is False
+  assert not out.extra_fields["solved"]
   assert out.extra_fields["num_assistant_turns"] == 3
   # last (3rd) assistant turn is not followed by feedback
   assert out.response_mask == [1, 0, 0, 0, 1, 0, 0, 0, 1]
@@ -167,8 +167,8 @@ def test_overflow_before_solve_gives_reward_0():
   )
   out = _run(loop)
   assert out.reward_score == 0.0
-  assert out.extra_fields["overflow"] is True
-  assert out.extra_fields["solved"] is False
+  assert out.extra_fields["overflow"]
+  assert not out.extra_fields["solved"]
   assert out.extra_fields["num_assistant_turns"] == 1
 
 

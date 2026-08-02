@@ -35,17 +35,17 @@ def _env(**kw):
 
 def test_passing_submission_solves_and_terminates():
   res = _env().step(GOOD)
-  assert res.solved is True
-  assert res.should_terminate is True
-  assert res.had_code is True
+  assert res.solved
+  assert res.should_terminate
+  assert res.had_code
   assert res.feedback == templates.SOLVER_CORRECT_MESSAGE
 
 
 def test_failing_submission_gives_feedback():
   res = _env(max_failures_shown=2).step(BAD)
-  assert res.solved is False
-  assert res.should_terminate is False
-  assert res.had_code is True
+  assert not res.solved
+  assert not res.should_terminate
+  assert res.had_code
   assert 1 <= res.num_failures_shown <= 2
   assert "Test 1:" in res.feedback
   assert "Expected output:" in res.feedback
@@ -53,9 +53,9 @@ def test_failing_submission_gives_feedback():
 
 def test_no_code_block_requests_code():
   res = _env().step(NO_CODE)
-  assert res.had_code is False
-  assert res.solved is False
-  assert res.should_terminate is False
+  assert not res.had_code
+  assert not res.solved
+  assert not res.should_terminate
   assert "python" in res.feedback.lower()
 
 

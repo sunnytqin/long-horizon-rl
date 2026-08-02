@@ -46,7 +46,7 @@ def test_good_code_passes_all():
   all_pass, per_case, failures = local_exec.eval_code_on_tests(
       GOOD_CODE, GT_IN, GT_OUT
   )
-  assert all_pass is True
+  assert all_pass
   assert per_case == [True, True, True]
   assert failures == []
 
@@ -55,7 +55,7 @@ def test_bad_code_fails_with_failures():
   all_pass, per_case, failures = local_exec.eval_code_on_tests(
       BAD_CODE, GT_IN, GT_OUT
   )
-  assert all_pass is False
+  assert not all_pass
   # "0" matches the third case (0+0=0) but not the first two.
   assert per_case == [False, False, True]
   assert len(failures) == 2
@@ -67,14 +67,14 @@ def test_none_code_returns_unsolved():
   all_pass, per_case, failures = local_exec.eval_code_on_tests(
       None, GT_IN, GT_OUT
   )
-  assert all_pass is False and per_case == [] and failures == []
+  assert not all_pass and per_case == [] and failures == []
 
 
 def test_timeout_is_handled():
   all_pass, per_case, failures = local_exec.eval_code_on_tests(
       TIMEOUT_CODE, ["1 1\n"], ["2\n"], time_limit=1.0
   )
-  assert all_pass is False
+  assert not all_pass
   assert per_case == [False]
 
 
@@ -90,13 +90,13 @@ def test_memory_bomb_is_contained():
     all_pass, per_case, _failures = local_exec.eval_code_on_tests(
         bomb, ["1\n"], ["1610612736\n"], time_limit=15.0
     )
-    assert all_pass is False
+    assert not all_pass
     assert per_case == [False]
     # Normal small code must still run fine under the tight cap.
     ok_pass, ok_per_case, _ = local_exec.eval_code_on_tests(
         GOOD_CODE, ["2 3\n"], ["5\n"]
     )
-    assert ok_pass is True and ok_per_case == [True]
+    assert ok_pass and ok_per_case == [True]
   finally:
     os.environ.pop("CODECONTEST_EXEC_MEM_GB", None)
     importlib.reload(local_exec)
