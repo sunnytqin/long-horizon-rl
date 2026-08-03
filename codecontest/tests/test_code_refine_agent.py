@@ -42,6 +42,7 @@ FEEDBACK_IDS = [101, 102, 103]  # what the mocked apply_chat_template returns
 
 
 class _FakeTokenizer:
+  """Decodes token-id tuples via a fixed map instead of a real vocabulary."""
 
   def __init__(self, id_to_text):
     self._map = id_to_text

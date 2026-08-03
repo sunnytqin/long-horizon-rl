@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Standalone multi-turn validation / inspection harness for the solver.
+r"""Standalone multi-turn validation / inspection harness for the solver.
 
 Runs the SAME multi-turn code-refinement conversation as training on the
 validation/test set, but as an *offline* SGLang batch job with freely tunable
