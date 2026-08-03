@@ -36,7 +36,7 @@ repos:
 
       - id: check-license
         name: Check license
-        entry: python3 tests/special_sanity/check_license.py --directories . --exclude colbench
+        entry: python3 tests/special_sanity/check_license.py --directories . --exclude colbench codecontest
         language: python
         pass_filenames: false
 
