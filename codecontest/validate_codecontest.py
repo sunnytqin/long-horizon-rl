@@ -87,6 +87,11 @@ runs/eval_step120_turns4_n1_t0.json and runs/eval_step120_turns4_n8_t0.8.json
         --n_samples 8 --temperatures 0.0 0.8
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -110,6 +115,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # bookkeeping.
 # --------------------------------------------------------------------------- #
 class Trajectory:
+  """One (problem, sample) rollout: conversation, oracle env and bookkeeping."""
 
   def __init__(
       self,
@@ -156,6 +162,7 @@ class Trajectory:
     )
 
   def to_dict(self):
+    """Returns this trajectory as a JSON-serialisable dict for the dump."""
     return {
         "row_index": self.row_index,
         "task_id": self.task_id,
@@ -176,7 +183,16 @@ class Trajectory:
 
 
 def build_trajectories(val_df, n_samples, eval_args):
-  """Expand each validation row into ``n_samples`` independent trajectories."""
+  """Expand each validation row into ``n_samples`` independent trajectories.
+
+  Args:
+    val_df: the validation parquet as a DataFrame.
+    n_samples: independent samples to draw per problem.
+    eval_args: parsed CLI args supplying the env's exec/feedback caps.
+
+  Returns:
+    A flat list of ``Trajectory``, ``n_samples`` per row of ``val_df``.
+  """
   trajs = []
   for row_index, row in val_df.iterrows():
     extra_info = row.get("extra_info", {}) or {}
@@ -228,8 +244,15 @@ def pass_at_k(n, c, k):
 
       pass@k = 1 - C(n-c, k) / C(n, k)
 
-  Returns None when k > n (not enough samples to define it). Uses exact integer
-  binomials (n is tiny here, so no overflow concern).
+  Uses exact integer binomials (n is tiny here, so no overflow concern).
+
+  Args:
+    n: total samples drawn for this problem.
+    c: how many of them succeeded.
+    k: the k in pass@k.
+
+  Returns:
+    The pass@k estimate, or ``None`` when ``k > n`` and it is undefined.
   """
   if k > n:
     return None
@@ -253,6 +276,13 @@ def per_turn_pass_at_k(by_problem, max_turns):
 
   per_turn[0]["pass@k"]["1"] is the sample-averaged single-turn solve rate --
   the number that must match a matched-n single-turn run's pass@1.
+
+  Args:
+    by_problem: trajectories grouped by task id.
+    max_turns: how many turn cutoffs to report.
+
+  Returns:
+    One ``{"turn": t, "pass@k": {k: value}}`` dict per cutoff.
   """
   per_turn = []
   for t in range(max_turns):
@@ -289,6 +319,16 @@ def eval_tagged_path(base_out, turns, n_samples, temperature, feedback_mode):
 
   e.g. ("runs/eval_step120.json", 4, 8, 0.8, "model_feedback")
        -> "runs/eval_step120_turns4_n8_t0.8_modelfb.json"
+
+  Args:
+    base_out: the user-supplied output path.
+    turns: max assistant turns for this config.
+    n_samples: samples per problem, after the t=0 adjustment.
+    temperature: sampling temperature for this config.
+    feedback_mode: "oracle" or "model_feedback".
+
+  Returns:
+    The tagged output path.
   """
   root, ext = os.path.splitext(base_out)
   mode_tag = _MODE_TAG[feedback_mode]
@@ -304,8 +344,7 @@ def build_next_user_turns(
   """Resolve the next user-turn text for each failed-but-continuing trajectory.
 
   ``pending`` is a list of ``(traj, StepResult)`` for trajectories that were
-  graded this turn, did not solve, and are not on the last turn. Returns a list
-  of user-turn strings aligned to ``pending``.
+  graded this turn, did not solve, and are not on the last turn.
 
   - oracle mode: the env already built the failing-case feedback -> inject
     ``step.feedback``.
@@ -318,9 +357,21 @@ def build_next_user_turns(
     failing cases (no parseable code) fall back to the env's fixed instruction,
     matching the agent loop's ``else`` branch. Per-trajectory feedback
     bookkeeping is mutated in place.
+
+  Args:
+    pending: the ``(traj, StepResult)`` pairs still in play this turn.
+    feedback_mode: "oracle" or "model_feedback".
+    llm: the engine used for the user-model call (model mode only).
+    tokenizer: tokenizer for the user-model prompt (model mode only).
+    args: parsed CLI args supplying the feedback caps.
+    max_model_len: engine context length, used to bound generation.
+    sampling_params: sampling params for the user-model call.
+
+  Returns:
+    One user-turn string per entry of ``pending``, in the same order.
   """
   if feedback_mode == "oracle":
-    return [step.feedback for (_t, step) in pending]
+    return [step.feedback for (_, step) in pending]
 
   # ---- model mode ----
   # Build the user-model prompts, batch-generate, normalize, wrap.
@@ -332,7 +383,7 @@ def build_next_user_turns(
   # rejects a request whose input_len + max_new_tokens EQUALS the context length
   # (not just exceeds), and our token count can drift a little from the
   # engine's. Matches the main loop's guard.
-  CTX_MARGIN = 8
+  ctx_margin = 8
   for i, (t, step) in enumerate(pending):
     if not step.failures:
       # No code / nothing to diagnose: use the env's fixed message (agent-loop
@@ -361,7 +412,7 @@ def build_next_user_turns(
     fb_cap = min(
         args.max_feedback_tokens,
         fb_remaining,
-        engine_ctx - fb_input_len - CTX_MARGIN,
+        engine_ctx - fb_input_len - ctx_margin,
     )
     if fb_cap < 1:
       # The problem+code+failures prompt nearly fills the context (or the
@@ -382,7 +433,7 @@ def build_next_user_turns(
   if fb_prompts:
     fb_outputs = llm.generate(prompt=fb_prompts, sampling_params=fb_params)
     for i, out in zip(fb_slots, fb_outputs):
-      t, _step = pending[i]
+      t, _ = pending[i]
       analysis, was_empty = templates.normalize_diagnosis(out["text"])
       t.feedback_turn_lengths.append(
           int(out["meta_info"].get("completion_tokens", 0))
@@ -407,9 +458,21 @@ def run_eval(
 
   The (expensive) SGLang engine is loaded once by the caller and shared across
   every temperature; only the per-request sampling params and the fresh
-  trajectory state differ between calls. ``n_samples`` is the (possibly
-  temperature-adjusted) number of trajectories per problem -- greedy decoding
-  (temperature 0) is forced to 1 sample.
+  trajectory state differ between calls.
+
+  Args:
+    llm: the shared SGLang engine.
+    tokenizer: tokenizer matching ``llm``.
+    val_df: the validation parquet as a DataFrame.
+    temperature: sampling temperature for this run.
+    n_samples: trajectories per problem; greedy decoding (temperature 0) is
+      forced to 1 sample.
+    args: parsed CLI args supplying the eval caps and feedback mode.
+    out_path: where to write the JSON dump.
+    max_model_len: engine context length, used to bound generation.
+
+  Returns:
+    The summary dict that was written to ``out_path``.
   """
   # SGLang sampling params (dict, applied to every request in a batch). Note the
   # name is ``max_new_tokens`` here, and top_k=-1 means "use the whole
@@ -455,13 +518,13 @@ def run_eval(
     # as overflow.
     prompts, per_req_params, kept = [], [], []
     # Small safety margin for tokenization drift between our count and SGLang's.
-    CTX_MARGIN = 8
+    ctx_margin = 8
     for t in gen_batch:
       prompt_text = tokenizer.apply_chat_template(
           t.messages, add_generation_prompt=True, tokenize=False
       )
       input_len = len(tokenizer.encode(prompt_text, add_special_tokens=False))
-      room = max_model_len - input_len - CTX_MARGIN
+      room = max_model_len - input_len - ctx_margin
       if room <= 0:
         t.overflow = True
         t.done = True
@@ -637,6 +700,11 @@ def run_eval(
 
 
 def main():
+  """Parses CLI args, loads the engine once and runs every eval config.
+
+  Raises:
+    SystemExit: if the requested exec backend is unavailable.
+  """
   ap = argparse.ArgumentParser(
       description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
   )

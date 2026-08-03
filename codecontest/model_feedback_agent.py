@@ -38,6 +38,11 @@ No new config knobs: the feedback call reuses the solver ``sampling_params``
 ``max_new_tokens_per_turn``.
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 import asyncio
 import logging
 import os
@@ -94,8 +99,8 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
     cc = {}
     try:
       cc = self.config.get("codecontest", {}) or {}
-    except Exception:  # noqa: BLE001 - config may not define the block
-      cc = {}
+    except Exception:  # pylint: disable=broad-exception-caught
+      cc = {}  # the config may not define the block at all
     # Per-turn generation cap (tokens). None -> use remaining response budget.
     # The user-model feedback call reuses this same cap (no separate knob).
     self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
@@ -112,9 +117,9 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
     # is that problem+code+failures must still fit prompt_length (else the
     # agent loop left-truncates the problem). Derived from prompt_length by
     # default; pin an absolute value via +codecontest.max_feedback_chars.
-    _FEEDBACK_BUDGET_FRACTION = 0.5
+    feedback_budget_fraction = 0.5
     _derived_max_feedback_chars = int(
-        self.prompt_length * _CHARS_PER_TOKEN * _FEEDBACK_BUDGET_FRACTION
+        self.prompt_length * _CHARS_PER_TOKEN * feedback_budget_fraction
     )
     _cfg_max_feedback_chars = int(cc.get("max_feedback_chars", 0) or 0)
     self.default_max_feedback_chars = (
@@ -150,7 +155,9 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
           f"got {self.train_turns!r}"
       )
 
-  async def _tokenize_uncapped(self, messages: list[dict]) -> list[int]:
+  async def _tokenize_uncapped(
+      self, messages: list[dict[str, str]]
+  ) -> list[int]:
     """Tokenize a chat-message list WITHOUT the solver's prompt_length cap.
 
     ``AgentLoopBase.apply_chat_template`` left-truncates any prompt over
@@ -159,6 +166,12 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
     statement). This variant returns the full ids; the caller bounds generation
     so prompt+gen fit the engine context. Text-only path (``self.processor`` is
     None for this model).
+
+    Args:
+      messages: the chat messages to tokenize.
+
+    Returns:
+      The full, uncapped token ids for ``messages``.
     """
     ids = await self.loop.run_in_executor(
         None,
@@ -172,6 +185,17 @@ class ModelFeedbackAgentLoop(AgentLoopBase):
   async def run(
       self, sampling_params: dict[str, Any], **kwargs
   ) -> AgentLoopOutput:
+    """Runs one rollout where the feedback turn is written by the policy.
+
+    Args:
+      sampling_params: generation params, reused for the feedback call too.
+      **kwargs: the dataset row, including ``raw_prompt`` and ``extra_info``
+        (or ``reward_model``) carrying the ground-truth tests.
+
+    Returns:
+      The ``AgentLoopOutput`` for this trajectory. The model-written feedback
+      turns are present but masked to 0, so training stays solver-only.
+    """
     messages = list(kwargs["raw_prompt"])
     extra_info = kwargs.get("extra_info", {}) or {}
 

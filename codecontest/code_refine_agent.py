@@ -37,6 +37,11 @@ still unsolved, we stop and assign reward 0 (``on_overflow=end_zero_reward``,
 default) -- we never reward a run that did not cleanly solve within budget.
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 import asyncio
 import logging
 import os
@@ -77,8 +82,8 @@ class CodeRefineAgentLoop(AgentLoopBase):
     cc = {}
     try:
       cc = self.config.get("codecontest", {}) or {}
-    except Exception:  # noqa: BLE001 - config may not define the block
-      cc = {}
+    except Exception:  # pylint: disable=broad-exception-caught
+      cc = {}  # the config may not define the block at all
     # Per-turn generation cap (tokens). None -> use remaining response budget.
     self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
     # Overflow handling: "end_zero_reward" (default) or "discard_sample".
@@ -97,14 +102,14 @@ class CodeRefineAgentLoop(AgentLoopBase):
     # i:"/"Input:" labels + indentation. Override (or pin an absolute value)
     # with +codecontest.max_feedback_chars=<n>; <=0 falls back to the derived
     # value.
-    _CHARS_PER_TOKEN = (
+    chars_per_token = (
         3.0  # conservative for numeric/whitespace-heavy stdin/stdout
     )
-    _FEEDBACK_BUDGET_FRACTION = (
+    feedback_budget_fraction = (
         0.5  # share of prompt_length reserved for feedback content
     )
     _derived_max_feedback_chars = int(
-        self.prompt_length * _CHARS_PER_TOKEN * _FEEDBACK_BUDGET_FRACTION
+        self.prompt_length * chars_per_token * feedback_budget_fraction
     )
     _cfg_max_feedback_chars = int(cc.get("max_feedback_chars", 0) or 0)
     self.default_max_feedback_chars = (
@@ -132,6 +137,17 @@ class CodeRefineAgentLoop(AgentLoopBase):
   async def run(
       self, sampling_params: dict[str, Any], **kwargs
   ) -> AgentLoopOutput:
+    """Runs one multi-turn rollout: solve, grade, refine until done.
+
+    Args:
+      sampling_params: generation params passed through to the rollout engine.
+      **kwargs: the dataset row, including ``raw_prompt`` and ``extra_info``
+        (or ``reward_model``) carrying the ground-truth tests.
+
+    Returns:
+      The ``AgentLoopOutput`` for this trajectory: prompt/response ids, the
+      per-token training mask and the binary outcome reward.
+    """
     messages = list(kwargs["raw_prompt"])
     extra_info = kwargs.get("extra_info", {}) or {}
 

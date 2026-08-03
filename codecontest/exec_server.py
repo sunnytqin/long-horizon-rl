@@ -40,17 +40,34 @@ Endpoints:
                           failures: [[inp,act,exp]]}
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 import json
 import os
+from typing import Any
 
 from codecontest import local_exec
 
 
 class _Handler(BaseHTTPRequestHandler):
+  """Serves the two grading endpoints described in the module docstring."""
 
-  def _send(self, code: int, obj: dict) -> None:
+  # http.server dispatches a request by looking up "do_" + the HTTP verb, so
+  # these method names are fixed by the base class and cannot be snake_case.
+  # pylint: disable=invalid-name
+
+  def _send(self, code: int, obj: dict[str, Any]) -> None:
+    """Writes ``obj`` as a JSON response body.
+
+    Args:
+      code: HTTP status code to send.
+      obj: payload to serialise as the response body.
+    """
     body = json.dumps(obj).encode("utf-8")
     self.send_response(code)
     self.send_header("Content-Type", "application/json")
@@ -59,21 +76,24 @@ class _Handler(BaseHTTPRequestHandler):
     self.wfile.write(body)
 
   def do_GET(self):  # noqa: N802 - http.server API
+    """Answers the ``/health`` probe."""
     if self.path == "/health":
       self._send(
-          200, {"status": "ok", "concurrency": local_exec._EXEC_CONCURRENCY}
+          200, {"status": "ok", "concurrency": local_exec.EXEC_CONCURRENCY}
       )
     else:
       self._send(404, {"error": "not found"})
 
   def do_POST(self):  # noqa: N802 - http.server API
+    """Grades one ``/grade`` payload and replies with the verdict."""
     if self.path != "/grade":
       self._send(404, {"error": "not found"})
       return
     try:
       length = int(self.headers.get("Content-Length") or 0)
       payload = json.loads(self.rfile.read(length).decode("utf-8"))
-    except Exception as e:  # noqa: BLE001 - malformed request, not our problem
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      # A malformed request is the client's problem, not ours.
       self._send(400, {"error": f"bad request: {e!r}"})
       return
     try:
@@ -92,14 +112,28 @@ class _Handler(BaseHTTPRequestHandler):
               "failures": [list(f) for f in failures],  # tuples -> JSON arrays
           },
       )
-    except Exception as e:  # noqa: BLE001 - one bad grade must not kill it
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      # One bad grade must not take the whole sidecar down.
       self._send(500, {"error": repr(e)})
 
-  def log_message(self, *args):  # silence per-request stderr spam
-    pass
+  def log_message(self, *args):
+    """Drops the per-request access log, which is pure stderr spam here.
+
+    Args:
+      *args: the base class's printf-style log arguments, all ignored.
+    """
+    del args
 
 
 class _Server(ThreadingHTTPServer):
+  """Threading HTTP server tuned for the rollout's bursty connect pattern.
+
+  Attributes:
+    daemon_threads: True so in-flight grades never block shutdown.
+    allow_reuse_address: True so a restart does not wait out TIME_WAIT.
+    request_queue_size: kernel accept-queue depth; see the comment below.
+  """
+
   daemon_threads = True  # don't let in-flight grades block shutdown
   allow_reuse_address = True
   # Kernel accept-queue depth (socketserver passes this to listen()). The
@@ -114,13 +148,14 @@ class _Server(ThreadingHTTPServer):
 
 
 def main() -> None:
+  """Serves grading requests until interrupted."""
   host = os.environ.get("CODECONTEST_EXEC_HOST", "0.0.0.0")
   port = int(os.environ.get("CODECONTEST_EXEC_PORT", "8088"))
   server = _Server((host, port), _Handler)
   print(
       f"[exec_server] listening on {host}:{port} "
-      f"(concurrency={local_exec._EXEC_CONCURRENCY}, "
-      f"mem_gb={local_exec._EXEC_MEM_LIMIT_BYTES / (1024 ** 3):.1f})",
+      f"(concurrency={local_exec.EXEC_CONCURRENCY}, "
+      f"mem_gb={local_exec.EXEC_MEM_LIMIT_BYTES / (1024 ** 3):.1f})",
       flush=True,
   )
   try:

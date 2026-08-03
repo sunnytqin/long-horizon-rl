@@ -36,6 +36,11 @@ unsolved-with-no-feedback. A persistently down server therefore shows up as
 all-zero reward (loudly visible) rather than a crash.
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 import json
 import logging
 import os
@@ -60,6 +65,7 @@ _warned_no_url = [False]
 
 
 def _server_url():
+  """Returns the configured sidecar base URL, or ``None`` when unset."""
   url = os.environ.get("CODECONTEST_EXEC_URL")
   return url.rstrip("/") if url else None
 
@@ -69,8 +75,16 @@ def eval_code_on_tests(
 ):
   """Drop-in remote replacement for ``local_exec.eval_code_on_tests``.
 
-  Returns ``(all_pass, per_case, failures)`` where ``failures`` is a list of
-  ``(inp, actual, expected)`` tuples -- identical shape to the local path.
+  Args:
+    code: python source to grade (may be None if extraction failed).
+    test_input: stdin string per ground-truth case.
+    test_output: expected stdout per ground-truth case.
+    time_limit: per-case wall-clock timeout in seconds.
+    max_gt_test: cap on how many cases are actually executed.
+
+  Returns:
+    ``(all_pass, per_case, failures)`` where ``failures`` is a list of
+    ``(inp, actual, expected)`` tuples -- identical shape to the local path.
   """
   url = _server_url()
   if not url:

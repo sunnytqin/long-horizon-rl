@@ -47,6 +47,16 @@ class _FakeTokenizer:
     self._map = id_to_text
 
   def decode(self, ids, skip_special_tokens=True):
+    """Looks up the canned text for ``ids``.
+
+    Args:
+      ids: token ids to decode.
+      skip_special_tokens: part of the tokenizer interface; ignored here.
+
+    Returns:
+      The canned text registered for ``ids``.
+    """
+    del skip_special_tokens  # part of the tokenizer interface we stand in for
     return self._map[tuple(ids)]
 
 
@@ -58,6 +68,18 @@ class _FakeServer:
     self._i = 0
 
   async def generate(self, request_id, prompt_ids, sampling_params, **kwargs):
+    """Returns the next canned response, ignoring the request.
+
+    Args:
+      request_id: part of the server interface; ignored here.
+      prompt_ids: part of the server interface; ignored here.
+      sampling_params: part of the server interface; ignored here.
+      **kwargs: part of the server interface; ignored here.
+
+    Returns:
+      A ``TokenOutput`` holding the next canned token ids.
+    """
+    del request_id, prompt_ids, sampling_params, kwargs  # server interface
     ids = self._responses[self._i]
     self._i += 1
     return TokenOutput(token_ids=ids, log_probs=None)
@@ -66,7 +88,18 @@ class _FakeServer:
 def _build_loop(
     turns, response_length=4096, max_assistant_turns=3, train_turns="all"
 ):
-  """turns: list of (token_ids, decoded_text). Returns (loop, decode_map)."""
+  """Builds a CodeRefineAgentLoop wired to fakes instead of a real engine.
+
+  Args:
+    turns: list of (token_ids, decoded_text) the fake server replays in order.
+    response_length: the loop's total response token budget.
+    max_assistant_turns: turn cap for the loop.
+    train_turns: masking mode, one of TRAIN_TURNS_MODES.
+
+  Returns:
+    ``(loop, decode_map)`` -- the loop and the id-tuple -> text map its fake
+    tokenizer decodes with.
+  """
   loop = object.__new__(CodeRefineAgentLoop)
   loop.response_length = response_length
   loop.prompt_length = 4096
@@ -83,6 +116,7 @@ def _build_loop(
   loop.server_manager = _FakeServer([ids for ids, _ in turns])
 
   async def fake_apply_chat_template(messages, **kwargs):
+    del messages, kwargs  # the canned feedback ids do not depend on the input
     return list(FEEDBACK_IDS)
 
   loop.apply_chat_template = fake_apply_chat_template
@@ -102,6 +136,7 @@ def _run(loop):
 
 
 def test_fail_fail_pass_gets_reward_1_and_correct_mask():
+  """Solving on the third turn earns reward 1 and masks feedback tokens."""
   out = _run(
       _build_loop([([1], FAIL_CODE), ([2], FAIL_CODE), ([3], PASS_CODE)])
   )
@@ -116,6 +151,7 @@ def test_fail_fail_pass_gets_reward_1_and_correct_mask():
 
 
 def test_train_turns_final_only_trains_last_turn():
+  """``final_only`` trains the last solver turn and no earlier one."""
   # final_only zeroes every solver turn except the last; the rolled-out sequence
   # (response_ids) is unchanged, only the loss mask differs. Feedback turns stay
   # 0.
@@ -131,6 +167,7 @@ def test_train_turns_final_only_trains_last_turn():
 
 
 def test_train_turns_final_only_turn0_solve_trains_turn0():
+  """``final_only`` trains turn 0 when turn 0 is the solving turn."""
   # Solving at turn 0: the last (== only) solver turn IS turn 0, so it stays
   # trained.
   out = _run(_build_loop([([7], PASS_CODE)], train_turns="final_only"))
@@ -140,6 +177,7 @@ def test_train_turns_final_only_turn0_solve_trains_turn0():
 
 
 def test_all_fail_gets_reward_0_no_trailing_feedback():
+  """An all-fail trajectory earns reward 0 with no feedback turn appended."""
   out = _run(
       _build_loop([([1], FAIL_CODE), ([2], FAIL_CODE), ([3], FAIL_CODE)])
   )
@@ -151,6 +189,7 @@ def test_all_fail_gets_reward_0_no_trailing_feedback():
 
 
 def test_solved_on_turn_0():
+  """Solving immediately ends the trajectory after one assistant turn."""
   out = _run(_build_loop([([7], PASS_CODE)]))
   assert out.reward_score == 1.0
   assert out.extra_fields["solved_at_turn"] == 0
@@ -160,6 +199,7 @@ def test_solved_on_turn_0():
 
 
 def test_overflow_before_solve_gives_reward_0():
+  """Running out of response budget before solving earns reward 0."""
   # response_length=4: turn-0 emits 2 tokens, feedback(3) would push to 5 ->
   # overflow.
   loop = _build_loop(

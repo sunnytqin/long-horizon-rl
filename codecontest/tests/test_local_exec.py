@@ -31,27 +31,31 @@ GT_OUT = ["5\n", "30\n", "0\n"]
 
 
 def test_extract_code_takes_last_block():
+  """``extract_code`` grades the most recent submission, not the first."""
   text = "first\n```python\nprint(1)\n```\nthen\n```python\nprint(2)\n```"
   assert local_exec.extract_code(text) == "print(2)"
   assert local_exec.extract_code("no code here") is None
 
 
 def test_outputs_match_whitespace_insensitive():
+  """``outputs_match`` ignores differences in whitespace runs."""
   assert local_exec.outputs_match("5\n", "5")
   assert local_exec.outputs_match(" 5  \n", "5\n")
   assert not local_exec.outputs_match("5", "6")
 
 
 def test_good_code_passes_all():
+  """Correct code passes every ground-truth case with no failures."""
   all_pass, per_case, failures = local_exec.eval_code_on_tests(
       GOOD_CODE, GT_IN, GT_OUT
   )
   assert all_pass
   assert per_case == [True, True, True]
-  assert failures == []
+  assert not failures
 
 
 def test_bad_code_fails_with_failures():
+  """Wrong code reports per-case results and the cases that failed."""
   all_pass, per_case, failures = local_exec.eval_code_on_tests(
       BAD_CODE, GT_IN, GT_OUT
   )
@@ -59,19 +63,21 @@ def test_bad_code_fails_with_failures():
   # "0" matches the third case (0+0=0) but not the first two.
   assert per_case == [False, False, True]
   assert len(failures) == 2
-  inp, actual, expected = failures[0]
+  _, actual, expected = failures[0]
   assert actual.strip() == "0" and expected.strip() == "5"
 
 
 def test_none_code_returns_unsolved():
+  """Unextractable code grades as unsolved rather than raising."""
   all_pass, per_case, failures = local_exec.eval_code_on_tests(
       None, GT_IN, GT_OUT
   )
-  assert not all_pass and per_case == [] and failures == []
+  assert not all_pass and not per_case and not failures
 
 
 def test_timeout_is_handled():
-  all_pass, per_case, failures = local_exec.eval_code_on_tests(
+  """A non-terminating program is killed at the time limit and fails."""
+  all_pass, per_case, _ = local_exec.eval_code_on_tests(
       TIMEOUT_CODE, ["1 1\n"], ["2\n"], time_limit=1.0
   )
   assert not all_pass
@@ -79,15 +85,17 @@ def test_timeout_is_handled():
 
 
 def test_memory_bomb_is_contained():
-  """A memory-bomb generation must hit the RLIMIT_AS cap (MemoryError),
-  NOT consume host RAM. Use a small cap (0.5GB) and a modest bomb (1.5GB) so the
-  test is safe even if the cap somehow doesn't apply on this platform."""
+  """A memory bomb must hit the RLIMIT_AS cap, not consume host RAM.
+
+  Uses a small cap (0.5GB) and a modest bomb (1.5GB) so the test is safe even
+  if the cap somehow doesn't apply on this platform.
+  """
   os.environ["CODECONTEST_EXEC_MEM_GB"] = "0.5"
   importlib.reload(local_exec)
   try:
     # Single allocation ~1.5GB > 0.5GB headroom -> MemoryError in the child.
     bomb = "x = bytearray(1536 * 1024 * 1024)\nprint(len(x))"
-    all_pass, per_case, _failures = local_exec.eval_code_on_tests(
+    all_pass, per_case, _ = local_exec.eval_code_on_tests(
         bomb, ["1\n"], ["1610612736\n"], time_limit=15.0
     )
     assert not all_pass
@@ -103,8 +111,10 @@ def test_memory_bomb_is_contained():
 
 
 def test_concurrency_cap_bounds_live_processes():
-  """With EXEC_CONCURRENCY=2, 6 sleepy cases must serialize through the
-  cap: 6 cases / 2 slots * ~1s each => well over 1s total (vs ~1s if unbounded).
+  """Sleepy cases must serialize through the concurrency cap.
+
+  With EXEC_CONCURRENCY=2, 6 cases / 2 slots * ~1s each => well over 1s total
+  (vs ~1s if the cap were not applied).
   """
   os.environ["CODECONTEST_EXEC_CONCURRENCY"] = "2"
   importlib.reload(local_exec)

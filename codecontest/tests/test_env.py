@@ -34,6 +34,7 @@ def _env(**kw):
 
 
 def test_passing_submission_solves_and_terminates():
+  """A passing submission solves and stops the conversation."""
   res = _env().step(GOOD)
   assert res.solved
   assert res.should_terminate
@@ -42,6 +43,7 @@ def test_passing_submission_solves_and_terminates():
 
 
 def test_failing_submission_gives_feedback():
+  """A failing submission keeps going and returns failing-case feedback."""
   res = _env(max_failures_shown=2).step(BAD)
   assert not res.solved
   assert not res.should_terminate
@@ -52,6 +54,7 @@ def test_failing_submission_gives_feedback():
 
 
 def test_no_code_block_requests_code():
+  """A turn with no ```python block asks the solver for code."""
   res = _env().step(NO_CODE)
   assert not res.had_code
   assert not res.solved
@@ -60,12 +63,14 @@ def test_no_code_block_requests_code():
 
 
 def test_max_failures_shown_caps_feedback():
+  """``max_failures_shown`` bounds how many cases the feedback reveals."""
   # BAD fails 3 of 4 cases; cap to 1.
   res = _env(max_failures_shown=1).step(BAD)
   assert res.num_failures_shown == 1
 
 
 def test_failure_sampling_is_deterministic_per_seed():
+  """The same seed samples the same failing cases."""
   a = _env(max_failures_shown=1, seed=123).step(BAD).feedback
   b = _env(max_failures_shown=1, seed=123).step(BAD).feedback
   assert a == b

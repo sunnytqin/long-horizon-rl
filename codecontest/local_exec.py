@@ -32,6 +32,11 @@ Tunables (env vars, read at import):
   CODECONTEST_EXEC_CONCURRENCY   max concurrent child executions (default 64)
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 import io
 import multiprocessing as mp
 import os
@@ -52,36 +57,36 @@ _MP_CTX = mp.get_context("fork")
 # huge, CUDA-reserved) virtual address space, so an absolute cap is meaningless.
 # Instead we cap *growth* beyond the child's startup VSZ, which a memory bomb
 # trips as MemoryError.
-_EXEC_MEM_LIMIT_BYTES = int(
+EXEC_MEM_LIMIT_BYTES = int(
     float(os.environ.get("CODECONTEST_EXEC_MEM_GB", "2")) * (1024**3)
 )
 # Global ceiling on concurrently-alive child processes across all agent-loop
 # threads, so a 200+-way rollout fan-out can't launch thousands of exec
 # processes at once.
-_EXEC_CONCURRENCY = int(os.environ.get("CODECONTEST_EXEC_CONCURRENCY", "64"))
-_EXEC_SLOTS = threading.BoundedSemaphore(_EXEC_CONCURRENCY)
+EXEC_CONCURRENCY = int(os.environ.get("CODECONTEST_EXEC_CONCURRENCY", "64"))
+_EXEC_SLOTS = threading.BoundedSemaphore(EXEC_CONCURRENCY)
 
 
 def _apply_mem_limit() -> None:
-  """Cap this (child) process's address-space growth to +_EXEC_MEM_LIMIT_BYTES.
+  """Cap this (child) process's address-space growth to +EXEC_MEM_LIMIT_BYTES.
 
   Best-effort: any failure leaves the process uncapped rather than blocking
   exec. Relative to startup VSZ so it works regardless of inherited CUDA VA
   reservations.
   """
-  if _EXEC_MEM_LIMIT_BYTES <= 0:
+  if EXEC_MEM_LIMIT_BYTES <= 0:
     return
   try:
     with open("/proc/self/statm") as f:
       vsz_pages = int(f.read().split()[0])
     current = vsz_pages * resource.getpagesize()
-    soft = current + _EXEC_MEM_LIMIT_BYTES
+    soft = current + EXEC_MEM_LIMIT_BYTES
     _, hard = resource.getrlimit(resource.RLIMIT_AS)
     if hard != resource.RLIM_INFINITY:
       soft = min(soft, hard)
     resource.setrlimit(resource.RLIMIT_AS, (soft, hard))
-  except Exception:  # noqa: BLE001 - never let rlimit setup break execution
-    pass
+  except Exception:  # pylint: disable=broad-exception-caught
+    pass  # never let rlimit setup break execution
 
 
 # ── output normalization & comparison ──
@@ -89,7 +94,14 @@ def _apply_mem_limit() -> None:
 
 
 def normalise(s: str) -> str:
-  """Normalize an input/output blob the way the eval harness does."""
+  """Normalize an input/output blob the way the eval harness does.
+
+  Args:
+    s: the raw stdin or expected-stdout text.
+
+  Returns:
+    ``s`` with harness artefacts removed and a guaranteed trailing newline.
+  """
   s = s.replace("plaintext\n", "").replace("\\n", "\n")
   if not s.endswith("\n"):
     s += "\n"
@@ -97,7 +109,15 @@ def normalise(s: str) -> str:
 
 
 def outputs_match(actual: str, expected: str) -> bool:
-  """Whitespace-insensitive equality, identical to upstream's test_if_eq."""
+  """Whitespace-insensitive equality, identical to upstream's test_if_eq.
+
+  Args:
+    actual: what the model's program printed.
+    expected: the ground-truth stdout.
+
+  Returns:
+    True iff the two agree once all whitespace runs are collapsed.
+  """
   return " ".join(str(actual).split()) == " ".join(str(expected).split())
 
 
@@ -107,6 +127,12 @@ def extract_code(text: str) -> typing.Optional[str]:
   Mirrors code_util.extract_code from the tunix harness. Taking the *last* block
   means oracle-feedback text (which never contains python fences) is ignored and
   we always grade the model's most recent submission.
+
+  Args:
+    text: the assistant turn to search.
+
+  Returns:
+    The last fenced python block's source, or ``None`` when there is none.
   """
   matches = re.findall(r"```python(.*?)```", text, re.DOTALL)
   return matches[-1].strip() if matches else None
@@ -134,7 +160,17 @@ _THREAD_CAP_ENV = (
 
 
 def _worker(script: str, stdin_str: str, output_queue):
-  """Executes ``script`` on ``stdin_str``; puts stdout (or error) on queue."""
+  """Executes ``script`` on ``stdin_str``; puts stdout (or error) on queue.
+
+  Runs in the forked child, so it never returns a value -- the result travels
+  back over ``output_queue``.
+
+  Args:
+    script: untrusted python source to run.
+    stdin_str: the stdin to feed it.
+    output_queue: queue receiving either captured stdout or an "error: ..."
+      string.
+  """
   for _var in _THREAD_CAP_ENV:
     os.environ[_var] = "1"  # force single-thread BLAS before any numpy import
   # Bound this child's RAM growth before running untrusted code.
@@ -142,10 +178,11 @@ def _worker(script: str, stdin_str: str, output_queue):
   input_lines = iter(stdin_str.splitlines())
 
   def fake_input(prompt=""):
+    del prompt  # part of the builtins.input signature we are standing in for
     try:
       return next(input_lines)
-    except StopIteration:
-      raise EOFError("No more input")
+    except StopIteration as exc:
+      raise EOFError("No more input") from exc
 
   stdout_capture = io.StringIO()
   original_stdout, original_stdin = sys.stdout, sys.stdin
@@ -160,11 +197,15 @@ def _worker(script: str, stdin_str: str, output_queue):
       "Optional": typing.Optional,
   }
   try:
-    exec(script, context)
+    # Running the model's program IS this module's job. The guards are the
+    # child process, the wall-clock timeout and the RLIMIT_AS cap above, not
+    # avoiding exec; see the module docstring's security note.
+    exec(script, context)  # pylint: disable=exec-used
     output_queue.put(stdout_capture.getvalue())
   except SystemExit:
     output_queue.put(stdout_capture.getvalue())
-  except BaseException as e:  # noqa: BLE001 - sandbox: report failure as text
+  # Sandbox: any failure in the untrusted code is reported back as text.
+  except BaseException as e:  # pylint: disable=broad-exception-caught
     output_queue.put(f"error: {e}")
   finally:
     sys.stdout, sys.stdin = original_stdout, original_stdin
@@ -173,11 +214,18 @@ def _worker(script: str, stdin_str: str, output_queue):
 def _run_single(code: str, stdin_str: str, time_limit: float) -> str:
   """Runs one (code, stdin) in a child process, holding one global slot.
 
-  Returns stdout, or "Timeout Error" / "error: ..." on failure. The slot bounds
-  how many child processes are alive at once across all calling threads; each
-  call is self-contained (acquire -> start -> reap -> release) so it can't
-  deadlock against other in-flight cases the way a batch holding several slots
-  could.
+  The slot bounds how many child processes are alive at once across all
+  calling threads; each call is self-contained (acquire -> start -> reap ->
+  release) so it can't deadlock against other in-flight cases the way a batch
+  holding several slots could.
+
+  Args:
+    code: untrusted python source to run.
+    stdin_str: the stdin to feed it.
+    time_limit: wall-clock timeout in seconds.
+
+  Returns:
+    The child's stdout, or "Timeout Error" / "error: ..." on failure.
   """
   with _EXEC_SLOTS:
     q = _MP_CTX.Queue()
@@ -197,14 +245,14 @@ def _run_single(code: str, stdin_str: str, time_limit: float) -> str:
       else:
         try:
           result = q.get_nowait()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # pylint: disable=broad-exception-caught
           result = f"Execution Error: {e}"
       p.join(timeout=0.1)
       return result
     finally:
       try:
         q.close()
-      except Exception:  # noqa: BLE001
+      except Exception:  # pylint: disable=broad-exception-caught
         pass
 
 
@@ -220,7 +268,7 @@ def run_code_batch(codes, stdins, time_limits):
     list[str]: stdout per case, or "Timeout Error" / "error: ..." on failure.
   """
   n = len(codes)
-  results: list = [None] * n
+  results: list[typing.Optional[str]] = [None] * n
 
   def runner(i):
     results[i] = _run_single(codes[i], stdins[i], time_limits[i])

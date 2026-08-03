@@ -29,6 +29,11 @@ codecontest/preprocess_codecontests.py --local_dir /tmp/cc --max_train 20
 --max_val 20
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 import argparse
 import os
 
@@ -44,6 +49,15 @@ DATA_SOURCE = (
 
 
 def make_map_fn(split: str):
+  """Builds the per-row mapper that rewrites one example into VERL schema.
+
+  Args:
+    split: the split name recorded in ``extra_info.split``.
+
+  Returns:
+    A ``(example, idx) -> dict`` function for ``datasets.Dataset.map``.
+  """
+
   def process_fn(example, idx):
     question = example["question"]
     # Ground-truth stdin/stdout tests (lists), plus the per-problem time limit.
@@ -76,6 +90,17 @@ def make_map_fn(split: str):
 
 
 def build_split(repo: str, hf_split: str, out_split: str, max_rows):
+  """Loads one HF split and maps it onto the VERL multi-turn RL schema.
+
+  Args:
+    repo: HuggingFace dataset repo id.
+    hf_split: split name to load from ``repo``.
+    out_split: split name to record in each row's ``extra_info``.
+    max_rows: optional cap on rows, for quick smoke slices.
+
+  Returns:
+    The mapped ``datasets.Dataset``, carrying only the VERL columns.
+  """
   ds = datasets.load_dataset(repo, split=hf_split)
   if max_rows is not None:
     ds = ds.select(range(min(max_rows, len(ds))))
@@ -86,6 +111,7 @@ def build_split(repo: str, hf_split: str, out_split: str, max_rows):
 
 
 def main():
+  """Writes train/test parquet for the configured local directory."""
   p = argparse.ArgumentParser()
   p.add_argument(
       "--local_dir", default=os.path.expanduser("~/data/codecontests")

@@ -19,6 +19,11 @@ oracle environment runs it against ground-truth tests and, on failure, feeds
 back a few failing cases formatted by ``format_oracle_feedback``.
 """
 
+# This tree imports names directly (``from codecontest.env import GTOracleEnv``)
+# rather than the enclosing module, matching how the rest of verl is written;
+# call sites read on the bare name throughout.
+# pylint: disable=g-importing-member
+
 import re
 from typing import Optional
 
@@ -157,13 +162,19 @@ def normalize_diagnosis(raw_text: str) -> tuple[str, bool]:
   """Clean a raw user-model diagnosis into the text injected to the solver.
 
   Strips any ``<think>...</think>`` block and surrounding whitespace; when
-  nothing usable remains, substitutes ``EMPTY_DIAGNOSIS_FALLBACK``. Returns
-  ``(analysis, was_empty)`` so callers can count degenerate (empty) diagnoses.
+  nothing usable remains, substitutes ``EMPTY_DIAGNOSIS_FALLBACK``.
 
   Shared by ``ModelFeedbackAgentLoop`` (training rollout) and
   ``validate_codecontest.py`` (offline eval) so the injected feedback is
   byte-identical across the two pipelines -- the number-affecting transform
   lives in exactly one place.
+
+  Args:
+    raw_text: the user model's raw diagnosis turn.
+
+  Returns:
+    ``(analysis, was_empty)`` -- the text to inject, and whether the diagnosis
+    was degenerate, so callers can count empty ones.
   """
   analysis = _THINK_BLOCK.sub("", raw_text or "").strip()
   if not analysis:
@@ -179,11 +190,25 @@ def build_model_feedback_user_message(analysis: str) -> str:
   skeleton -- the intro and the trailing "write an improved solution ...
   ```python" instruction -- plus the diagnosis stay well under ``prompt_length``
   and the agent loop never left-truncates this turn.
+
+  Args:
+    analysis: the cleaned diagnosis from ``normalize_diagnosis``.
+
+  Returns:
+    The next user turn to show the solver.
   """
   return SOLVER_MODEL_FEEDBACK_TEMPLATE.format(analysis=analysis)
 
 
 def _indent(s: str) -> str:
+  """Indents every line of ``s`` by four spaces.
+
+  Args:
+    s: the block of text to indent.
+
+  Returns:
+    ``s`` with each line prefixed and trailing newlines dropped.
+  """
   return "\n".join("    " + line for line in s.rstrip("\n").splitlines())
 
 
@@ -193,8 +218,15 @@ def _waterfill_cap(lengths: list[int], budget: int) -> Optional[int]:
   This is the "truncate the longest, leave the rest intact" policy: fields
   shorter than ``c`` are untouched; only fields above ``c`` are clipped, all to
   the same ``c``. When a single field dominates (the usual case: one giant test
-  input), ``c`` lands just below it and only that one field is clipped. Returns
-  ``None`` when everything already fits (no clipping needed).
+  input), ``c`` lands just below it and only that one field is clipped.
+
+  Args:
+    lengths: the length of every field competing for the budget.
+    budget: total chars allowed across all of them.
+
+  Returns:
+    The per-field cap, or ``None`` when everything already fits and no
+    clipping is needed.
   """
   if budget <= 0 or not lengths:
     return None
@@ -219,6 +251,14 @@ def _clip(s: str, cap: Optional[int]) -> str:
   field as the whole spec (e.g. a clipped input no longer matches its full
   expected output). Applied uniformly to inputs, the model's output, and
   expected output.
+
+  Args:
+    s: the field text to clip.
+    cap: max chars to keep, or ``None`` to return ``s`` untouched.
+
+  Returns:
+    ``s`` unchanged when it fits, else its head and tail joined by an
+    explicit elision marker.
   """
   s = str(s)
   if cap is None or len(s) <= cap:
@@ -255,8 +295,11 @@ def format_oracle_feedback(
       (str(inp), str(actual).strip(), str(expected).strip())
       for inp, actual, expected in failures
   ]
+  field_lengths = []
+  for case in cases:
+    field_lengths.extend(len(f) for f in case)
   cap = (
-      _waterfill_cap([len(f) for case in cases for f in case], max_total_chars)
+      _waterfill_cap(field_lengths, max_total_chars)
       if max_total_chars
       else None
   )
@@ -276,9 +319,15 @@ def build_feedback_message(
 ) -> str:
   """Build the full user-turn feedback string for a set of failing cases.
 
-  ``max_total_chars`` bounds the combined size of the failing-case fields (see
-  ``format_oracle_feedback``) so the injected user turn stays well under
-  ``rollout.prompt_length`` and is never blindly tail-truncated downstream.
+  Args:
+    failures: list of (input, actual_output, expected_output) tuples.
+    max_total_chars: bounds the combined size of the failing-case fields (see
+      ``format_oracle_feedback``) so the injected user turn stays well under
+      ``rollout.prompt_length`` and is never blindly tail-truncated
+      downstream. ``None`` disables clipping.
+
+  Returns:
+    The complete user-turn text to inject after a failed submission.
   """
   block = format_oracle_feedback(failures, max_total_chars=max_total_chars)
   return SOLVER_ORACLE_REFLECTION_FEEDBACK_TEMPLATE.format(feedback_block=block)
