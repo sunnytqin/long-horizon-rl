@@ -171,17 +171,3 @@ CODECONTEST_ALLOW_INPROCESS=1 python -m pytest codecontest -q \
 The `--ignore` is required **outside** the container: that file imports
 `verl.protocol` → `ray` at module level, so it fails at collection and takes
 the whole run with it. Inside the container, drop the flag.
-
-## Style
-
-This tree mirrors into google3 and follows **google3 house style** (2-space
-indent, 80 columns, gpylint), not verl's ruff style. It is excluded from ruff
-in `pyproject.toml` — the two actively fight, and ruff's `UP006` undoes what
-gpylint's `g-bare-generic` wants. Reformat with:
-
-```bash
-./codecontest/format.sh      # pyink --line-length 80 --pyink-indentation 2
-```
-
-It is also excluded from the `check-license` pre-commit hook, because these
-files carry no Apache/Bytedance header — we wrote them.
