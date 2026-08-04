@@ -112,8 +112,9 @@ def _val_df():
   )
 
 
-def _args(sim_max_tries=8, max_assistant_turns=4):
+def _args(sim_max_tries=8, max_assistant_turns=4, grounded=False):
   return Namespace(
+      grounded=grounded,
       model="fake-model",
       solver_backend="openai",
       val_file="fake.parquet",
@@ -240,3 +241,95 @@ def test_clean_run_writes_an_empty_premature_sidecar(tmp_path):
       .read()
       .startswith("0 premature terminations")
   )
+
+
+# ── --grounded threading (eval-side mirror of +colbench.grounded_sim) ─────────
+# What the sim is CONDITIONED on is invisible in the reward numbers, so a flag
+# that silently fails to reach the env would look exactly like a real result.
+# These pin the wire, not the prompt text (that is test_env_spec.py's job).
+
+
+def _capturing_sim(replies):
+  """Scripted sim that also records the prompts it was conditioned on."""
+  seq = list(replies)
+  state = {"i": 0}
+  seen = []
+
+  def backend(system_content, user_content):
+    seen.append((system_content, user_content))
+    r = seq[min(state["i"], len(seq) - 1)]
+    state["i"] += 1
+    return r
+
+  return backend, seen
+
+
+def _run_capturing(tmp_path, solver_turns, sim_replies, **arg_kwargs):
+  """Run one eval and return the sim's SYSTEM prompts, joined.
+
+  The conditioning lives entirely in the system message; the user message is the
+  running transcript (which contains whatever the SOLVER wrote, GT-looking code
+  included), so asserting on it would prove nothing about conditioning.
+  """
+  args = _args(**arg_kwargs)
+  backend, seen = _capturing_sim(sim_replies)
+  vcs.run_eval(
+      FakeSolver(solver_turns),
+      FakeTokenizer(),
+      _val_df(),
+      temperature=0.6,
+      n_samples=1,
+      args=args,
+      out_path=str(tmp_path / "eval.json"),
+      max_model_len=args.max_prompt_length + args.max_response_length,
+      sim_backend=backend,
+  )
+  return "\n".join(s for s, _ in seen)
+
+
+def test_grounded_flag_reaches_the_sim_prompt(tmp_path):
+  sys_prompts = _run_capturing(
+      tmp_path,
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["It's 10.", TERMINATE],
+      grounded=True,
+  )
+  # Grounded conditioning = hidden GT source + plot, and NOT the requirements.
+  assert GT.strip() in sys_prompts
+  assert SPEC["plot"] in sys_prompts
+  assert SPEC["requirements"] not in sys_prompts
+
+
+def test_default_eval_is_spec_conditioned(tmp_path):
+  # Regression guard on the DEFAULT: the headline eval must stay spec-conditioned,
+  # with the GT nowhere in the sim's conditioning.
+  sys_prompts = _run_capturing(
+      tmp_path,
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["It's 10.", TERMINATE],
+  )
+  assert GT.strip() not in sys_prompts
+  assert "x >= 10" not in sys_prompts
+  assert SPEC["requirements"] in sys_prompts
+
+
+def test_summary_records_the_conditioning(tmp_path):
+  # Two summaries are only comparable at the same conditioning, so it is recorded
+  # in the JSON rather than left implicit in the filename.
+  spec_dir = tmp_path / "spec"
+  grounded_dir = tmp_path / "grounded"
+  spec_dir.mkdir()
+  grounded_dir.mkdir()
+  spec_summary, _, _ = _run(
+      spec_dir,
+      solver_turns=[_code_turn(GT)],
+      sim_replies=[TERMINATE],
+  )
+  grounded_summary, _, _ = _run(
+      grounded_dir,
+      solver_turns=[_code_turn(GT)],
+      sim_replies=[TERMINATE],
+      grounded=True,
+  )
+  assert spec_summary["sim_conditioning"] == "spec"
+  assert grounded_summary["sim_conditioning"] == "grounded"

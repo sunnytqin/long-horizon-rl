@@ -24,6 +24,16 @@ uses. The GT source is passed ONLY inside the sim prompt and never enters the
 solver's message list; there is no code leak possible here (the sim conditions
 on the NL spec, not code).
 
+``--grounded`` (default off) switches the sim to GROUNDED conditioning -- the
+hidden GT source + ``spec["plot"]`` instead of persona/scenario/requirements,
+the same ``+colbench.grounded_sim`` mode the training loop has. It is a
+DIAGNOSTIC: it exists so a grounded-trained checkpoint can be scored in the
+environment it actually trained in. The default (spec-conditioned) run is the
+comparable cross-arm eval and is what the golden eval keeps using. No dataset
+change is implied -- ``plot`` is present in every spec parquet, so any val split
+works under either conditioning. The leak invariant is unchanged either way: the
+GT reaches the sim prompt only, never the solver.
+
 Grading backend (identical to training / the GT validator):
   - Sidecar sandbox: export CODECONTEST_EXEC_URL=http://host:8088   (preferred)
   - In-process fallback (dev/eyeball, no sidecar): export
@@ -385,6 +395,7 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
           reward_time_limit=args.reward_time_limit,
           sim_backend=sim_backend,
           sim_max_tries=args.sim_max_tries,
+          grounded=args.grounded,
       )
       trajs.append(
           Trajectory(
@@ -837,6 +848,10 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
           if args.sim_backend == "openai"
           else os.environ.get("MULTITURN_MODEL_NAME", "")
       ),
+      # What the sim was conditioned on. Two summaries are only comparable at
+      # the same value, so it is recorded next to sim_model rather than left
+      # implicit in the filename.
+      "sim_conditioning": "grounded" if args.grounded else "spec",
       "n_problems": len(by_problem),
       "n_samples_per_problem": n_samples,
       "n_trajectories": n,
@@ -1105,6 +1120,16 @@ def main():
       "inspection.",
   )
   ap.add_argument(
+      "--grounded",
+      action="store_true",
+      default=os.environ.get("GROUNDED_SIM", "False") == "True",
+      help="DIAGNOSTIC: condition the sim on the hidden GT source + spec.plot "
+      "instead of persona/scenario/requirements -- the eval-side mirror of "
+      "training's +colbench.grounded_sim, for scoring a grounded-trained "
+      "checkpoint in the environment it trained in. Default off = the "
+      "spec-conditioned run, which stays the comparable cross-arm eval.",
+  )
+  ap.add_argument(
       "--sim_max_tokens",
       type=int,
       default=int(os.environ.get("SIM_MAX_TOKENS", "256")),
@@ -1148,7 +1173,8 @@ def main():
   print(
       (
           f"[validate_spec] loaded {len(val_df)} spec problems from"
-          f" {args.val_file}; solver_backend={args.solver_backend}"
+          f" {args.val_file}; solver_backend={args.solver_backend};"
+          f" sim_conditioning={'grounded' if args.grounded else 'spec'}"
       )
   )
 

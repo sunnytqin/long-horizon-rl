@@ -25,7 +25,7 @@
 #   CODECONTEST_EXEC_URL, CODECONTEST_ALLOW_INPROCESS, CODECONTEST_EXEC_CONCURRENCY,
 #   OPENAI_BASE_URL, MULTITURN_MODEL_NAME,
 #   MAX_CODE_PROPOSALS (spec code-proposal cap), SIM_MAX_TRIES (sim code-rejection tries),
-#   SIM_MAX_TOKENS (per-turn sim token bound).
+#   SIM_MAX_TOKENS (per-turn sim token bound), GROUNDED_SIM (sim conditioning, see below).
 
 set -xeuo pipefail
 
@@ -58,6 +58,16 @@ MAX_CODE_PROPOSALS=${MAX_CODE_PROPOSALS:-2}
 export SIM_MAX_TRIES=${SIM_MAX_TRIES:-8}
 # Generation-time token bound on each user (sim) turn (read by env_spec.openai_sim_backend too).
 export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-256}
+# GROUNDED sim (DIAGNOSTIC, default off): condition the sim on the hidden GT source + spec.plot
+# instead of persona/scenario/requirements -- the eval-side mirror of training's GROUNDED_SIM, so a
+# grounded-trained checkpoint can be scored in the environment it trained in. Default False keeps
+# the spec-conditioned run, which stays the comparable cross-arm/golden eval. Same parquet either
+# way (plot is in every spec row), so this is purely a conditioning switch.
+GROUNDED_SIM=${GROUNDED_SIM:-False}
+GROUNDED_ARG=()
+if [ "${GROUNDED_SIM}" = "True" ]; then
+  GROUNDED_ARG=(--grounded)
+fi
 
 # Inference hparams. TEMPERATURES (space-separated, e.g. "0.0 0.6") sweeps several temps in
 # ONE run: the engine is loaded once and each temp writes its own tagged JSON. Defaults match
@@ -107,6 +117,7 @@ python3 colbench/validate_colbench_spec.py \
     --reward_time_limit ${REWARD_TIME_LIMIT} \
     --sim_max_tries ${SIM_MAX_TRIES} \
     --sim_max_tokens ${SIM_MAX_TOKENS} \
+    "${GROUNDED_ARG[@]}" \
     --tensor_parallel_size ${ROLLOUT_TP} \
     --gpu_memory_utilization ${GPU_MEM_UTIL} \
     "$@"
