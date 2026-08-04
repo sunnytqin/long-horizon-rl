@@ -23,6 +23,7 @@ os.environ.pop("CODECONTEST_EXEC_URL", None)
 # before these imports resolve, so they cannot sit at the top.
 # pylint: disable=g-import-not-at-top,wrong-import-position
 from colbench import env as env_mod
+from colbench import prompts
 from colbench import templates
 from colbench.env import ColBenchUserSimEnv
 
@@ -204,8 +205,10 @@ def test_solver_prompt_keeps_the_sweet_rl_bullets_verbatim():
   bullets are what make arm (1) still recognisably ColBench rather than a prompt
   we invented.
   """
+  # _AGENT_PROMPT_RAW is the PROVENANCE record and stays private to
+  # colbench.prompts (templates re-exports only the public prompt names).
   raw, live = (
-      templates._AGENT_PROMPT_RAW,
+      prompts._AGENT_PROMPT_RAW,
       templates.COLBENCH_AGENT_SYSTEM_PROMPT,
   )
   for bullet in (

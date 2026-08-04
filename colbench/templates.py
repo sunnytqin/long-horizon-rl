@@ -1,128 +1,50 @@
-"""Prompts + answer/code extraction for the ColBench multi-turn loop.
+"""Prompt BUILDERS + answer/code extraction for the ColBench multi-turn loop.
+
+The prompt TEXT itself moved to ``colbench/prompts.py``; what remains here are
+the number-affecting transforms (marker extraction, code fence-strip,
+``<think>`` strip, leak/termination detection) and the small functions that
+format a prompt for one turn. Both live in one module per concern so the
+training rollout (``colbench_agent`` / ``colbench_spec_agent``) and the offline
+validators apply byte-identical text handling.
 
 Ported from ``sweet_rl``
 (``prompts/{llm_agent_code_prompt,human_simulator_code_prompt}.txt``,
 ``utils/code_utils.check_correctness`` fence-strip) and InfoPO's
 ``run_simulate_api.py`` (``check_and_extract_answer`` flexible marker patterns).
-The number-affecting transforms (marker extraction, code fence-strip,
-``<think>`` strip) live here so the training rollout (``colbench_agent``) and
-the offline validator apply byte-identical text handling.
 """
 
-# The long lines in this file are prompt text inside string literals.
-# Re-wrapping them would change the exact bytes sent to the model and break
-# comparability with completed runs, so the line-length limit is disabled
-# file-wide rather than reflowed. A per-line disable is not an option here: the
-# comment would land inside the prompt and be sent to the model.
+# The long lines in this file are prose comments recording WHY a transform is
+# shaped the way it is (the prompt text they refer to now lives in prompts.py).
+# Re-wrapping them would churn blame across the whole file for no reader
+# benefit, so the line-length limit stays disabled file-wide.
 # pylint: disable=line-too-long
 
 import re
 from typing import Any
 from typing import Optional
 
-# ── Solver (agent) system prompt ──────────────────────────────────────────────
-# Byte-identical to sweet_rl/prompts/llm_agent_code_prompt.txt. Kept as the PROVENANCE record
-# only -- the live prompt is COLBENCH_AGENT_SYSTEM_PROMPT below, which diverges from this in
-# exactly two documented places.
-_AGENT_PROMPT_RAW = """You are a helpful LLM agent.
-Your task is to help a human user to resolve their problem, in particular python programming.
-1) Note that the problem is highly personalized so you need to explicitly gather information
-by asking questions to the human user about some hidden information and implicit constraints.
-YOU SHOULD TRY TO ASK CLARIFICATION QUESTIONS.
-2) Note that you should not ask human users complicated questions as they will only answer questions briefly in two sentences.
-3) When you have gathered enough information to answer, say "I WANT TO ANSWER:" in the beginning of your response and provide your final answer.
-4) Note that you can only interact with the human users WITHIN 10 back-and-forth rounds and you have to provide your final answer before the conversation ends.
-5) You should be as concise as possible in your response to human.
-
-
-"I WANT TO ANSWER:" should be included in your response to human if you think that you have gathered enough information for addressing this problem.
-Directly output the raw python code after "I WANT TO ANSWER:".
-
-Complete only the immediate agent response in this dialogue:
-{dialogue_history}"""
-
-# The solver's LIVE system prompt (used by the agent loop +
-# preprocess_colbench). Bullets 1, 2, 4 and 5 are verbatim from the sweet_rl
-# original above; two things deliberately differ:
-#
-#  (a) The trailing "{dialogue_history}" placeholder is gone. sweet_rl formatted
-#      the whole conversation into it and called a COMPLETION endpoint; we use a
-#      real CHAT template and let the actual message turns carry the history
-#      (same as InfoPO's run_simulate_api.py).
-#
-#  (b) 2026-07-31: bullet 3's "I WANT TO ANSWER:" submit marker is replaced by a ```python code
-#      block, matching the SPEC path's submission syntax. The golden spec eval is the shared
-#      yardstick for the GT-vs-spec-vs-grounded study and it grades whatever `extract_last_code`
-#      finds on the raw turn -- so a GT arm RL'd onto a marker protocol would be scored partly on
-#      protocol conformance rather than capability. Aligning the syntax kills that confound at the
-#      source instead of teaching the extractor to be bilingual.
-#
-#      What is NOT changed is the TERMINATION CONTROL FLOW, which stays
-#      intentionally different between the arms: here the solver's own
-#      submission ends the episode (one shot, no reaction to its code), while
-#      the spec path lets the user react and terminate.
-#
-#      The trailing paragraph mirrors sweet_rl's own two sentences almost word-for-word with the
-#      mechanism swapped, plus one clause: "Showing this code block indicates you are submitting
-#      your final answer." That clause restores SEMANTICS the marker had for free -- "I WANT TO
-#      ANSWER:" announces itself as an act of submission, whereas a ```python block is something
-#      models emit constantly while explaining, so nothing about it says "this is my submission".
-#      It is deliberately phrased as what the act MEANS, not as an instruction about what to do.
-#
-#      Note the coupling this introduces: under the marker, showing code and
-#      submitting were separate acts, so the solver could sketch a snippet
-#      mid-clarification for free. Now it cannot. Whether that costs anything is
-#      UNMEASURED. Watch `num_assistant_turns` / `answered_at_turn` in the first
-#      ~20 steps: a collapse to 1-turn episodes means the rule is not landing,
-#      and the fix would be in the prompt, not the detector.
-COLBENCH_AGENT_SYSTEM_PROMPT = """You are a helpful LLM agent.
-Your task is to help a human user to resolve their problem, in particular python programming.
-1) Note that the problem is highly personalized so you need to explicitly gather information
-by asking questions to the human user about some hidden information and implicit constraints.
-YOU SHOULD TRY TO ASK CLARIFICATION QUESTIONS.
-2) Note that you should not ask human users complicated questions as they will only answer questions briefly in two sentences.
-3) When you have gathered enough information to answer, output the COMPLETE python function inside a ```python code block.
-4) Note that you can only interact with the human users WITHIN 10 back-and-forth rounds and you have to provide your final answer before the conversation ends.
-5) You should be as concise as possible in your response to human.
-
-
-The ```python code block should be included in your response to human if you think that you have gathered enough information for addressing this problem.
-Directly output the raw python code inside the ```python code block. Showing this code block indicates you are submitting your final answer."""
-
-# ── User-simulator prompt ─────────────────────────────────────────────────────
-# Byte-identical to sweet_rl/prompts/human_simulator_code_prompt.txt. Formatted per-turn
-# with problem_description, hidden_information (= the GT function source), and the running
-# dialogue_history string. Fed as the *user* message to the frozen sim server (system is a
-# plain "You are a helpful assistant.", matching HumanInteractionEnv.invoke_model). The GT
-# source lives ONLY in this prompt -- it never enters the solver's message list.
-HUMAN_SIMULATOR_PROMPT = """Your task is to simulate a human user that interacts with an LLM agent in a dialogue.
-You would like the LLM agent to help you with the following problem:
-{problem_description}
-
-Your goal is to engage in the conversation with the LLM agent so that it can get to a personalized answer.
-You should make use of the following hidden information to answer the LLM agent.
-YOU SHOULD BEHAVE LIKE A HUMAN THAT NEEDS THE HELP FROM AN AGENT.
-You SHOULD ONLY ANSWER QUESTIONS WITH INFORMATION PROVIDED IN THE HIDDEN INFORMATION, AND SAY YOU DON"T KNOW IF THE ANSWER CAN NOT BE FOUND IN THE HIDDEN INFORMATION.
-
-{hidden_information}
-
-Here is the dialogue so far:
-{dialogue_history}
-
-
-Now directly output your answer to the LLM agent IN TWO SENTENCES. DO NOT SAY ANYTHING ELSE."""
-
-# The sim's system message (verbatim from HumanInteractionEnv.invoke_model).
-SIM_SYSTEM_PROMPT = "You are a helpful assistant."
+# ── Prompts ───────────────────────────────────────────────────────────────
+# Every literal prompt string + protocol marker lives in colbench/prompts.py --
+# this module keeps only the text TRANSFORMS. They are re-exported here (and NOT
+# used directly by every call site) so `templates.X` keeps resolving for the
+# agent loops, the validators, preprocess_* and the tests; prompts.py is the
+# source of truth and prompt edits belong there.
+# pylint: disable=unused-import
+from colbench.prompts import ANSWER_MARKER
+from colbench.prompts import COLBENCH_AGENT_SYSTEM_PROMPT
+from colbench.prompts import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT
+from colbench.prompts import GROUNDED_SIM_SYSTEM_PROMPT
+from colbench.prompts import HUMAN_SIMULATOR_PROMPT
+from colbench.prompts import SIM_SYSTEM_PROMPT
+from colbench.prompts import SPEC_SIM_SYSTEM_PROMPT
+from colbench.prompts import TERMINATE_MARKER
+# pylint: enable=unused-import
 
 # Cap on the simulator's reply, mirroring sweet_rl
 # HUMAN_RESPONSE_CHARACTER_LIMIT. A brief, human-like reply -- also bounds how
 # much a single user turn can cost the solver's budget.
 HUMAN_RESPONSE_CHARACTER_LIMIT = 400
 
-# The sentinel the solver emits to submit its final code (sweet_rl / InfoPO
-# convention).
-ANSWER_MARKER = "I WANT TO ANSWER:"
 
 
 # ── <think> stripping ─────────────────────────────────────────────────────────
@@ -460,152 +382,12 @@ def build_initial_user_message(problem_description: str) -> str:
   return str(problem_description)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SPEC PATH (Phase 1) -- additive, shared by env_spec / colbench_spec_agent /
-# validate_colbench_spec so training and offline eval apply byte-identical text
-# handling. NOTHING above is modified. The spec sim conditions on a natural-language
-# spec (persona/scenario/requirements/plot), NEVER on the GT code, so a code leak is
-# structurally impossible here (no detect_code_leak / rejection sampling in this path).
-# Termination is USER-DRIVEN: the sim ends the episode with [TERMINATE]; we grade the
-# last function the solver showed. See the plan/handoff for the locked design.
-# ══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# SPEC PATH (Phase 1) -- the builders below. Their prompt text (the solver
+# prompt, the spec sim, the GROUNDED sim, the [TERMINATE] sentinel and the
+# rationale comments for all of them) is in colbench/prompts.py.
+# ═════════════════════════════════════════════════════════════════════════════
 
-# The solver's system prompt for the spec path. Unlike COLBENCH_AGENT_SYSTEM_PROMPT there is NO
-# "I WANT TO ANSWER:" marker: the solver PROPOSES by putting the complete function in a ```python
-# block (that block IS the proposal), and the USER ends the conversation when satisfied.
-COLBENCH_SPEC_AGENT_SYSTEM_PROMPT = """You are a helpful LLM agent.
-Your task is to help a human user write a personalized python function.
-1) The problem is highly personalized, so you must gather the hidden requirements and implicit constraints by asking the user questions. YOU SHOULD TRY TO ASK CLARIFICATION QUESTIONS.
-2) The user answers only briefly, in about two sentences, and cannot run or test code.
-3) When you are ready to propose a solution, output the COMPLETE python function inside a ```python code block. The user will read it and either correct you or end the conversation when they are satisfied.
-4) You may revise and show an updated ```python block as many times as needed within 10 back-and-forth rounds. There is no special submit phrase -- the user ends the conversation once their needs are met.
-5) Be as concise as possible in your messages to the user.""".strip()
-
-# The user-simulator's SYSTEM prompt for the spec path. Conditioned on the
-# authored spec (persona/scenario/requirements/plot) -- the GT code is NEVER
-# injected. The running dialogue is passed as the sim's USER message
-# (str_dialogue_history), mirroring the GT path's split. Wording is
-# intentionally natural prose (a person could act on it), with per-mechanism
-# bullets for WHEN to terminate; tune against real rollouts in eval.
-#
-# THE ASYMMETRY TO PRESERVE WHEN EDITING THIS -- "imperfect user" is two
-# different things and only one of them is wanted:
-#   * RELIABLE about WHAT IT WANTS. Reward comes from the GT function +
-#     test_cases, never from the sim, so a requirement the sim withholds when
-#     asked, garbles, or INVENTS is a loss the solver cannot avoid by playing
-#     well. That is noise in the reward, not difficulty in the task.
-#   * UNRELIABLE as a JUDGE of the code. Vague reactions, missed bugs, quitting
-#     on imperfect code -- that IS the intended imperfection (it is what
-#     `false_terminate_rate` measures, and it costs the solver nothing directly
-#     because grading is the oracle's job).
-# The pacing rule ("don't volunteer what wasn't asked") is about ORDER, not
-# withholding: everything still comes out, which is why the sim is told to raise
-# the next requirement itself once the assistant stops asking.
-# The "NEVER write code" bullet is load-bearing, not politeness: env_spec
-# reject-samples any fenced reply (up to sim_max_tries draws), and on the
-# grounded arm that sampler is the leak defense.
-SPEC_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time.
-
-Who you are: {who}, in {domain}. Your comfort with Python: {python_skill}. You come across as: {communication_style}.
-
-Your situation: {scenario}
-
-What you actually want: below is the full behavior you need -- you have all of it in your head, it's what you're trying to get built.
-{requirements}
-
-You have exactly TWO jobs: get everything above across to the assistant as they draw it out, and play out the plot below. You are NOT here to review their code, hunt for bugs, or make the function correct -- that is the assistant's job, not yours.
-
-About WHAT YOU WANT you are a completely reliable source:
-- When the assistant asks you something, answer it accurately and completely, based on the requirements above.
-- If they ask something broad ("what do you need?"), give the two or three things that matter most to you rather than reciting the whole list.
-- Do NOT volunteer requirements they haven't asked about yet. Let those surface as their questions draw them out.
-- Never invent anything that is not in your requirements. If they ask about a case your requirements don't cover, say you don't mind or you hadn't thought about it -- do not make up a new rule.
-- Never tell the assistant, or hint, that you are working from a written list. To them, you are simply a user who is trying to communicate what they want.
-- NEVER write code. You describe what you want in plain words -- you do not write, paste or fix the function.
-
-About WHETHER THEIR CODE IS RIGHT you are unreliable, and that is fine. You can read their code, but you cannot run or test it, so you never report what it printed or what error it gave. How much you can even tell that something looks off depends entirely on your Python comfort ({python_skill}). If you are not very technical your reactions stay vague ("that doesn't look like what I meant", "the totals seem off") and you would NOT name a specific line or value; only a genuinely technical person points precisely at what's wrong. Missing a bug is completely fine and expected. Being unclear about what you WANT is not.
-
-The plot of this conversation: {plot}
-
-Play the plot out naturally, then treat it as DONE:
-- If your plot is something you'd only mention when asked: don't bring it up unless they ask. It is done once you've answered and they've shown a function after your answer. If they never asked and just wrote one, you had nothing to add, so it is done.
-- If your plot is something you'd only notice once you saw their code: say that ONE thing in plain words after they show a function. It is done once they've shown a new function after your remark, or if their very first version already had that detail right. It is ONLY the detail the plot is about -- you do not go through the other requirements and you do not hunt for other bugs.
-- If your plot is something you'd just remember: bring it up when it feels natural. It is done once you've raised it and they've shown a function after that.
-
-Decide what to do each turn, in this order:
-1. Has the assistant shown a COMPLETE python function inside a code block? If NOT, you cannot be finished yet. Answer what they asked, bring up the next thing you need, or nudge them to just show you the function.
-2. Is the plot above DONE? If not, play it out.
-3. Otherwise you're done, even if the code isn't perfect. Whether the function is truly correct is NOT your call: you are an ordinary user, not a code reviewer.
-
-HOW to end, once you're done: your ENTIRE reply must be exactly [TERMINATE]. It is a signal that ends the conversation, and the assistant never sees it.
-
-Keep every reply very SHORT, usually one or two sentences, the way a person fires off a quick message."""
-
-# The GROUNDED user-simulator's SYSTEM prompt (opt-in via
-# +colbench.grounded_sim). Same spec-path machinery -- user-driven [TERMINATE],
-# code cap, grade-last-shown-code -- but the sim conditions on the hidden GT
-# function source + the plot INSTEAD of persona/scenario/requirements.
-# Motivation: the spec-conditioned 4B sim is unreliable (arm (1) collapses ~step
-# 300) while the GT-conditioned sim works (arm (2)); this arm asks whether the
-# PLOT mechanism survives once the sim has an artifact it can read off. Blocks
-# are drawn from HUMAN_SIMULATOR_PROMPT (the GT path) and SPEC_SIM_SYSTEM_PROMPT
-# (the spec path); the two NEW pieces are the "volunteering is limited to the
-# plot" carve-out and the soft-judge termination condition (2), which replaces
-# SPEC's "correctness is NOT your call".
-# NOTE: unlike the spec path, the GT source IS in the sim's context here -- so
-#       the env's sim_wrote_code rejection sampling is load-bearing, not
-#       belt-and-braces.
-GROUNDED_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time. You are not an AI assistant and you never break character.
-
-What you asked them for:
-{problem_description}
-
-What you actually want: below is the exact function you need. You know this behavior as your own intent -- it is what you are trying to get built. You have never seen it written down, you cannot write code, and you cannot run or test anything.
-
-{ground_truth}
-
-How you talk:
-- Answer ONLY what the assistant asks, briefly -- one or two sentences, the way a person fires off a quick message.
-- Use ONLY information determined by the function above. If they ask about something it does not determine, say you don't know or that you don't mind.
-- NEVER write code. Never paste or quote a function, a line, a variable name, or a literal value as code. Describe behavior in plain words only.
-- Do not lay everything out at once. Let details surface as their questions draw them out.
-- Never say or hint that you are reading from anything. To them, you are simply a person who knows what they want.
-
-The plot of this conversation: {plot}
-This is the one thing that isn't clear from the start -- follow it naturally. If it's something you'd only mention when asked, don't bring it up unless they ask. If it's something you'd only notice once you saw their code, react to their code the way a person would -- you READ it, you never run it. If it's something you'd just remember, bring it up when it feels natural. Volunteering is limited to what this plot directs; otherwise you only answer what you were asked. If the plot points at behavior the function above does not actually have, the FUNCTION wins: quietly drop that part and stay consistent with what you really want.
-
-When you're done: the MINIMUM bar to end the conversation is that the assistant has actually written a COMPLETE python function inside a code block. Until you have seen one you MUST NOT end the conversation, no matter how much you have already explained -- if they have only asked questions, you simply answer and keep going.
-
-Once a complete function is on the table, end the conversation when BOTH are true:
-  1) the plot above has been fully played out, and
-  2) the function does what you asked for, as far as you can tell.
-
-On (2): you are an ordinary user, not a code reviewer. You do not check it line by line and you cannot run it. But you know what you want -- so if the function plainly does not do it (it ignores something you told them, or handles a case the wrong way), say so in plain words and let them try again, instead of ending. Point at the BEHAVIOR you wanted, never at the code. If it looks right to you, you're done.
-
-HOW to end, once both conditions are met: your ENTIRE reply must be exactly [TERMINATE] -- that sentinel alone and NOTHING else. No goodbye, no thanks, no explanation, nothing before or after it. It is a signal, not a message. Any reply that is still part of the conversation must not contain that sentinel anywhere at all, in any form: if you are still talking, just talk.
-
-Keep every reply very SHORT -- usually one or two sentences."""
-
-# The sentinel the user-simulator emits to end the conversation (bare string
-# match).
-TERMINATE_MARKER = "[TERMINATE]"
-
-# ── Why the sim prompts barely say the sentinel out loud ──────────────────────
-# `sim_terminated` is an UNANCHORED substring match, so a reply that merely
-# MENTIONS the sentinel ends the episode -- including the most correct possible
-# reply, e.g. "I haven't seen code yet so I shouldn't say [TERMINATE] -- what
-# format is the input?". The prompts above used to name the sentinel 7 times,
-# most of them in exactly that negated form ("you do NOT say [TERMINATE] yet",
-# "Only use [TERMINATE] once ..."), which is a lot of surface for the sim to
-# echo. They now describe the ACT ("end the conversation") everywhere and name
-# the sentinel only in the one HOW-to-end sentence, which additionally demands
-# the sentinel be the WHOLE reply.
-# The matcher itself is deliberately NOT tightened to require that: the common
-# legitimate form is a trailing "Looks good, thanks! [TERMINATE]", so an
-# end-anchored or exact matcher would trade this failure for the opposite one
-# (episodes that should end grinding to the turn cap). Measure first --
-# `sim_terminate_standalone` is recorded per trajectory, so one eval run says
-# whether the surviving terminations are standalone or prose.
 
 
 def build_spec_sim_messages(
