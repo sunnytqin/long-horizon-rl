@@ -145,6 +145,23 @@ colbench/slurm_out/
 colbench/selfplay/slurm_out/
 colbench/runs/spec/spec_eval_selfplay_1k_*
 
+# colbench: local-only working files, deliberately NOT synced to the internal
+# build box. Design notes / handoff docs (read by humans, never imported), the
+# FASRC-only spec-generation launchers (they run on Harvard Slurm, not in the
+# container), the offline dump-analysis tool, and the paid-API safety test.
+# Nothing here is needed to build the image or run a job -- the Dockerfile only
+# needs what the training/eval code imports. The three that were already TRACKED
+# were untracked with `git rm --cached` when this block was added, so pulling
+# elsewhere removes that machine's stale copy; this checkout keeps its own.
+colbench/PHASE2_HANDOFF.md
+colbench/EVAL_XMANAGER_HANDOFF.md
+colbench/GROUNDED_SIM_PROPOSAL.md
+colbench/selfplay/PHASE1_HANDOFF.md
+colbench/selfplay/run_specs_slurm.sh
+colbench/selfplay/run_specs_openai_slurm.sh
+colbench/selfplay/tests/test_paid_run_safety.py
+colbench/analyze_spec_degeneration.py
+
 # Empty SQLite files dropped in the repo root by in-process grading of the ColBench SQL
 # problems (the GT/solver code does sqlite3.connect("<name>.db") relative to the CWD).
 # Pure execution side-effects, always 0 bytes -- never source.
