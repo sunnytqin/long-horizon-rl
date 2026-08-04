@@ -134,6 +134,37 @@ def test_sim_terminated_variants():
   assert templates.sim_terminated("could you also handle negatives?") is False
 
 
+def test_sim_terminate_standalone_separates_handoff_from_mention():
+  # DIAGNOSTIC only (never a termination decision): tells a real hand-off from an
+  # episode killed by `sim_terminated`'s unanchored match.
+  assert templates.sim_terminate_standalone("[TERMINATE]") is True
+  assert templates.sim_terminate_standalone("  **[TERMINATE]**  ") is True
+  assert templates.sim_terminate_standalone("[terminate].") is True
+  assert (
+      templates.sim_terminate_standalone("<think>hmm</think>\n[TERMINATE]")
+      is True
+  )
+  assert templates.sim_terminate_standalone("Thanks! [TERMINATE]") is False
+  assert (
+      templates.sim_terminate_standalone("I shouldn't [TERMINATE] yet") is False
+  )
+  assert templates.sim_terminate_standalone("keep going") is False
+
+
+def test_sim_prompts_name_the_sentinel_only_in_the_how_to_end_rule():
+  # Regression guard for the de-mention change: every OTHER reference was reworded
+  # to the ACT ("end the conversation") because the sim echoing a negated mention
+  # ("you do NOT say [TERMINATE] yet") is itself a termination under the
+  # unanchored match. Keep this at 1 -- adding a second mention re-opens that.
+  for prompt in (
+      templates.SPEC_SIM_SYSTEM_PROMPT,
+      templates.GROUNDED_SIM_SYSTEM_PROMPT,
+  ):
+    assert prompt.count(templates.TERMINATE_MARKER) == 1
+    # ...and that one mention must demand the sentinel be the whole reply.
+    assert "ENTIRE reply must be exactly" in prompt
+
+
 def test_contains_code_and_extract_last():
   assert templates.contains_code(_code_turn(GT)) is True
   assert templates.contains_code("def f(x, y):") is True
@@ -214,6 +245,113 @@ def test_generate_user_turn_no_exhaustion_when_reply_is_clean():
   e.generate_user_turn([{"role": "user", "content": PROBLEM}])
   assert e.last_sim_code_reject_exhausted is False
   assert e.last_sim_code_rejected == 0
+  assert e.last_sim_early_term_rejected == 0
+  assert e.last_sim_early_term_exhausted is False
+
+
+# ── PREMATURE-termination rejection (allow_terminate) ─────────────────────────
+# A user cannot be satisfied by a function that does not exist yet, so before the
+# solver's first code proposal a terminating draw is rejected and resampled --
+# same budget as the code-writing rejection. Motivated by gold-sim evals ending
+# as 'no_code' after a single clarifying question.
+
+
+def test_early_terminate_rejected_before_any_code():
+  # First draw wants out with no code on the table (rejected); second is a real
+  # user turn -> that one is returned and the conversation continues.
+  e = _env(
+      sim_backend=_scripted_backend(
+          [
+              "Sounds good, I think you have it. [TERMINATE]",
+              "Above 10 we add, below we subtract.",
+          ]
+      )
+  )
+  reply = e.generate_user_turn(
+      [{"role": "user", "content": PROBLEM}], allow_terminate=False
+  )
+  assert templates.sim_terminated(reply) is False
+  assert "subtract" in reply
+  assert e.last_sim_early_term_rejected == 1
+  assert e.last_sim_early_term_exhausted is False
+  assert e.last_sim_code_rejected == 0
+  # The discarded draw is kept for the eval dump.
+  assert e.last_sim_early_term_samples == [
+      "Sounds good, I think you have it. [TERMINATE]"
+  ]
+
+
+def test_early_terminate_also_catches_a_passing_mention():
+  # `sim_terminated` cannot tell a hand-off from a reply that merely MENTIONS the
+  # sentinel -- which is the most likely shape of a spurious termination. The
+  # guard covers both, because it keys on the same predicate.
+  mention = "I shouldn't say [TERMINATE] yet -- what format is the input?"
+  e = _env(sim_backend=_scripted_backend([mention, "It's a list of ints."]))
+  reply = e.generate_user_turn(
+      [{"role": "user", "content": PROBLEM}], allow_terminate=False
+  )
+  assert reply == "It's a list of ints."
+  assert e.last_sim_early_term_rejected == 1
+
+
+def test_early_terminate_exhaustion_still_ends_the_episode():
+  # The guard can never CREATE a new terminal state: if every draw insists on
+  # ending, the last one is returned unchanged (the loop then ends the episode
+  # exactly as it did before the guard existed) and the flag records that it was
+  # overruled.
+  e = ColBenchSpecUserSimEnv(
+      problem_description=PROBLEM,
+      spec=SPEC,
+      ground_truth=GT,
+      test_cases=CALLS,
+      sim_max_tries=3,
+      sim_backend=_scripted_backend(["Okay, you have it. [TERMINATE]"]),
+  )
+  reply = e.generate_user_turn(
+      [{"role": "user", "content": PROBLEM}], allow_terminate=False
+  )
+  assert templates.sim_terminated(reply) is True
+  assert e.last_sim_early_term_rejected == 3
+  assert e.last_sim_early_term_exhausted is True
+  # NOT a code rejection -- the two exhaustion flags are mutually exclusive, so
+  # the 'sim_code_reject' abort keeps its exact pre-existing meaning.
+  assert e.last_sim_code_reject_exhausted is False
+
+
+def test_code_rejection_still_owns_exhaustion_when_final_draw_writes_code():
+  # Mixed grounds, code last: the returned reply contains code, so the
+  # abort-don't-inject path must claim it even though a terminate was also
+  # rejected along the way.
+  e = ColBenchSpecUserSimEnv(
+      problem_description=PROBLEM,
+      spec=SPEC,
+      ground_truth=GT,
+      test_cases=CALLS,
+      sim_max_tries=2,
+      sim_backend=_scripted_backend(
+          [
+              "You have it. [TERMINATE]",
+              "Like this: ```python\ndef f(x, y): return x + y\n```",
+          ]
+      ),
+  )
+  e.generate_user_turn(
+      [{"role": "user", "content": PROBLEM}], allow_terminate=False
+  )
+  assert e.last_sim_code_reject_exhausted is True
+  assert e.last_sim_early_term_exhausted is False
+  assert e.last_sim_early_term_rejected == 1
+  assert e.last_sim_code_rejected == 1
+
+
+def test_allow_terminate_default_is_permissive():
+  # Default True = pre-existing behavior, so every pre-guard caller (and every
+  # turn after the first code proposal) is untouched.
+  e = _env(sim_backend=_scripted_backend(["All good, thanks! [TERMINATE]"]))
+  reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert templates.sim_terminated(reply) is True
+  assert e.last_sim_early_term_rejected == 0
+  assert e.last_sim_early_term_exhausted is False
 
 
 # ── grading parity with the GT env ────────────────────────────────────────────
@@ -236,7 +374,9 @@ def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
   ``colbench_spec_agent`` / ``validate_colbench_spec`` MUST mirror this: solver
   turn -> track last code / count proposals -> turn cap -> code cap -> else sim
   reply -> [TERMINATE]. Grades the last shown function; reward 0 (and
-  terminated_by 'no_code') if none was ever shown.
+  terminated_by 'no_code') if none was ever shown. A terminating draw is
+  inadmissible until the solver has shown code (``allow_terminate``), and the env
+  resamples it out of the same try budget as a code-writing draw.
   """
   sim_dialogue = [{"role": "user", "content": env.problem_description}]
   last_code, code_proposals, terminated_by = "", 0, None
@@ -255,7 +395,9 @@ def drive(env, assistant_turns, max_turns=10, max_code_proposals=3):
     if code_proposals >= max_code_proposals:
       terminated_by = "code_cap"
       break
-    reply = env.generate_user_turn(sim_dialogue)
+    reply = env.generate_user_turn(
+        sim_dialogue, allow_terminate=bool(last_code)
+    )
     if templates.sim_terminated(env.last_sim_raw):
       terminated_by = "user"
       break

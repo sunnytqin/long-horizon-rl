@@ -156,6 +156,10 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 _DEBUG_SIM = bool(int(os.getenv("COLBENCH_DEBUG_SIM", "0") or "0"))
 _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 
+# How many discarded premature-termination replies to keep per turn for the eval
+# dump. Bounded so a pathological sim cannot bloat the trajectory record.
+_EARLY_TERM_SAMPLES = 3
+
 
 @dataclass
 class ColBenchSpecUserSimEnv:
@@ -195,10 +199,20 @@ class ColBenchSpecUserSimEnv:
       output before the injected turn is char-capped.
     last_sim_code_rejected: how many code-writing sim replies were discarded on
       the last ``generate_user_turn`` (diagnostic).
-    last_sim_code_reject_exhausted: True iff EVERY try on the last
-      ``generate_user_turn`` still wrote code -> the loop should abort this
-      conversation (``terminated_by`` "sim_code_reject") so it can be read, NOT
-      inject a bad turn.
+    last_sim_code_reject_exhausted: True iff the last ``generate_user_turn``
+      ran out of tries AND its final draw still wrote code -> the loop should
+      abort this conversation (``terminated_by`` "sim_code_reject") so it can be
+      read, NOT inject a bad turn.
+    last_sim_early_term_rejected: how many PREMATURE-termination sim replies
+      were discarded on the last ``generate_user_turn`` -- only ever nonzero
+      when the caller passed ``allow_terminate=False`` (diagnostic).
+    last_sim_early_term_exhausted: True iff the last ``generate_user_turn`` ran
+      out of tries while rejecting premature terminations, i.e. the sim insisted
+      on ending before the solver had shown any code. The reply is returned
+      anyway (the loop then ends the episode exactly as it did before this
+      guard existed), so this flag is what tells you the guard was overruled.
+    last_sim_early_term_samples: up to ``_EARLY_TERM_SAMPLES`` of the discarded
+      premature-termination replies, so eval can dump WHY they were discarded.
   """
 
   problem_description: str
@@ -214,12 +228,19 @@ class ColBenchSpecUserSimEnv:
   last_sim_raw: str = field(default="", repr=False)
   last_sim_code_rejected: int = field(default=0, repr=False)
   last_sim_code_reject_exhausted: bool = field(default=False, repr=False)
+  last_sim_early_term_rejected: int = field(default=0, repr=False)
+  last_sim_early_term_exhausted: bool = field(default=False, repr=False)
+  last_sim_early_term_samples: list[str] = field(
+      default_factory=list, repr=False
+  )
 
   def __post_init__(self):
     if self.sim_backend is None:
       self.sim_backend = openai_sim_backend
 
-  def generate_user_turn(self, messages: list[dict[str, str]]) -> str:
+  def generate_user_turn(
+      self, messages: list[dict[str, str]], allow_terminate: bool = True
+  ) -> str:
     """Produce the next spec-conditioned user (simulator) reply.
 
     ``messages`` is the running dialogue as ``[{role, content}, ...]`` (problem
@@ -235,6 +256,12 @@ class ColBenchSpecUserSimEnv:
     Args:
       messages: the running dialogue as ``[{role, content}, ...]``; carries no
         GT.
+      allow_terminate: whether a terminating reply is admissible THIS turn. The
+        caller owns that fact (it tracks whether the solver has shown code), and
+        passes False before the first code proposal -- the prompt's own MINIMUM
+        bar. A premature termination is then rejected and resampled out of the
+        SAME ``sim_max_tries`` budget as a code-writing reply. Default True =
+        pre-existing behavior.
 
     Returns:
       The next user reply: ``<think>``-stripped and char-capped.
@@ -251,24 +278,50 @@ class ColBenchSpecUserSimEnv:
       system_content, user_content = templates.build_spec_sim_messages(
           self.spec, messages
       )
-    # Rejection sampling: an ordinary user never pastes code. If the sim writes
-    # a code fence, re-query (sampling temperature makes retries differ). If
-    # EVERY try still contains code, we do NOT strip or inject it (stripping
-    # yields weird half-sentences) -- we flag exhaustion so the loop aborts the
-    # conversation for the user to read.
+    # Rejection sampling, on TWO grounds, sharing one try budget:
+    #  (a) an ordinary user never pastes code. If the sim writes a code fence,
+    #      re-query (sampling temperature makes retries differ). If EVERY try
+    #      still contains code, we do NOT strip or inject it (stripping yields
+    #      weird half-sentences) -- we flag exhaustion so the loop aborts the
+    #      conversation for the user to read.
+    #  (b) a user cannot be satisfied by code that does not exist yet. When the
+    #      caller says a termination is inadmissible (no code shown yet), a
+    #      terminating draw is discarded the same way. This enforces in CODE the
+    #      MINIMUM bar the sim prompt already states in prose, and it covers
+    #      BOTH ways such a reply arises -- a genuine premature quit and a
+    #      passing MENTION of the sentinel that `sim_terminated` cannot tell
+    #      apart (see templates.TERMINATE_MARKER).
     rejected = 0
+    early_term_rejected = 0
+    early_term_samples: list[str] = []
     raw = ""
     stripped = ""
-    exhausted = True
+    accepted = False
     for _ in range(max(1, self.sim_max_tries)):
       raw = self.sim_backend(system_content, user_content)
       stripped = templates.strip_think(raw)
-      if not templates.sim_wrote_code(stripped):
-        exhausted = False
-        break
-      rejected += 1
+      if templates.sim_wrote_code(stripped):
+        rejected += 1
+        continue
+      if not allow_terminate and templates.sim_terminated(stripped):
+        early_term_rejected += 1
+        if len(early_term_samples) < _EARLY_TERM_SAMPLES:
+          early_term_samples.append(stripped)
+        continue
+      accepted = True
+      break
     self.last_sim_code_rejected = rejected
-    self.last_sim_code_reject_exhausted = exhausted
+    self.last_sim_early_term_rejected = early_term_rejected
+    self.last_sim_early_term_samples = early_term_samples
+    # Attribute exhaustion to whatever the FINAL draw hit, not to whatever was
+    # rejected most: that keeps `last_sim_code_reject_exhausted` byte-identical
+    # in meaning to before (with allow_terminate=True, code is the only
+    # rejection ground, so "ran out of tries" implies the last draw wrote code),
+    # and it guarantees the "abort, do not inject" path still owns every case
+    # where the returned reply contains code.
+    last_wrote_code = templates.sim_wrote_code(stripped)
+    self.last_sim_code_reject_exhausted = (not accepted) and last_wrote_code
+    self.last_sim_early_term_exhausted = (not accepted) and not last_wrote_code
     # No post-hoc character truncation: the old HUMAN_RESPONSE_CHARACTER_LIMIT
     # slice chopped verbose replies mid-sentence (the solver then saw
     # fragments). Brevity is enforced at the source instead -- by the "one or

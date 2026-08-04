@@ -68,6 +68,29 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # input+max_new==ctx).
 CTX_MARGIN = 8
 
+# Cap on discarded premature-termination replies kept per TRAJECTORY (the env
+# already caps them per turn). Purely a dump-size bound.
+MAX_EARLY_TERM_DUMP = 6
+
+# ── Harness version, stamped into every output filename and summary ───────────
+# BUMP THIS whenever a change makes new numbers non-comparable to old ones, so
+# results from before and after land in DIFFERENT files instead of silently
+# overwriting each other (`gcloud storage cp` clobbers, and so does a local
+# re-run: the rest of the tag -- step/sim/val/turns/n/temp/cc -- is identical
+# across a re-eval of the same config).
+# This belongs to the CODE, not to a launch flag: it says "the environment the
+# solver was evaluated in", which is not something you want to be able to set
+# wrongly from the CLI. It is also why it is not derived from VAL_TAG (the test
+# set) or SIM_TAG (the simulator) -- those are already in the name and answer a
+# different question.
+#   v1 -> the original spec harness.
+#   v2 -> 2026-08-03 termination overhaul: the sim can no longer end an episode
+#         before the solver has shown code (resampled out of the sim_max_tries
+#         budget), the terminating reply is recorded, and the sim prompt's
+#         [TERMINATE] instructions were rewritten. Premature-termination rates
+#         are NOT comparable across this line.
+EVAL_HARNESS_VERSION = "v2"
+
 
 # -----------------------------------------------------------------------------
 class Trajectory:
@@ -123,6 +146,15 @@ class Trajectory:
     self.sim_code_rejected = (
         0  # count of code-writing sim replies discarded (rejection sampling)
     )
+    # Premature-termination replies discarded because the solver had not shown
+    # any code yet, and whether that guard was ever overruled by exhaustion.
+    self.sim_early_term_rejected = 0
+    self.early_term_exhausted = False
+    self.early_term_rejected_replies = []
+    # The sim reply that ENDED the episode, when the sim ended it. Before this
+    # existed the transcript simply stopped and the cause was unrecoverable
+    # offline -- the terminate branch dropped the reply on the floor.
+    self.terminating_reply = None
     self.grade_pending = False
 
   def to_dict(self):
@@ -137,6 +169,15 @@ class Trajectory:
         "showed_code": self.showed_code,
         "overflow": self.overflow,
         "sim_code_rejected": self.sim_code_rejected,
+        "sim_early_term_rejected": self.sim_early_term_rejected,
+        "early_term_exhausted": self.early_term_exhausted,
+        "early_term_rejected_replies": self.early_term_rejected_replies,
+        "terminating_reply": self.terminating_reply,
+        "terminate_standalone": (
+            templates.sim_terminate_standalone(self.terminating_reply)
+            if self.terminating_reply is not None
+            else None
+        ),
         "response_tokens": self.response_tokens,
         "reward": self.reward,
         "pass_rate": self.reward,
@@ -362,8 +403,9 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
 def eval_tagged_path(base_out, turns, n_samples, temperature, max_code):
   """Insert an eval-config tag before the output file's extension.
 
-  The tag is '_turns<N>_n<K>_t<temp>_cc<C>', so each config gets its own
-  self-documenting file.
+  The tag is '_turns<N>_n<K>_t<temp>_cc<C>_<harness version>', so each config
+  gets its own self-documenting file and a harness bump cannot overwrite the
+  previous generation of results (see EVAL_HARNESS_VERSION).
 
   Args:
     base_out: the requested output path.
@@ -379,7 +421,7 @@ def eval_tagged_path(base_out, turns, n_samples, temperature, max_code):
   root, ext = os.path.splitext(base_out)
   return (
       f"{root}_turns{turns}_n{n_samples}_t{temperature:g}_cc{max_code}"
-      f"{ext or '.json'}"
+      f"_{EVAL_HARNESS_VERSION}{ext or '.json'}"
   )
 
 
@@ -400,7 +442,10 @@ def run_eval(
   pinned contract) and the eventual ``colbench_spec_agent``: solver turn ->
   track last code / count proposals -> turn cap -> code cap -> else sim reply ->
   [TERMINATE]. Grade the last shown function; reward 0 (terminated_by 'no_code')
-  if the solver never showed code.
+  if the solver never showed code. Before the first code proposal a terminating
+  sim reply is rejected and resampled (``allow_terminate=False``); if it
+  survives the whole budget the episode still ends, with
+  ``early_term_exhausted`` set to say the guard was overruled.
 
   Args:
     solver: an ``OpenAISolver`` or ``SGLangSolver``; both expose
@@ -482,18 +527,37 @@ def run_eval(
       # ---- Advance the frozen sim for each still-open trajectory (parallel
       # HTTP). ----
       def _sim(t):
-        reply = t.env.generate_user_turn(list(t.sim_dialogue))
+        # allow_terminate=showed_code: the sim may only end the episode once a
+        # function is on the table (the prompt's MINIMUM bar, now enforced).
+        reply = t.env.generate_user_turn(
+            list(t.sim_dialogue), allow_terminate=t.showed_code
+        )
+        # Read off the env INSIDE the worker: one env per trajectory today, so
+        # this is race-free either way, but it keeps that from being load-bearing.
         return (
             t,
             reply,
-            t.env.last_sim_raw,
-            t.env.last_sim_code_rejected,
-            t.env.last_sim_code_reject_exhausted,
+            {
+                "raw": t.env.last_sim_raw,
+                "code_rejected": t.env.last_sim_code_rejected,
+                "code_exhausted": t.env.last_sim_code_reject_exhausted,
+                "early_term_rejected": t.env.last_sim_early_term_rejected,
+                "early_term_exhausted": t.env.last_sim_early_term_exhausted,
+                "early_term_samples": list(t.env.last_sim_early_term_samples),
+            },
         )
 
-      for t, reply, raw, code_rejected, exhausted in pool.map(_sim, pending):
-        t.sim_code_rejected += code_rejected
-        if exhausted:
+      for t, reply, info in pool.map(_sim, pending):
+        raw = info["raw"]
+        t.sim_code_rejected += info["code_rejected"]
+        t.sim_early_term_rejected += info["early_term_rejected"]
+        t.early_term_exhausted = t.early_term_exhausted or bool(
+            info["early_term_exhausted"]
+        )
+        for sample in info["early_term_samples"]:
+          if len(t.early_term_rejected_replies) < MAX_EARLY_TERM_DUMP:
+            t.early_term_rejected_replies.append(sample)
+        if info["code_exhausted"]:
           # Every retry still wrote code -> abort this conversation for
           # inspection. Save the offending (uncapped) reply so it shows in the
           # transcript dump.
@@ -503,6 +567,12 @@ def run_eval(
           t.grade_pending = t.showed_code
           continue
         if templates.sim_terminated(raw):
+          # Append the reply that ended the episode (same convention as the
+          # sim_code_reject branch above) so the dumped transcript shows WHY it
+          # stopped instead of just stopping. Not counted as a user turn: the
+          # solver never answers it.
+          t.messages.append({"role": "user", "content": raw})
+          t.terminating_reply = raw
           t.done = True
           t.terminated_by = "user" if t.showed_code else "no_code"
           t.grade_pending = t.showed_code
@@ -582,23 +652,58 @@ def run_eval(
   # sidecar file so this fidelity failure is tracked every run -- these are the
   # conversations to read/fix.
   aborts = [t for t in trajs if t.terminated_by == "sim_code_reject"]
-  aborts_path = os.path.splitext(out_path)[0] + ".aborts.txt"
-  with open(aborts_path, "w", encoding="utf-8") as f:
-    f.write(
-        f"{len(aborts)} sim_code_reject aborts / {n_traj} trajectories"
-        f" (sim={summary.get('sim_model')},"
-        f" sim_max_tries={args.sim_max_tries})\n"
-    )
+  _dump_convos(
+      os.path.splitext(out_path)[0] + ".aborts.txt",
+      aborts,
+      f"{len(aborts)} sim_code_reject aborts / {n_traj} trajectories"
+      f" (sim={summary.get('sim_model')},"
+      f" sim_max_tries={args.sim_max_tries})",
+      "ABORT",
+  )
+  # Same treatment for the conversations the sim ended with NO function ever
+  # shown: the guard resampled and still lost. These now carry the terminating
+  # reply, so this file answers "why did it walk out?" directly.
+  premature = [
+      t
+      for t in trajs
+      if t.terminated_by == "no_code" and t.terminating_reply is not None
+  ]
+  _dump_convos(
+      os.path.splitext(out_path)[0] + ".premature_term.txt",
+      premature,
+      f"{len(premature)} premature terminations (sim ended with no code shown)"
+      f" / {n_traj} trajectories (sim={summary.get('sim_model')},"
+      f" sim_max_tries={args.sim_max_tries},"
+      f" standalone_rate={summary.get('terminate_standalone_rate')})",
+      "PREMATURE",
+  )
+  return summary
+
+
+def _dump_convos(path, selected, header, label):
+  """Write a readable transcript dump for one class of trajectory.
+
+  Args:
+    path: sidecar file to write.
+    selected: the trajectories to dump (may be empty -- the file is still
+      written, so a clean run is distinguishable from a run that never checked).
+    header: first line, describing the class and the run's config.
+    label: short per-conversation tag, e.g. "ABORT".
+  """
+  with open(path, "w", encoding="utf-8") as f:
+    f.write(header + "\n")
     for i, t in enumerate(
-        sorted(aborts, key=lambda t: (t.row_index, t.sample_idx)), 1
+        sorted(selected, key=lambda t: (t.row_index, t.sample_idx)), 1
     ):
       f.write("\n" + "#" * 100 + "\n")
       f.write(
-          f"ABORT {i}/{len(aborts)}  row={t.row_index} sample={t.sample_idx}  "
-          f"turns={t.assistant_turns} proposals={t.code_proposals} "
-          f"sim_code_rejected={t.sim_code_rejected}  final_pass={t.reward}\n"
-          + "#" * 100
-          + "\n"
+          f"{label} {i}/{len(selected)}  row={t.row_index} "
+          f"sample={t.sample_idx}  turns={t.assistant_turns} "
+          f"proposals={t.code_proposals} "
+          f"sim_code_rejected={t.sim_code_rejected} "
+          f"early_term_rejected={t.sim_early_term_rejected} "
+          f"early_term_exhausted={t.early_term_exhausted}  "
+          f"final_pass={t.reward}\n" + "#" * 100 + "\n"
       )
       for m in t.messages:
         if m.get("role") == "system":
@@ -606,10 +711,12 @@ def run_eval(
         f.write(
             f"\n----------[{m['role'].upper()}]----------\n{m['content']}\n"
         )
-  print(
-      f"[validate_spec] {len(aborts)} sim_code_reject aborts -> {aborts_path}"
-  )
-  return summary
+      for j, rejected in enumerate(t.early_term_rejected_replies, 1):
+        f.write(
+            f"\n----------[DISCARDED EARLY-TERMINATE DRAW {j}]----------\n"
+            f"{rejected}\n"
+        )
+  print(f"[validate_spec] {len(selected)} {label.lower()} -> {path}")
 
 
 def _aggregate(trajs, temperature, n_samples, args, elapsed):
@@ -668,6 +775,37 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
       1 for t in trajs if t.terminated_by == "sim_code_reject"
   )
 
+  # Premature-termination guard (the sim wanting out before any code existed).
+  # `rejected_total` counts draws the guard threw away; `exhausted` counts
+  # trajectories where it was overruled after every try -- those still end as
+  # 'no_code', so `premature_terminate_rate` is the headline number to watch: it
+  # is the residual of the very symptom this guard was added for.
+  early_term_rejected_total = sum(t.sim_early_term_rejected for t in trajs)
+  early_term_reject_traj_rate = sum(
+      1 for t in trajs if t.sim_early_term_rejected > 0
+  ) / max(1, n)
+  early_term_exhausted = sum(1 for t in trajs if t.early_term_exhausted)
+  premature_terminate_rate = sum(
+      1
+      for t in trajs
+      if t.terminated_by == "no_code" and t.terminating_reply is not None
+  ) / max(1, n)
+  # Of the terminations that DID happen, how many were the bare sentinel the
+  # prompt asks for vs. a passing mention inside prose. A low rate here means
+  # `sim_terminated`'s unanchored match is doing the damage and the matcher
+  # itself should be tightened; a high rate means it is genuine sim judgment.
+  terminated = [t for t in trajs if t.terminating_reply is not None]
+  terminate_standalone_rate = (
+      sum(
+          1
+          for t in terminated
+          if templates.sim_terminate_standalone(t.terminating_reply)
+      )
+      / len(terminated)
+      if terminated
+      else None
+  )
+
   # The imperfect-signal cost: among USER-terminated trajectories (the sim
   # decided it was satisfied), how often did the graded code NOT fully pass GT.
   # High -> the sim is quitting on wrong code; low -> user-termination tracks
@@ -687,6 +825,9 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
   )
 
   return {
+      # Which harness produced these numbers (also in the filename). Read this
+      # before comparing two summaries.
+      "harness_version": EVAL_HARNESS_VERSION,
       "model": args.model,
       "solver_backend": args.solver_backend,
       "val_file": args.val_file,
@@ -726,6 +867,16 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
       "sim_code_reject_traj_rate": round(sim_code_reject_traj_rate, 3),
       # Conversations aborted because every retry wrote code.
       "sim_code_reject_aborted": sim_code_reject_aborted,
+      # Premature-termination guard + its residual.
+      "sim_early_term_rejected_total": early_term_rejected_total,
+      "sim_early_term_reject_traj_rate": round(early_term_reject_traj_rate, 3),
+      "sim_early_term_exhausted": early_term_exhausted,
+      "premature_terminate_rate": round(premature_terminate_rate, 4),
+      "terminate_standalone_rate": (
+          round(terminate_standalone_rate, 3)
+          if terminate_standalone_rate is not None
+          else None
+      ),
       "terminated_by_counts": dict(
           sorted(term_counts.items(), key=lambda kv: str(kv[0]))
       ),

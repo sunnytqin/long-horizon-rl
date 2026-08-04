@@ -239,15 +239,47 @@ def test_code_cap_forces_grade():
 
 
 def test_user_terminate_without_code_is_no_code_zero():
+  # The sim insists on ending across the whole try budget (the scripted backend
+  # repeats its last reply), so the premature-termination guard is overruled and
+  # the outcome is unchanged from before the guard existed -- it can only ever
+  # remove premature terminations, never add a terminal state.
   obj = _make_loop(
       solver_turns=["Tell me more?"],
       sim_replies=["I think you've got it. [TERMINATE]"],
+      sim_max_tries=3,
   )
   out = _run(obj)
   rei = out.extra_fields["reward_extra_info"]
   assert rei["term_no_code"] == 1.0
   assert rei["showed_code"] == 0.0
   assert out.reward_score == 0.0
+  assert rei["sim_early_term_rejected"] == 3.0
+  assert rei["term_early_term_exhausted"] == 1.0
+  # A trailing marker in prose, not the bare sentinel the prompt now demands.
+  assert rei["term_standalone"] == 0.0
+
+
+def test_early_terminate_before_code_is_resampled_in_training():
+  # Draw 1 wants out before any function exists -> rejected; draw 2 is a real
+  # user turn, so the rollout goes on to a code proposal instead of being a
+  # 0-reward stub. This is the training-side wiring of allow_terminate.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=[
+          "Looks right to me. [TERMINATE]",
+          "It's 10.",
+          "[TERMINATE]",
+      ],
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["term_user"] == 1.0
+  assert rei["showed_code"] == 1.0
+  assert out.reward_score == 1.0
+  assert rei["sim_early_term_rejected"] == 1.0
+  assert rei["term_early_term_exhausted"] == 0.0
+  # The episode-ending reply WAS the bare sentinel this time.
+  assert rei["term_standalone"] == 1.0
 
 
 def test_sim_code_reject_exhaustion_aborts():

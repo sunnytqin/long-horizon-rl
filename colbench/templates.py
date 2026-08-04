@@ -487,32 +487,59 @@ Your task is to help a human user write a personalized python function.
 # (str_dialogue_history), mirroring the GT path's split. Wording is
 # intentionally natural prose (a person could act on it), with per-mechanism
 # bullets for WHEN to terminate; tune against real rollouts in eval.
+#
+# THE ASYMMETRY TO PRESERVE WHEN EDITING THIS -- "imperfect user" is two
+# different things and only one of them is wanted:
+#   * RELIABLE about WHAT IT WANTS. Reward comes from the GT function +
+#     test_cases, never from the sim, so a requirement the sim withholds when
+#     asked, garbles, or INVENTS is a loss the solver cannot avoid by playing
+#     well. That is noise in the reward, not difficulty in the task.
+#   * UNRELIABLE as a JUDGE of the code. Vague reactions, missed bugs, quitting
+#     on imperfect code -- that IS the intended imperfection (it is what
+#     `false_terminate_rate` measures, and it costs the solver nothing directly
+#     because grading is the oracle's job).
+# The pacing rule ("don't volunteer what wasn't asked") is about ORDER, not
+# withholding: everything still comes out, which is why the sim is told to raise
+# the next requirement itself once the assistant stops asking.
+# The "NEVER write code" bullet is load-bearing, not politeness: env_spec
+# reject-samples any fenced reply (up to sim_max_tries draws), and on the
+# grounded arm that sampler is the leak defense.
 SPEC_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time.
 
 Who you are: {who}, in {domain}. Your comfort with Python: {python_skill}. You come across as: {communication_style}.
 
 Your situation: {scenario}
 
-What you actually want: Below is the full behavior you need -- you have all of it in your head, it's what you're trying to get built. Talk about it in your own words, never as code, the way this person naturally would. If the assistant asks you something, answer ONLY what they asked -- briefly and in character -- without volunteering additional information. Never tell the assistant, or hint, that you are working from a full list of requirements: to them, you are simply a person who knows what they want. Act like a real user, letting each requirement surface naturally as the assistant's questions draw it out, rather than laying everything out at once.
+What you actually want: below is the full behavior you need -- you have all of it in your head, it's what you're trying to get built.
 {requirements}
 
-What your job is (and isn't): Your job is to TELL the assistant what you want and to react as this person would -- it is NOT to make the code correct, and NOT to review it line by line. You never write code yourself and you never paste a function back to them, not even to fix a mistake -- you only describe things in plain words. You are not the judge of whether the code is correct; the assistant's job is to get it right from what you tell them. How much you can even tell that something looks wrong depends entirely on your Python comfort ({python_skill}): if you are not very technical, your reactions stay vague ("that doesn't look like what I meant", "the totals seem off") and you would NOT spot or name a specific line, value, or edge case; only a genuinely technical person would point precisely at what's wrong. It's completely fine to be an imperfect, ordinary user who misses bugs.
+You have exactly TWO jobs: get everything above across to the assistant as they draw it out, and play out the plot below. You are NOT here to review their code, hunt for bugs, or make the function correct -- that is the assistant's job, not yours.
+
+About WHAT YOU WANT you are a completely reliable source:
+- When the assistant asks you something, answer it accurately and completely, based on the requirements above.
+- If they ask something broad ("what do you need?"), give the two or three things that matter most to you rather than reciting the whole list.
+- Do NOT volunteer requirements they haven't asked about yet. Let those surface as their questions draw them out.
+- Never invent anything that is not in your requirements. If they ask about a case your requirements don't cover, say you don't mind or you hadn't thought about it -- do not make up a new rule.
+- Never tell the assistant, or hint, that you are working from a written list. To them, you are simply a user who is trying to communicate what they want.
+- NEVER write code. You describe what you want in plain words -- you do not write, paste or fix the function.
+
+About WHETHER THEIR CODE IS RIGHT you are unreliable, and that is fine. You can read their code, but you cannot run or test it, so you never report what it printed or what error it gave. How much you can even tell that something looks off depends entirely on your Python comfort ({python_skill}). If you are not very technical your reactions stay vague ("that doesn't look like what I meant", "the totals seem off") and you would NOT name a specific line or value; only a genuinely technical person points precisely at what's wrong. Missing a bug is completely fine and expected. Being unclear about what you WANT is not.
 
 The plot of this conversation: {plot}
-This plot is the one thing that isn't clear from the start -- follow it naturally. If it's something you'd only mention when asked, don't bring it up unless the assistant asks. If it's something you'd only notice once you saw their code, react to their code the way a person would -- you READ it, you never run or test it. If it's something you'd just remember, bring it up when it feels natural.
 
-When you're done: Your ultimate goal is to walk away with the function you need, so the MINIMUM bar to end the conversation is that the assistant has actually written a COMPLETE python function inside a code block. Until you have seen such a code block, you MUST NOT end the conversation -- no matter how much you have already explained. If the assistant has only asked you questions and not yet shown any code, you simply answer and keep going; you do NOT say [TERMINATE] yet.
+Play the plot out naturally, then treat it as DONE:
+- If your plot is something you'd only mention when asked: don't bring it up unless they ask. It is done once you've answered and they've shown a function after your answer. If they never asked and just wrote one, you had nothing to add, so it is done.
+- If your plot is something you'd only notice once you saw their code: say that ONE thing in plain words after they show a function. It is done once they've shown a new function after your remark, or if their very first version already had that detail right. It is ONLY the detail the plot is about -- you do not go through the other requirements and you do not hunt for other bugs.
+- If your plot is something you'd just remember: bring it up when it feels natural. It is done once you've raised it and they've shown a function after that.
 
-Once code is on the table, whether you're finished ALSO depends on how the plot of the conversation was set up -- play out the plot as described above first:
-- If your plot was to clarify something only when asked -- you're done once you've answered it and they've shown a new function after your answer. After that, if you are satisfied with the function, you can end with [TERMINATE]. If the assistant just went ahead and wrote a function without ever asking, that's fine too -- you had nothing to add, so once a function is on the table you can end with [TERMINATE].
-- If your plot was to correct the code when it got a detail wrong -- this is ONLY about the one specific detail your plot is about, not every possible bug and not all the other requirements. You point out that one thing in plain words (never by writing code, and only as precisely as your Python comfort allows), and you're done once you've said it and they've shown a new function after it -- or their very first version already had that detail right (nothing to correct, so you're done). You do NOT keep hunting for other problems. After that, once a complete function is on the table, you can end with [TERMINATE].
-- If your plot was to remember something and bring it up yourself -- you're done once you've played out the plot of bringing up the forgotten part and they've shown a function after that. After that, once a complete function is on the table, you can end with [TERMINATE].
+Decide what to do each turn, in this order:
+1. Has the assistant shown a COMPLETE python function inside a code block? If NOT, you cannot be finished yet. Answer what they asked, bring up the next thing you need, or nudge them to just show you the function.
+2. Is the plot above DONE? If not, play it out.
+3. Otherwise you're done, even if the code isn't perfect. Whether the function is truly correct is NOT your call: you are an ordinary user, not a code reviewer.
 
-So only reply with [TERMINATE] when BOTH are true: (1) your plot above has been fully played out, and (2) a complete python function is on the table. Whether that function is actually correct is NOT your call and NOT a condition -- you are an ordinary user, not its judge. If either condition is missing, keep talking instead.
+HOW to end, once you're done: your ENTIRE reply must be exactly [TERMINATE]. It is a signal that ends the conversation, and the assistant never sees it.
 
-You're an ordinary user, not a code reviewer: you don't check every line, you can't test anything, and you don't keep hunting for new problems. Once both conditions above are satisfied you're done -- even if the code isn't perfect. You might casually mention something else that looks off, but you don't have to.
-
-Keep every reply very SHORT -- usually one or two sentences, the way a person fires off a quick message. Do not explain everything at once or recite all your requirements in one go. Only use [TERMINATE] once both conditions above are met."""
+Keep every reply very SHORT, usually one or two sentences, the way a person fires off a quick message."""
 
 # The GROUNDED user-simulator's SYSTEM prompt (opt-in via
 # +colbench.grounded_sim). Same spec-path machinery -- user-driven [TERMINATE],
@@ -549,17 +576,36 @@ This is the one thing that isn't clear from the start -- follow it naturally. If
 
 When you're done: the MINIMUM bar to end the conversation is that the assistant has actually written a COMPLETE python function inside a code block. Until you have seen one you MUST NOT end the conversation, no matter how much you have already explained -- if they have only asked questions, you simply answer and keep going.
 
-Once a complete function is on the table, end the conversation by replying [TERMINATE] when BOTH are true:
+Once a complete function is on the table, end the conversation when BOTH are true:
   1) the plot above has been fully played out, and
   2) the function does what you asked for, as far as you can tell.
 
-On (2): you are an ordinary user, not a code reviewer. You do not check it line by line and you cannot run it. But you know what you want -- so if the function plainly does not do it (it ignores something you told them, or handles a case the wrong way), say so in plain words and let them try again, instead of ending. Point at the BEHAVIOR you wanted, never at the code. If it looks right to you, end with [TERMINATE].
+On (2): you are an ordinary user, not a code reviewer. You do not check it line by line and you cannot run it. But you know what you want -- so if the function plainly does not do it (it ignores something you told them, or handles a case the wrong way), say so in plain words and let them try again, instead of ending. Point at the BEHAVIOR you wanted, never at the code. If it looks right to you, you're done.
 
-Keep every reply very SHORT -- usually one or two sentences. Only use [TERMINATE] once both conditions above are met."""
+HOW to end, once both conditions are met: your ENTIRE reply must be exactly [TERMINATE] -- that sentinel alone and NOTHING else. No goodbye, no thanks, no explanation, nothing before or after it. It is a signal, not a message. Any reply that is still part of the conversation must not contain that sentinel anywhere at all, in any form: if you are still talking, just talk.
+
+Keep every reply very SHORT -- usually one or two sentences."""
 
 # The sentinel the user-simulator emits to end the conversation (bare string
 # match).
 TERMINATE_MARKER = "[TERMINATE]"
+
+# ── Why the sim prompts barely say the sentinel out loud ──────────────────────
+# `sim_terminated` is an UNANCHORED substring match, so a reply that merely
+# MENTIONS the sentinel ends the episode -- including the most correct possible
+# reply, e.g. "I haven't seen code yet so I shouldn't say [TERMINATE] -- what
+# format is the input?". The prompts above used to name the sentinel 7 times,
+# most of them in exactly that negated form ("you do NOT say [TERMINATE] yet",
+# "Only use [TERMINATE] once ..."), which is a lot of surface for the sim to
+# echo. They now describe the ACT ("end the conversation") everywhere and name
+# the sentinel only in the one HOW-to-end sentence, which additionally demands
+# the sentinel be the WHOLE reply.
+# The matcher itself is deliberately NOT tightened to require that: the common
+# legitimate form is a trailing "Looks good, thanks! [TERMINATE]", so an
+# end-anchored or exact matcher would trade this failure for the opposite one
+# (episodes that should end grinding to the turn cap). Measure first --
+# `sim_terminate_standalone` is recorded per trajectory, so one eval run says
+# whether the surviving terminations are standalone or prose.
 
 
 def build_spec_sim_messages(
@@ -642,6 +688,31 @@ def sim_terminated(reply: str) -> bool:
     True iff the sentinel is present, so the episode should end.
   """
   return TERMINATE_MARKER.lower() in strip_think(reply).lower()
+
+
+# Punctuation/emphasis a sim may wrap the bare sentinel in ("**[TERMINATE]**",
+# "[TERMINATE].") and that still reads as a standalone signal.
+_STANDALONE_TRIM = " \t\n*`\"'.!"
+
+
+def sim_terminate_standalone(reply: str) -> bool:
+  """True iff the reply is JUST the sentinel -- the form the prompt asks for.
+
+  DIAGNOSTIC ONLY -- deliberately NOT part of any termination decision (see the
+  note by ``TERMINATE_MARKER``). Recorded per trajectory so we can tell a real
+  hand-off ("[TERMINATE]") from an episode killed by a passing mention ("I
+  shouldn't say [TERMINATE] yet, so ..."), which ``sim_terminated`` cannot
+  distinguish.
+
+  Args:
+    reply: the sim reply, ``<think>``-stripped or not.
+
+  Returns:
+    True iff the sentinel, ignoring surrounding whitespace/emphasis, is the
+    entire reply.
+  """
+  clean = strip_think(reply).strip().strip(_STANDALONE_TRIM).strip()
+  return clean.upper() == TERMINATE_MARKER
 
 
 def contains_code(text: str) -> bool:

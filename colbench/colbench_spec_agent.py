@@ -23,6 +23,15 @@ the env:
     the sim up to ``sim_max_tries`` if the reply contains a code fence, and
     flags ``last_sim_code_reject_exhausted`` if every try wrote code -> the loop
     aborts that conversation (``terminated_by="sim_code_reject"``).
+  * The SAME sampler also rejects a terminating reply drawn before the solver has
+    shown any code (``allow_terminate=showed_code``), because a user cannot be
+    satisfied by a function that does not exist. Motivated by measurement: gold-
+    sim evals showed episodes ending as "no_code" after a single clarifying
+    question, and ``sim_terminated`` is an unanchored substring match, so a reply
+    that merely MENTIONS the sentinel is indistinguishable from a hand-off. On
+    exhaustion the episode still ends (``last_sim_early_term_exhausted`` records
+    that), so this guard can only reduce premature terminations, never add a new
+    terminal state.
 
 Reference contract (MUST stay byte-identical):
 ``validate_colbench_spec.run_eval`` and the pinned
@@ -33,8 +42,9 @@ Reference contract (MUST stay byte-identical):
      "no_code").
   3. Code cap (code_proposals >= max_code_proposals, default 2) -> stop; grade
      (terminated_by "code_cap").
-  4. Else the sim replies:
-       - exhausted (all tries wrote code) -> stop; terminated_by
+  4. Else the sim replies (terminating draws rejected while showed_code is
+     False):
+       - exhausted with code in the final draw -> stop; terminated_by
          "sim_code_reject"; grade last_code.
        - elif sim_terminated -> stop; terminated_by "user" (or "no_code"); grade
          last_code.
@@ -257,6 +267,14 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     last_code_turn_idx = None
     first_code = ""
     sim_code_rejected = 0
+    # Premature-termination guard bookkeeping (see the generate_user_turn call
+    # below): draws discarded because the sim tried to end before any code was
+    # shown, and whether it was overruled by exhausting the try budget.
+    sim_early_term_rejected = 0
+    early_term_exhausted = False
+    # The sim reply that ended the episode, when the sim ended it -- kept so the
+    # convo debug dump and the `term_standalone` metric can say WHY.
+    terminating_reply = None
     # Total characters of the sim replies actually injected into the solver's
     # context (paired with user_turns to give a mean). Watches whether the
     # SIM_MAX_TOKENS bound + the prompt's brevity instruction are holding -- the
@@ -380,7 +398,16 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         try:
           reply = await asyncio.wait_for(
               self.loop.run_in_executor(
-                  None, env.generate_user_turn, list(sim_dialogue)
+                  None,
+                  env.generate_user_turn,
+                  list(sim_dialogue),
+                  # allow_terminate (positional -- run_in_executor takes no
+                  # kwargs): the sim may only end the episode once a function is
+                  # on the table. Enforces in code the MINIMUM bar its own
+                  # prompt states, and covers the case where `sim_terminated`
+                  # fires on a passing MENTION of the sentinel rather than an
+                  # actual hand-off.
+                  showed_code,
               ),
               timeout=self.env_step_timeout,
           )
@@ -394,6 +421,10 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
           break
 
       sim_code_rejected += env.last_sim_code_rejected
+      sim_early_term_rejected += env.last_sim_early_term_rejected
+      early_term_exhausted = (
+          early_term_exhausted or env.last_sim_early_term_exhausted
+      )
       raw = env.last_sim_raw
 
       if env.last_sim_code_reject_exhausted:
@@ -404,6 +435,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         break
 
       if templates.sim_terminated(raw):
+        terminating_reply = raw
         terminated_by = "user" if showed_code else "no_code"
         break
 
@@ -514,6 +546,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
           reward,
           terminated_by,
           result,
+          terminating_reply,
       )
 
     response_ids = prompt_ids[-len(response_mask) :]
@@ -551,6 +584,24 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 "showed_code": float(showed_code),
                 "code_proposals": float(code_proposals),
                 "sim_code_rejected": float(sim_code_rejected),
+                # Premature-termination guard: draws discarded because the sim
+                # wanted out before any code existed, and how often it was
+                # overruled anyway (budget exhausted -> episode still ends
+                # no_code). term_no_code MINUS term_early_term_exhausted is what
+                # the guard is buying; a rising rejected count with a flat
+                # exhausted count means the sim is being talked back into the
+                # conversation, which is the intended effect.
+                "sim_early_term_rejected": float(sim_early_term_rejected),
+                "term_early_term_exhausted": float(early_term_exhausted),
+                # Of the sim-ended episodes, was the closing reply the bare
+                # sentinel the prompt asks for (1) or prose that merely mentions
+                # it (0)? 0 means `sim_terminated`'s unanchored match is what
+                # ended the episode, not the sim's judgment.
+                "term_standalone": (
+                    float(templates.sim_terminate_standalone(terminating_reply))
+                    if terminating_reply is not None
+                    else 0.0
+                ),
                 "first_code_pass_rate": float(first_code_pass_rate),
                 "pass_rate": float(pass_rate),
                 "length_penalty": float(length_penalty),
@@ -601,6 +652,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       reward,
       terminated_by,
       result,
+      terminating_reply=None,
   ):
     """Dump one full trajectory for manual inspection (COLBENCH_DEBUG_CONVO)."""
     n = _DEBUG_PREVIEW
@@ -629,6 +681,16 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         n,
         str(last_code)[:n],
     )
+    # The closing sim reply is NOT part of sim_dialogue (the episode ends before
+    # it is injected), so without this line a sim-ended trajectory dumps with no
+    # trace of what ended it.
+    if terminating_reply is not None:
+      logger.warning(
+          "[COLBENCH_SPEC_CONVO] terminating_reply[:%d]=%r standalone=%s",
+          n,
+          str(terminating_reply)[:n],
+          templates.sim_terminate_standalone(terminating_reply),
+      )
     logger.warning(
         "[COLBENCH_SPEC_CONVO] pass_rate=%.3f all_pass=%s n=%d",
         reward,
