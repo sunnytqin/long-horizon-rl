@@ -63,7 +63,7 @@ def _scripted_backend(replies):
   return backend
 
 
-def _env(sim_backend=None, grounded=False):
+def _env(sim_backend=None, grounded=False, sim_prompt=""):
   return ColBenchSpecUserSimEnv(
       problem_description=PROBLEM,
       spec=SPEC,
@@ -71,6 +71,7 @@ def _env(sim_backend=None, grounded=False):
       test_cases=CALLS,
       sim_backend=sim_backend,
       grounded=grounded,
+      sim_prompt=sim_prompt,
   )
 
 
@@ -613,6 +614,93 @@ def test_grounded_leak_invariant_full_episode():
   for m in dialogue:
     if m["role"] == "user":
       assert "x >= 10" not in m["content"]
+
+
+# ── MINIMAL sim modes: A1 "codeonly" / A2 "plot" ──────────────────────────────
+# The ladder that goes UP from the naive arm instead of stripping the spec arm
+# down. A1's whole value is being a NULL-DELTA CONTROL, which only holds if its
+# sim call is byte-identical to the naive arm's -- that is what these pin.
+
+
+def test_codeonly_sim_call_is_byte_identical_to_the_naive_arm():
+  # THE invariant behind A1. If this drifts, an A1-vs-naive gap stops meaning
+  # "residual spec-path difference" and starts meaning "we changed the prompt",
+  # and the whole ladder is uninterpretable.
+  backend, seen = _capturing_backend()
+  e = _env(sim_backend=backend, sim_prompt="codeonly")
+  dialogue = [
+      {"role": "user", "content": PROBLEM},
+      {"role": "assistant", "content": "What's the cutoff?"},
+  ]
+  e.generate_user_turn(list(dialogue))
+  sys_msg, usr_msg = seen[-1]
+  assert sys_msg == templates.SIM_SYSTEM_PROMPT
+  assert usr_msg == templates.build_sim_user_message(
+      e.problem_description, e.ground_truth, dialogue
+  )
+
+
+def test_codeonly_carries_gt_but_no_spec_and_no_plot():
+  backend, seen = _capturing_backend()
+  e = _env(sim_backend=backend, sim_prompt="codeonly")
+  e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  sys_msg, usr_msg = seen[-1]
+  blob = sys_msg + usr_msg
+  assert GT.strip() in blob          # the sim answers off the GT ...
+  assert SPEC["plot"] not in blob    # ... with NO plot (that is A2) ...
+  assert SPEC["requirements"] not in blob
+  assert SPEC["scenario"] not in blob
+  # ... and none of the spec arm's termination apparatus.
+  assert "[TERMINATE]" not in blob
+  assert "role-playing" not in blob
+
+
+def test_plot_mode_is_codeonly_plus_exactly_the_plot():
+  backend, seen = _capturing_backend()
+  e = _env(sim_backend=backend, sim_prompt="plot")
+  e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  sys_msg, usr_msg = seen[-1]
+  assert sys_msg == templates.SIM_SYSTEM_PROMPT
+  assert SPEC["plot"] in usr_msg
+  assert GT.strip() in usr_msg
+  assert "[TERMINATE]" not in usr_msg
+  # The dialogue still comes LAST, after the plot -- the naive prompt's shape.
+  assert usr_msg.index(SPEC["plot"]) < usr_msg.index("Here is the dialogue so far")
+
+
+def test_plot_mode_with_an_empty_plot_falls_back_to_the_naive_call():
+  # A spec row with no plot must not silently produce a half-spliced prompt.
+  backend, seen = _capturing_backend()
+  e = _env(sim_backend=backend, sim_prompt="plot")
+  e.spec = dict(e.spec, plot="")
+  e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  _, usr_msg = seen[-1]
+  assert "There is one thing you would not bring up" not in usr_msg
+  assert usr_msg == templates.build_sim_user_message(
+      e.problem_description, e.ground_truth, [{"role": "user", "content": PROBLEM}]
+  )
+
+
+def test_sim_prompt_defaults_preserve_the_legacy_grounded_flag():
+  # Back-compat: +colbench.grounded_sim and validate's --grounded still work,
+  # and an explicit sim_prompt wins over the bool.
+  assert _env().sim_prompt == "spec"
+  assert _env(grounded=True).sim_prompt == "grounded"
+  e = _env(grounded=True, sim_prompt="codeonly")
+  assert e.sim_prompt == "codeonly" and e.grounded is False
+
+
+def test_unknown_sim_prompt_fails_loudly():
+  # A typo in SIM_PROMPT must not silently fall through to the spec arm and
+  # burn a run.
+  # Plain try/except, not pytest.raises: this module is also run directly by the
+  # __main__ block below, which has no pytest.
+  try:
+    _env(sim_prompt="codonly")
+  except ValueError as e:
+    assert "unknown sim_prompt" in str(e)
+  else:
+    raise AssertionError("a typo'd sim_prompt was silently accepted")
 
 
 if __name__ == "__main__":

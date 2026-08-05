@@ -32,7 +32,8 @@
 #   MAX_RESPONSE_LENGTH, MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
 #   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD, SIM_MAX_TOKENS,
-#   GROUNDED_SIM, TERMINATE_ON_ALLPASS, BINARY_REWARD, LENGTH_PENALTY_COEF, LENGTH_SOFT_CAP.
+#   GROUNDED_SIM, SIM_PROMPT, TERMINATE_ON_ALLPASS, BINARY_REWARD, LENGTH_PENALTY_COEF,
+#   LENGTH_SOFT_CAP.
 
 
 set -xeuo pipefail
@@ -106,6 +107,14 @@ binary_reward=${BINARY_REWARD:-False}
 # grade-last-shown-code, sim_wrote_code rejection, the solver prompt, the parquet -- is unchanged.
 # OFF by default; eval never honors it, so the golden eval stays spec-conditioned.
 grounded_sim=${GROUNDED_SIM:-False}
+# WHICH user-sim prompt / arm: spec | grounded | codeonly | plot. Empty (default) defers to
+# GROUNDED_SIM above, so every existing launch is byte-identical. The "improve UP from naive"
+# ladder: codeonly (A1) = the naive arm's stock answerer on the GT, no plot, no role-play --
+# a NULL-DELTA CONTROL that must reproduce the naive arm; plot (A2) = A1 + spec.plot. BOTH are
+# meant to run with MAX_CODE_PROPOSALS=1, which removes the sim's judging and termination roles
+# (the loop grades the first proposal and breaks before the sim speaks again) and swaps the
+# solver's system prompt to the naive one-shot wording. See colbench/prompts.py.
+sim_prompt=${SIM_PROMPT:-auto}   # auto = defer to GROUNDED_SIM (back-compat)
 # Spec-path guardrail: max ```python proposals before the loop force-grades the last one (default
 # 2, reduced from 3 after eval). Replaces the GT path's sim_reject_max_tries.
 max_code_proposals=${MAX_CODE_PROPOSALS:-2}
@@ -291,6 +300,7 @@ python3 -m verl.trainer.main_ppo \
    +colbench.terminate_on_allpass=${terminate_on_allpass} \
    +colbench.binary_reward=${binary_reward} \
    +colbench.grounded_sim=${grounded_sim} \
+   +colbench.sim_prompt="${sim_prompt}" \
    trainer.balance_batch=True \
    trainer.logger='["console","tensorboard"]' \
    trainer.project_name=${PROJECT_NAME} \

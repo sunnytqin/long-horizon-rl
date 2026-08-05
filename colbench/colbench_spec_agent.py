@@ -200,6 +200,14 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         if isinstance(_gs, bool)
         else str(_gs).strip().lower() in ("1", "true", "yes", "on")
     )
+    # WHICH sim prompt / arm (+colbench.sim_prompt): spec | grounded | codeonly |
+    # plot. "auto" (the run script's default) or empty DEFERS to grounded_sim
+    # above, so every existing launch is byte-identical. The script passes the
+    # "auto" sentinel rather than an empty string so hydra never has to parse a
+    # bare `key=`. See ColBenchSpecUserSimEnv.sim_prompt for the ladder;
+    # codeonly/plot are meant to run at max_code_proposals=1.
+    _sp = str(cc.get("sim_prompt", "") or "").strip()
+    self.sim_prompt = "" if _sp.lower() in ("", "auto", "none") else _sp
 
   @rollout_trace_op
   async def run(
@@ -208,6 +216,29 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     messages = list(kwargs["raw_prompt"])
     extra_info = kwargs.get("extra_info", {}) or {}
     index = int(kwargs.get("index", 0))
+
+    # ── Solver prompt must describe the protocol the solver is ACTUALLY in ──
+    # The spec parquet bakes COLBENCH_SPEC_AGENT_SYSTEM_PROMPT into `prompt`
+    # (preprocess_colbench_spec), and it promises two things that are FALSE at
+    # max_code_proposals=1: that the user "will read it and either correct you or
+    # end the conversation", and that you "may revise and show an updated
+    # ```python block as many times as needed". At a cap of 1 the loop grades the
+    # first proposal and ends, so the solver would be optimizing against a
+    # protocol it is not in. Swap in the naive arm's prompt, whose trailing line
+    # -- "Showing this code block indicates you are submitting your final answer"
+    # -- is exactly the one-shot semantics, and which makes A1's solver prompt
+    # byte-identical to the naive arm's as well as its sim call.
+    # Keyed off the CAP, not off sim_prompt, so the two can never drift apart:
+    # any run at a cap of 1 is one-shot and gets the one-shot prompt.
+    # Done at RUNTIME rather than by regenerating the parquet so both arms read
+    # the same dataset (no dataset confound) and it is reversible.
+    if self.max_code_proposals <= 1:
+      messages = [
+          {**m, "content": templates.COLBENCH_AGENT_SYSTEM_PROMPT}
+          if m.get("role") == "system"
+          else m
+          for m in messages
+      ]
 
     # The initial (public) problem turn = the last user message of the prompt.
     # It seeds the simulator's dialogue history -- it carries NO ground truth.
@@ -237,6 +268,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         reward_time_limit=self.reward_time_limit,
         sim_max_tries=self.sim_max_tries,
         grounded=self.grounded_sim,
+        sim_prompt=self.sim_prompt,
     )
 
     request_id = uuid4().hex

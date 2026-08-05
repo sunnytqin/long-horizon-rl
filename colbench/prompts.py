@@ -347,6 +347,63 @@ HOW to end, once you're done: your ENTIRE reply must be exactly [TERMINATE]. It 
 
 Keep every reply very SHORT, usually one or two sentences, the way a person fires off a quick message."""
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MINIMAL SIM (the "improve UP from naive" ladder) -- A1 `codeonly` / A2 `plot`.
+# ══════════════════════════════════════════════════════════════════════════════
+# The GT-vs-spec study kept trying to fix the SPEC path DOWN toward the naive arm.
+# This ladder goes the other way: start from the naive arm, which works, and add
+# ONE thing at a time. Modes, all at max_code_proposals=1:
+#   codeonly (A1) -- HUMAN_SIMULATOR_PROMPT verbatim, no plot. A NULL-DELTA
+#                    CONTROL: it must reproduce the naive arm. Its sim call is
+#                    byte-identical to the naive arm's (see
+#                    templates.build_minimal_sim_messages), so a gap between them
+#                    means some residual spec-path difference is still live and
+#                    every later rung is uninterpretable.
+#   plot     (A2) -- codeonly + the authored spec["plot"]. THE hypothesis.
+#   plotpersona (A3) -- + persona. Not built yet; add it here when A2 reads out.
+#
+# WHY THE TERMINATION APPARATUS IS ABSENT, not merely shortened: at
+# max_code_proposals=1 the loop force-grades on the FIRST proposal and breaks
+# BEFORE generate_user_turn, so the sim never speaks after code exists. It has no
+# judging role and no termination role -- both were removed by the protocol, not
+# by the prompt. So there is no [TERMINATE] instruction, no correctness gate, no
+# plot DONE-ness, no role boundary. Re-adding any of them would describe a
+# protocol the sim is not in.
+#
+# WHY THE PLOT SURVIVES A ONE-SHOT PROTOCOL: measured over the authored sets,
+# ~99% of plots in train / test_small / test_small.strong are reachable by ASKING
+# ("if the assistant asks X, the user would clarify Y" / "would not think to
+# mention Z unless asked"); only ~0-1% fire solely on seeing code. What one shot
+# removes is the DISJUNCT second path in "unless the assistant asks OR SHOWS
+# logic that ..." -- 0.6% of train but 8.7% of test_small.strong. That is
+# deliberate: it makes asking the ONLY route to the hidden requirement, which is
+# the capability the naive arm trains. Note the split asymmetry (0.6% vs 8.7%)
+# when reading an eval number against a training curve.
+# THIRD PERSON, deliberately. Measured over the authored sets, 0% of plots are
+# written in second person and 87% (train) / 100% (test_small.strong) say "the
+# user would ..." outright. A "you would not bring up on your own" wrapper made
+# every rendered prompt switch person across three lines. Third person also
+# matches the sentence HUMAN_SIMULATOR_PROMPT opens with ("simulate a human
+# user"). Keep the trailing line short: the plots overwhelmingly state their own
+# ask-condition, so spelling out "if the agent never asks, never mention it"
+# here just repeats the next paragraph back at a 4B.
+_PLOT_CLAUSE = """
+
+There is one thing the user would not bring up on their own:
+{plot}
+Play that out naturally."""
+
+# A1 `codeonly` uses HUMAN_SIMULATOR_PROMPT verbatim -- no separate constant, so
+# the bytes cannot drift from the naive arm's.
+# A2 `plot` = the same prompt with _PLOT_CLAUSE spliced in AFTER the hidden
+# information and BEFORE the dialogue, so the running conversation stays last
+# (the naive prompt's shape: instructions, then hidden info, then dialogue, then
+# the "answer IN TWO SENTENCES" cue). Everything else is byte-identical to
+# HUMAN_SIMULATOR_PROMPT -- diff them before editing either.
+MINIMAL_SIM_PROMPT_WITH_PLOT = HUMAN_SIMULATOR_PROMPT.replace(
+    "\nHere is the dialogue so far:", _PLOT_CLAUSE + "\n\nHere is the dialogue so far:"
+)
+
 # The sentinel the user-simulator emits to end the conversation (bare string
 # match).
 TERMINATE_MARKER = "[TERMINATE]"

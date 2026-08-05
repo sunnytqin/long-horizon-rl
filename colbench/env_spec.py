@@ -186,12 +186,24 @@ class ColBenchSpecUserSimEnv:
       a function); if ALL tries still contain a code fence the loop aborts the
       episode (see ``last_sim_code_reject_exhausted``) rather than injecting or
       stripping a bad reply.
-    grounded: GROUNDED mode (``+colbench.grounded_sim``) -- condition the sim on
-      the hidden GT function source + ``spec["plot"]`` instead of
-      persona/scenario/requirements. Everything else about this env is
-      unchanged. When True the GT IS in the sim's prompt, so the
-      ``sim_max_tries`` rejection above becomes the load-bearing leak defense
-      rather than a character guard.
+    grounded: BACK-COMPAT alias for ``sim_prompt="grounded"`` -- kept so
+      ``+colbench.grounded_sim``, validate_colbench_spec's ``--grounded`` and
+      every existing run record keep working unchanged. Setting it is equivalent
+      to passing ``sim_prompt="grounded"``; an explicit ``sim_prompt`` wins.
+    sim_prompt: WHICH user-simulator prompt conditions the sim. The one knob that
+      selects an arm:
+        "spec"     -- authored persona/scenario/requirements/plot, no GT.
+        "grounded" -- hidden GT source + ``spec["plot"]``, character role-play.
+        "codeonly" -- A1: the NAIVE arm's stock answerer on the GT, no plot, no
+                      role-play. Byte-identical to the naive arm's sim call, so
+                      it is the null-delta CONTROL for the ladder.
+        "plot"     -- A2: "codeonly" + the authored ``spec["plot"]``.
+      "codeonly"/"plot" are meant to run at ``max_code_proposals=1``, which
+      removes the sim's judging and termination roles entirely (the loop grades
+      on the first proposal and breaks before the sim's next turn). In every mode
+      that puts the GT in the sim's prompt -- grounded, codeonly, plot -- the
+      ``sim_max_tries`` rejection above is the load-bearing leak defense rather
+      than a character guard.
     last_sim_reply: the reply from the last ``generate_user_turn`` call, kept
       for the loop's debug dump / audit.
     last_sim_raw: the most recent RAW (uncapped, but ``<think>``-stripped) sim
@@ -224,6 +236,7 @@ class ColBenchSpecUserSimEnv:
   sim_backend: Optional[SimBackend] = None
   sim_max_tries: int = 8
   grounded: bool = False
+  sim_prompt: str = ""
   last_sim_reply: str = field(default="", repr=False)
   last_sim_raw: str = field(default="", repr=False)
   last_sim_code_rejected: int = field(default=0, repr=False)
@@ -234,9 +247,27 @@ class ColBenchSpecUserSimEnv:
       default_factory=list, repr=False
   )
 
+  # Modes that condition the sim on the hidden GT source. In all of them the
+  # leak invariant is enforced by sim_wrote_code rejection sampling, NOT by
+  # construction as in "spec".
+  _GT_CONDITIONED = frozenset({"grounded", "codeonly", "plot"})
+
   def __post_init__(self):
     if self.sim_backend is None:
       self.sim_backend = openai_sim_backend
+    # Resolve the arm ONCE, here, so generate_user_turn just dispatches. An
+    # explicit sim_prompt wins; otherwise the legacy `grounded` bool decides, so
+    # existing callers (+colbench.grounded_sim, validate's --grounded, the older
+    # tests) keep their exact behavior.
+    if not (self.sim_prompt or "").strip():
+      self.sim_prompt = "grounded" if self.grounded else "spec"
+    if self.sim_prompt not in {"spec"} | self._GT_CONDITIONED:
+      raise ValueError(
+          f"unknown sim_prompt {self.sim_prompt!r}; expected one of "
+          f"spec, {', '.join(sorted(self._GT_CONDITIONED))}"
+      )
+    # Keep the alias truthful for anything that still reads `.grounded`.
+    self.grounded = self.sim_prompt == "grounded"
 
   def generate_user_turn(
       self, messages: list[dict[str, str]], allow_terminate: bool = True
@@ -267,17 +298,51 @@ class ColBenchSpecUserSimEnv:
       The next user reply: ``<think>``-stripped and char-capped.
       ``last_sim_raw`` holds the uncapped form for ``[TERMINATE]`` detection.
     """
-    if self.grounded:
+    plot = (self.spec or {}).get("plot", "")
+    if self.sim_prompt == "grounded":
       system_content, user_content = templates.build_grounded_sim_messages(
+          self.problem_description, self.ground_truth, plot, messages
+      )
+    elif self.sim_prompt in ("codeonly", "plot"):
+      # A1 passes plot="" -> the naive arm's sim call, byte for byte.
+      system_content, user_content = templates.build_minimal_sim_messages(
           self.problem_description,
           self.ground_truth,
-          (self.spec or {}).get("plot", ""),
+          plot if self.sim_prompt == "plot" else "",
           messages,
       )
     else:
       system_content, user_content = templates.build_spec_sim_messages(
           self.spec, messages
       )
+    # ── KNOWN DETECTOR DIFFERENCE vs the NAIVE arm (deliberate, 2026-08-05) ────
+    # This loop screens with `sim_wrote_code` = ANY triple-backtick fence. The
+    # naive arm (colbench_agent -> env.generate_user_turn_checked) screens with
+    # `detect_code_leak(..., ngram_n=0)` = the bare `def name(` REGEX **plus**
+    # the fence. So an UNFENCED `def f(x, y): return x + y` in a sim reply is
+    # rejected there and injected here.
+    #
+    # It is left as-is on purpose, because neither detector is simply right:
+    #   * against A1/A2, `def name(` is the DOMINANT leak shape (the qwen3-4b
+    #     step-200 study: ~60% of user turns leak a `def`), and codeonly/plot put
+    #     the sim in exactly that configuration -- the terse GT-conditioned
+    #     answerer -- so this loop will inject leaks the naive arm rejects;
+    #   * for it, `def f(x, y):` is ALSO what a legitimate reply looks like when
+    #     the user is answering "what signature do you want?", which is a normal
+    #     first-turn question here. The strict regex resamples that good answer
+    #     away, and the spec/grounded prompts explicitly ask the user to describe
+    #     behavior in words, not to withhold the signature.
+    # Which effect dominates is empirical, and it is NOT expected to be the main
+    # driver of anything.
+    # DEBUG POINTER: if A1 (`codeonly`) fails to reproduce the naive arm, CHECK
+    # THIS FIRST -- it is the largest known environment difference left between
+    # them. Compare the naive run's `sim_leaks` rate against A1's, and if they
+    # diverge, route the GT-conditioned modes (_GT_CONDITIONED) through
+    # `detect_code_leak(stripped, self.ground_truth, ngram_n=0)` while leaving
+    # "spec" on `sim_wrote_code` -- spec has no GT in the prompt, so a leak is
+    # impossible by construction there, and leaving it alone keeps every
+    # completed spec/grounded run comparable.
+    #
     # Rejection sampling, on TWO grounds, sharing one try budget:
     #  (a) an ordinary user never pastes code. If the sim writes a code fence,
     #      re-query (sampling temperature makes retries differ). If EVERY try

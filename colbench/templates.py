@@ -35,6 +35,7 @@ from colbench.prompts import COLBENCH_AGENT_SYSTEM_PROMPT
 from colbench.prompts import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT
 from colbench.prompts import GROUNDED_SIM_SYSTEM_PROMPT
 from colbench.prompts import HUMAN_SIMULATOR_PROMPT
+from colbench.prompts import MINIMAL_SIM_PROMPT_WITH_PLOT
 from colbench.prompts import SIM_SYSTEM_PROMPT
 from colbench.prompts import SPEC_SIM_SYSTEM_PROMPT
 from colbench.prompts import TERMINATE_MARKER
@@ -456,6 +457,52 @@ def build_grounded_sim_messages(
       plot=plot or "",
   )
   return system, str_dialogue_history(messages)
+
+
+def build_minimal_sim_messages(
+    problem_description: str,
+    ground_truth: str,
+    plot: str,
+    messages: list[dict[str, str]],
+) -> tuple[str, str]:
+  """Build the MINIMAL sim's (system, user) messages -- the A1/A2 rungs.
+
+  The naive (GT-path) simulator, reachable from the spec loop. The sim is the
+  stock sweet_rl answerer conditioned on the hidden GT source, with NO character
+  role-play, NO judging role and NO termination role -- at
+  ``max_code_proposals=1`` the loop grades on the first proposal and breaks
+  before the sim's next turn, so it has neither.
+
+  THE INVARIANT THAT MAKES A1 A CONTROL: with ``plot`` empty this returns
+  EXACTLY what the naive arm sends -- ``SIM_SYSTEM_PROMPT`` as system and
+  ``build_sim_user_message(...)`` as user, byte for byte. A1 is therefore the
+  naive arm's environment reached through the spec loop, and any A1-vs-naive gap
+  is a residual spec-path difference, not a prompt difference. Guarded by a test;
+  do not "tidy" the empty-plot path into a shared format() call that would let
+  the bytes drift.
+
+  Args:
+    problem_description: the user's public, under-specified ask.
+    ground_truth: the hidden GT function source the sim answers from.
+    plot: the authored ``spec["plot"]``. EMPTY = A1 ``codeonly``; non-empty = A2
+      ``plot``.
+    messages: the running dialogue as ``{role, content}`` dicts.
+
+  Returns:
+    ``(system_content, user_content)`` for the simulator call.
+  """
+  if not (plot or "").strip():
+    # A1: byte-identical to the naive arm. Same call, same function.
+    return SIM_SYSTEM_PROMPT, build_sim_user_message(
+        problem_description, ground_truth, messages
+    )
+  user = MINIMAL_SIM_PROMPT_WITH_PLOT.format(
+      problem_description=problem_description,
+      hidden_information=ground_truth,
+      plot=plot,
+      dialogue_history=str_dialogue_history(messages),
+  )
+  return SIM_SYSTEM_PROMPT, user
 
 
 def sim_terminated(reply: str) -> bool:
