@@ -223,50 +223,90 @@ Keep every reply very SHORT, usually one or two sentences, the way a person fire
 # 300) while the GT-conditioned sim works (arm (2)); this arm asks whether the
 # PLOT mechanism survives once the sim has an artifact it can read off.
 #
-# THE RULE THAT DECIDES EVERY EDIT HERE -- GROUND THE ANSWERS, NOT THE VERDICT.
-# We always eval on the SPEC sim (validate_colbench_spec never reads
-# grounded_sim), so this prompt is deliberately SPEC_SIM_SYSTEM_PROMPT's
-# structure with the GT source swapped into the requirements slot. Grounding
-# buys reliability on exactly one channel:
-#   * ANSWER channel (solver asks -> sim answers): ground it fully. A garbled or
-#     hallucinated requirement is a loss the solver cannot avoid by playing
-#     well, i.e. reward noise, and removing it does not change what the optimal
-#     solver policy is.
-#   * VERDICT channel (does termination gate on the code being CORRECT): keep it
-#     spec-identical. A GT-backed judge would teach the solver draft-then-fix --
-#     show something rough, let the user name what's wrong -- and the spec sim at
-#     eval cannot judge, so that policy submits its rough draft and tanks. It
-#     would also zero out false_terminate_rate as a cross-arm metric and push the
-#     sim to read code closely (leak pressure).
-# The termination gate is therefore on the SIM's OWN job being done ("have I told
-# them?"), never on a code diff -- a state the spec sim can track just as well,
-# so the RULE transfers and only its fidelity differs.
+# THIS IS V1 -- the ORIGINAL grounded prompt, byte-identical to commit 7fb1715e.
+# It was RESTORED after the V2 rewrite (parked below) collapsed a run ~step 600.
+# The point of running it again is to reproduce the KNOWN grounded baseline
+# before the prompt is touched again, so read the V2 block before editing this
+# one: the two differ in ways that are load-bearing, not stylistic.
 #
-# Blocks are drawn from SPEC_SIM_SYSTEM_PROMPT (structure, asymmetry, plot
-# DONE-ness bullets, per-turn ladder) and HUMAN_SIMULATOR_PROMPT (the GT path).
-# The GROUNDED-ONLY pieces, none of which the spec path needs:
-#   1. behavior-not-implementation. {requirements} is prose authored to hold only
-#      things a user has opinions about; GT SOURCE additionally determines helper
-#      names, loop structure, literals. Without this rule the sim answers "what
-#      should I call the helper?" off the GT -- out of character, a free-ride the
-#      spec sim cannot give, and a near-leak that burns sim_max_tries.
-#   2. the stronger anti-quote bullet (see NOTE below).
-#   3. "the FUNCTION wins" when the plot contradicts the GT.
-#   4. the role-boundary paragraph: the sim CAN see the code is wrong (Qwen3-4B
-#      compares code fine) -- it is told that is not its problem, as a clean "do
-#      not correct" rule. The gate is on the SIM's job, never on a code diff.
-# The per-turn ladder is SPEC's, unchanged, and deliberately so. An earlier draft
-# added a standalone "is there anything you have not told them yet? say it" step;
-# it was REMOVED. In SPEC that check would terminate -- {requirements} is a finite
-# authored list -- but GT SOURCE determines an unbounded set of facts (every
-# branch, default and edge case), so the check never goes false, fires on every
-# turn including post-code, and the sim dumps. Surfacing untold requirements is
-# an ACTION inside step 1 (gated on no-code-yet, one item at a time), never a
-# standalone condition. Do not re-add it.
+# What V1 does that V2 does not, and why it is what is running:
+#   * Termination is gated on the code being CORRECT ("the function does what you
+#     asked for, as far as you can tell"). This makes the sim a GT-backed judge,
+#     which has a real cost -- it teaches the solver draft-then-fix, and the SPEC
+#     sim we eval on cannot judge -- but it is also the brake that stops a solver
+#     from dumping code on turn 1 and being terminated on the spot.
+#   * Plot DONE-ness is left UNDEFINED ("follow it naturally"). Vaguer than V2's
+#     three stopping conditions, but it does not hand the sim an explicit reason
+#     to consider a never-asked plot already complete.
+#   * The MINIMUM-bar prose ("until you have seen one you MUST NOT end the
+#     conversation") is retained. That bar is ALSO enforced mechanically now by
+#     env_spec's allow_terminate rejection sampling, which is code-level and
+#     prompt-independent -- so V1 runs WITH the guard, belt and braces. That
+#     combination (V1 + guard) is the arm being re-run; it is not the same as any
+#     pre-guard grounded run.
 # NOTE: unlike the spec path, the GT source IS in the sim's context here -- so
 #       the env's sim_wrote_code rejection sampling is load-bearing, not
 #       belt-and-braces.
 GROUNDED_SIM_SYSTEM_PROMPT = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time. You are not an AI assistant and you never break character.
+
+What you asked them for:
+{problem_description}
+
+What you actually want: below is the exact function you need. You know this behavior as your own intent -- it is what you are trying to get built. You have never seen it written down, you cannot write code, and you cannot run or test anything.
+
+{ground_truth}
+
+How you talk:
+- Answer ONLY what the assistant asks, briefly -- one or two sentences, the way a person fires off a quick message.
+- Use ONLY information determined by the function above. If they ask about something it does not determine, say you don't know or that you don't mind.
+- NEVER write code. Never paste or quote a function, a line, a variable name, or a literal value as code. Describe behavior in plain words only.
+- Do not lay everything out at once. Let details surface as their questions draw them out.
+- Never say or hint that you are reading from anything. To them, you are simply a person who knows what they want.
+
+The plot of this conversation: {plot}
+This is the one thing that isn't clear from the start -- follow it naturally. If it's something you'd only mention when asked, don't bring it up unless they ask. If it's something you'd only notice once you saw their code, react to their code the way a person would -- you READ it, you never run it. If it's something you'd just remember, bring it up when it feels natural. Volunteering is limited to what this plot directs; otherwise you only answer what you were asked. If the plot points at behavior the function above does not actually have, the FUNCTION wins: quietly drop that part and stay consistent with what you really want.
+
+When you're done: the MINIMUM bar to end the conversation is that the assistant has actually written a COMPLETE python function inside a code block. Until you have seen one you MUST NOT end the conversation, no matter how much you have already explained -- if they have only asked questions, you simply answer and keep going.
+
+Once a complete function is on the table, end the conversation when BOTH are true:
+  1) the plot above has been fully played out, and
+  2) the function does what you asked for, as far as you can tell.
+
+On (2): you are an ordinary user, not a code reviewer. You do not check it line by line and you cannot run it. But you know what you want -- so if the function plainly does not do it (it ignores something you told them, or handles a case the wrong way), say so in plain words and let them try again, instead of ending. Point at the BEHAVIOR you wanted, never at the code. If it looks right to you, you're done.
+
+HOW to end, once both conditions are met: your ENTIRE reply must be exactly [TERMINATE] -- that sentinel alone and NOTHING else. No goodbye, no thanks, no explanation, nothing before or after it. It is a signal, not a message. Any reply that is still part of the conversation must not contain that sentinel anywhere at all, in any form: if you are still talking, just talk.
+
+Keep every reply very SHORT -- usually one or two sentences."""
+
+# ── V2, PARKED (written 2026-08-05, reverted the same week) ──────────────────
+# The rewrite that re-cut GROUNDED onto SPEC_SIM_SYSTEM_PROMPT's skeleton: the
+# TWO-jobs framing, the reliable/unreliable split, the plot DONE-ness bullets,
+# the per-turn ladder, behavior-not-implementation, and -- the load-bearing
+# change -- termination NO LONGER gated on the code being correct (SPEC's soft
+# close replaced condition (2)), so the sim ends on "plot done + code shown".
+# Design rationale, still sound: GROUND THE ANSWERS, NOT THE VERDICT. We always
+# eval on the SPEC sim, so a GT-backed judge trains a draft-then-fix solver that
+# tanks when the spec sim (which cannot judge) meets it at eval.
+#
+# WHY IT IS PARKED: the first grounded run on it COLLAPSED ~step 600. The
+# suspected mechanism is a turn-1 dump attractor that V1 blocked twice and V2
+# licenses -- a solver that shows code immediately having asked nothing hits
+# "plot DONE" via the ask-only bullet ("If they never asked and just wrote one,
+# you had nothing to add, so it is done") and then SPEC's soft close, so the sim
+# terminates on turn 1. V1 blocked it with condition (2) (a blind draft is not
+# what the user wanted) and by leaving plot DONE-ness undefined. NOTE this is
+# INVISIBLE to the early-termination metrics: the solver HAS shown code, so
+# allow_terminate is True and the guard never engages. The discriminating metric
+# is num_assistant_turns -> 1 with term_user high.
+# RULED OUT as the cause: the [TERMINATE] rejection sampler (sim_early_term_
+# rejected was FLAT ~0.6-0.8 draws/episode across the collapse -- a constant
+# cannot explain a change at 600 -- with term_early_term_exhausted ~0.02, i.e.
+# the sim never insisted). The guard is code-level and prompt-independent, so it
+# stays ON under V1; V1 + guard is the arm being re-run to reproduce the known
+# grounded baseline before the prompt is revisited.
+# Swap V2 back in by renaming the two constants -- no config knob, no call-site
+# change (env_spec reads GROUNDED_SIM_SYSTEM_PROMPT via build_grounded_sim_messages).
+GROUNDED_SIM_SYSTEM_PROMPT_V2 = """You are role-playing a real person talking to an AI assistant that is writing a Python function for you. Stay fully in character the whole time. You are not an AI assistant and you never break character.
 
 What you asked them for:
 {problem_description}
