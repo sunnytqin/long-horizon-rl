@@ -375,6 +375,18 @@ class ColBenchSpecUserSimEnv:
       stripped = templates.strip_think(raw)
       if self._leaked_code(stripped):
         rejected += 1
+        # Per-DRAW dump, mirroring the GT env (whose _DEBUG_SIM sits inside
+        # _finalize_reply and therefore fires on every sample). Without this the
+        # spec path dumps only the FINAL reply, so the rejected drafts -- the
+        # whole point of inspecting a rejection-sampling asymmetry -- are
+        # invisible and the two arms cannot be compared draw for draw.
+        if _DEBUG_SIM:
+          logger.warning(
+              "[COLBENCH_SPEC_SIM] REJECTED draw %d (code) reply[:%d]=%r",
+              rejected,
+              _DEBUG_PREVIEW,
+              stripped[:_DEBUG_PREVIEW],
+          )
         continue
       if not allow_terminate and templates.sim_terminated(stripped):
         early_term_rejected += 1

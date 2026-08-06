@@ -421,8 +421,15 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       # verbatim (a fenced block that actually defines a function) and grade that
       # block, matching env.is_answer -> templates.final_answer. Above 1 this is
       # unchanged, so spec/grounded stay byte-identical.
+      # strip_think FIRST: fenced_function (unlike contains_code) does NOT strip
+      # internally, and the naive arm detects on strip_think'd text
+      # (env.is_answer -> clean = strip_think(...) -> final_answer). Detecting on
+      # raw text would let a fence INSIDE a <think> block count as a submission
+      # here but not there -- an A1-vs-A0 divergence in exactly the direction
+      # that makes A1 submit earlier and more often.
       if single_shot:
-        _fenced = templates.fenced_function(assistant_text)
+        _clean = templates.strip_think(assistant_text)
+        _fenced = templates.fenced_function(_clean)
         proposed_code = _fenced is not None
         code_this_turn = _fenced if proposed_code else ""
       else:
@@ -449,7 +456,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
           and turn == self.max_assistant_turns - 1
       ):
         _has_ans, _ans = templates.final_answer(
-            assistant_text, episode_done=True
+            templates.strip_think(assistant_text), episode_done=True
         )
         if _has_ans:
           proposed_code = True
