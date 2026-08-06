@@ -703,6 +703,32 @@ def test_unknown_sim_prompt_fails_loudly():
     raise AssertionError("a typo'd sim_prompt was silently accepted")
 
 
+def test_codeonly_uses_the_naive_arms_leak_detector():
+  # A1/A2 must reject an UNFENCED `def f(...)` exactly as the naive arm does --
+  # that is the dominant leak shape, and A1 exists to reproduce naive.
+  leak = "Sure: def f(x, y): return x + y"
+  clean = "Above ten we add them, below we subtract."
+  calls = []
+  def backend(_s, _u):
+    calls.append(1)
+    return leak if len(calls) == 1 else clean
+  e = _env(sim_backend=backend, sim_prompt="codeonly")
+  reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert e.last_sim_code_rejected == 1, "unfenced def was not rejected"
+  assert reply == clean
+
+
+def test_spec_and_grounded_keep_the_fence_only_detector():
+  # Regression guard: tightening the detector for the ladder must NOT change
+  # spec/grounded, whose completed runs were produced under fence-only.
+  leak = "Sure: def f(x, y): return x + y"
+  for mode in ("spec", "grounded"):
+    e = _env(sim_backend=lambda _s, _u: leak, sim_prompt=mode)
+    reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+    assert e.last_sim_code_rejected == 0, mode
+    assert reply == leak, mode
+
+
 if __name__ == "__main__":
   for name, fn in sorted(globals().items()):
     if (

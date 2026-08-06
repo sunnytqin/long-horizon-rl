@@ -32,7 +32,7 @@
 #   MAX_RESPONSE_LENGTH, MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
 #   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD, SIM_MAX_TOKENS,
-#   GROUNDED_SIM, SIM_PROMPT, TERMINATE_ON_ALLPASS, BINARY_REWARD, LENGTH_PENALTY_COEF,
+#   GROUNDED_SIM, SIM_PROMPT, EARLY_TERM_GUARD, TERMINATE_ON_ALLPASS, BINARY_REWARD, LENGTH_PENALTY_COEF,
 #   LENGTH_SOFT_CAP.
 
 
@@ -115,6 +115,13 @@ grounded_sim=${GROUNDED_SIM:-False}
 # (the loop grades the first proposal and breaks before the sim speaks again) and swaps the
 # solver's system prompt to the naive one-shot wording. See colbench/prompts.py.
 sim_prompt=${SIM_PROMPT:-auto}   # auto = defer to GROUNDED_SIM (back-compat)
+# Premature-[TERMINATE] guard. True (default) = every run since the guard landed: the sim may not
+# end the episode before the solver has shown code (rejection-sampled out of the sim_max_tries
+# budget). False restores PRE-GUARD semantics and is the ONLY way to reproduce a grounded/spec run
+# from before it. NB for the A1/A2 ladder, True is what MATCHES the naive arm (at
+# MAX_CODE_PROPOSALS=1 the sim then can never end an episode, as in naive), though it is near-moot
+# there because the minimal sim prompt never names the sentinel.
+early_term_guard=${EARLY_TERM_GUARD:-True}
 # Spec-path guardrail: max ```python proposals before the loop force-grades the last one (default
 # 2, reduced from 3 after eval). Replaces the GT path's sim_reject_max_tries.
 max_code_proposals=${MAX_CODE_PROPOSALS:-2}
@@ -301,6 +308,7 @@ python3 -m verl.trainer.main_ppo \
    +colbench.binary_reward=${binary_reward} \
    +colbench.grounded_sim=${grounded_sim} \
    +colbench.sim_prompt="${sim_prompt}" \
+   +colbench.early_term_guard=${early_term_guard} \
    trainer.balance_batch=True \
    trainer.logger='["console","tensorboard"]' \
    trainer.project_name=${PROJECT_NAME} \

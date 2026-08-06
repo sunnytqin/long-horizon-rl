@@ -126,6 +126,8 @@ def _make_loop(
     terminate_on_allpass=False,
     binary_reward=False,
     grounded_sim=False,
+    sim_prompt="",
+    early_term_guard=True,
 ):
   """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__.
 
@@ -155,6 +157,8 @@ def _make_loop(
   #     a knob added to the loop and NOT mirrored here raises AttributeError
   #     mid-rollout.
   obj.grounded_sim = grounded_sim
+  obj.sim_prompt = sim_prompt
+  obj.early_term_guard = early_term_guard
 
   # apply_chat_template is normally an AgentLoopBase method; override on the
   # instance with a byte-encoding stub (only token COUNTS + mask placement
@@ -196,6 +200,11 @@ def _run(obj, spec=None):
   orig_post_init = ColBenchSpecUserSimEnv.__post_init__
 
   def patched_post_init(self):
+    # CHAIN, never replace. __post_init__ also RESOLVES THE ARM
+    # (sim_prompt <- grounded) and validates it. Replacing it outright left
+    # sim_prompt at "" so every mode silently fell through to the spec prompt --
+    # a green suite hiding the one thing the mode tests exist to check.
+    orig_post_init(self)
     self.sim_backend = obj._test_sim_backend
 
   ColBenchSpecUserSimEnv.__post_init__ = patched_post_init
@@ -491,3 +500,135 @@ def test_new_reward_extra_info_scalars_present():
   rei2 = _run(obj2).extra_fields["reward_extra_info"]
   assert rei2["user_term_and_allpass"] == 0.0
   assert rei2["sim_reply_chars"] == 0.0
+
+
+# ── A1/A2 ladder: the submit signal at max_code_proposals=1 ───────────────────
+# templates.fenced_function documents why `contains_code` is safe at a 2-proposal
+# budget and fatal at 1. These pin the cap-dependent switch.
+
+
+def test_prose_def_mention_is_not_a_proposal_at_cap_one():
+  # THE regression this fixes: a clarifying QUESTION that names a function must
+  # not consume the only proposal and force-grade the episode at turn 1.
+  obj = _make_loop(
+      solver_turns=[
+          "Should it be something like def parse(rows), is that right?",
+          _code_turn(GT),
+      ],
+      sim_replies=["Yes, per row.", "Looks good."],
+      max_code_proposals=1,
+      sim_prompt="codeonly",
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["code_proposals"] == 1.0, "the prose `def` mention was counted"
+  assert rei["num_assistant_turns"] == 2.0, "episode was force-graded at turn 1"
+  assert out.reward_score == 1.0
+
+
+def test_fenced_function_still_ends_the_episode_at_cap_one():
+  obj = _make_loop(
+      solver_turns=[_code_turn(GT), "unused"],
+      sim_replies=["Looks good."],
+      max_code_proposals=1,
+      sim_prompt="codeonly",
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["term_code_cap"] == 1.0
+  assert rei["num_assistant_turns"] == 1.0
+  assert out.reward_score == 1.0
+
+
+def test_cap_two_keeps_the_legacy_contains_code_detector():
+  # Regression guard: spec/grounded (cap 2) stay byte-identical to before, where
+  # a bare `def` in prose DOES count as a proposal.
+  obj = _make_loop(
+      solver_turns=["Maybe def parse(rows)?", _code_turn(GT)],
+      sim_replies=["Sure.", "Looks good."],
+      max_code_proposals=2,
+  )
+  out = _run(obj)
+  assert out.extra_fields["reward_extra_info"]["code_proposals"] == 2.0
+
+
+def test_final_turn_fallback_grades_unfenced_code_at_cap_one():
+  # Naive parity: the naive arm's last turn submits whatever it said, so real
+  # but UNFENCED code still gets graded instead of scoring 0 as `no_code`.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", GT],  # GT, no ```python fence
+      sim_replies=["It's 10.", "ok"],
+      max_assistant_turns=2,
+      max_code_proposals=1,
+      sim_prompt="codeonly",
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["showed_code"] == 1.0, "unfenced final-turn code was thrown away"
+  assert rei["term_no_code"] == 0.0
+  assert out.reward_score == 1.0
+
+
+def test_final_turn_fallback_does_not_rescue_prose():
+  # Prose is still submitted (as naive does) but cannot parse, so the reward is
+  # the same 0 the `no_code` path gave -- the fallback changes WHICH case
+  # differs, not the prose outcome.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", "Thanks, that helps a lot!"],
+      sim_replies=["It's 10.", "ok"],
+      max_assistant_turns=2,
+      max_code_proposals=1,
+      sim_prompt="codeonly",
+  )
+  out = _run(obj)
+  assert out.reward_score == 0.0
+
+
+def test_final_turn_fallback_is_off_above_cap_one():
+  # spec/grounded must stay byte-identical: an episode that never shows code
+  # still ends `no_code` at reward 0.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", "Thanks!"],
+      sim_replies=["It's 10.", "ok"],
+      max_assistant_turns=2,
+      max_code_proposals=2,
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["term_no_code"] == 1.0
+  assert rei["showed_code"] == 0.0
+  assert out.reward_score == 0.0
+
+
+# ── Premature-[TERMINATE] guard toggle (+colbench.early_term_guard) ───────────
+
+
+def test_guard_on_blocks_a_pre_code_terminate():
+  # Default. The sim wants out before any code exists; the guard resamples it
+  # and the conversation continues to a real submission.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["[TERMINATE]", "It's 10.", "Looks good."],
+      early_term_guard=True,
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["sim_early_term_rejected"] >= 1.0
+  assert rei["showed_code"] == 1.0
+  assert out.reward_score == 1.0
+
+
+def test_guard_off_restores_pre_guard_termination():
+  # The ONLY way to reproduce a run from before the guard landed: the same sim
+  # reply now ends the episode at once, with no code and zero reward.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["[TERMINATE]", "It's 10.", "Looks good."],
+      early_term_guard=False,
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["sim_early_term_rejected"] == 0.0
+  assert rei["showed_code"] == 0.0
+  assert rei["term_no_code"] == 1.0
+  assert out.reward_score == 0.0

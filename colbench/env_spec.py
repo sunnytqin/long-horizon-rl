@@ -269,6 +269,42 @@ class ColBenchSpecUserSimEnv:
     # Keep the alias truthful for anything that still reads `.grounded`.
     self.grounded = self.sim_prompt == "grounded"
 
+  def _leaked_code(self, reply: str) -> bool:
+    """Screen a candidate sim reply for code, using the ARM's own detector.
+
+    Two detectors are in play, and which one is right depends on the arm:
+
+    * ``codeonly`` / ``plot`` (the A1/A2 ladder) use ``detect_code_leak`` with
+      ``ngram_n=0`` -- the bare ``def name(`` regex PLUS the fence -- which is
+      byte-for-byte what the NAIVE arm screens with
+      (``colbench_agent`` -> ``env.generate_user_turn_checked``). These arms
+      exist to reproduce the naive arm, and ``def name(`` is the dominant leak
+      shape there (~60% of user turns at weak checkpoints), so an unfenced
+      ``def f(x, y): return x + y`` must be rejected here exactly as it is
+      there.
+    * ``spec`` / ``grounded`` keep ``sim_wrote_code`` (any triple-backtick
+      fence). Deliberately NOT changed: every completed spec/grounded run was
+      produced under it, and tightening it now would break comparability with
+      them. ``spec`` also has no GT in the sim's prompt at all, so a leak is
+      impossible there by construction.
+
+    The strict detector is not free -- ``def f(x, y):`` is also what a
+    legitimate reply looks like when the user answers "what signature do you
+    want?", so it resamples some good turns away. The naive arm pays that cost
+    too, which is the point: matching it matters more than being right.
+
+    Args:
+      reply: the candidate sim reply, already ``<think>``-stripped.
+
+    Returns:
+      True iff the reply should be rejected and resampled.
+    """
+    if self.sim_prompt in ("codeonly", "plot"):
+      return (
+          templates.detect_code_leak(reply, self.ground_truth, 0) is not None
+      )
+    return templates.sim_wrote_code(reply)
+
   def generate_user_turn(
       self, messages: list[dict[str, str]], allow_terminate: bool = True
   ) -> str:
@@ -315,34 +351,6 @@ class ColBenchSpecUserSimEnv:
       system_content, user_content = templates.build_spec_sim_messages(
           self.spec, messages
       )
-    # ── KNOWN DETECTOR DIFFERENCE vs the NAIVE arm (deliberate, 2026-08-05) ────
-    # This loop screens with `sim_wrote_code` = ANY triple-backtick fence. The
-    # naive arm (colbench_agent -> env.generate_user_turn_checked) screens with
-    # `detect_code_leak(..., ngram_n=0)` = the bare `def name(` REGEX **plus**
-    # the fence. So an UNFENCED `def f(x, y): return x + y` in a sim reply is
-    # rejected there and injected here.
-    #
-    # It is left as-is on purpose, because neither detector is simply right:
-    #   * against A1/A2, `def name(` is the DOMINANT leak shape (the qwen3-4b
-    #     step-200 study: ~60% of user turns leak a `def`), and codeonly/plot put
-    #     the sim in exactly that configuration -- the terse GT-conditioned
-    #     answerer -- so this loop will inject leaks the naive arm rejects;
-    #   * for it, `def f(x, y):` is ALSO what a legitimate reply looks like when
-    #     the user is answering "what signature do you want?", which is a normal
-    #     first-turn question here. The strict regex resamples that good answer
-    #     away, and the spec/grounded prompts explicitly ask the user to describe
-    #     behavior in words, not to withhold the signature.
-    # Which effect dominates is empirical, and it is NOT expected to be the main
-    # driver of anything.
-    # DEBUG POINTER: if A1 (`codeonly`) fails to reproduce the naive arm, CHECK
-    # THIS FIRST -- it is the largest known environment difference left between
-    # them. Compare the naive run's `sim_leaks` rate against A1's, and if they
-    # diverge, route the GT-conditioned modes (_GT_CONDITIONED) through
-    # `detect_code_leak(stripped, self.ground_truth, ngram_n=0)` while leaving
-    # "spec" on `sim_wrote_code` -- spec has no GT in the prompt, so a leak is
-    # impossible by construction there, and leaving it alone keeps every
-    # completed spec/grounded run comparable.
-    #
     # Rejection sampling, on TWO grounds, sharing one try budget:
     #  (a) an ordinary user never pastes code. If the sim writes a code fence,
     #      re-query (sampling temperature makes retries differ). If EVERY try
@@ -365,7 +373,7 @@ class ColBenchSpecUserSimEnv:
     for _ in range(max(1, self.sim_max_tries)):
       raw = self.sim_backend(system_content, user_content)
       stripped = templates.strip_think(raw)
-      if templates.sim_wrote_code(stripped):
+      if self._leaked_code(stripped):
         rejected += 1
         continue
       if not allow_terminate and templates.sim_terminated(stripped):

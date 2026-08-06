@@ -154,6 +154,9 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     self.length_soft_cap = float(cc.get("length_soft_cap", 2048.0) or 2048.0)
     # Guardrail: max ```python proposals before the loop force-grades the last
     # one (default 2, reduced from 3 after eval). New spec-path knob.
+    # NB the `or 2`: a passed 0 is coerced to the default, so the reachable
+    # domain is >=1 and "single shot" means EXACTLY 1 (see `single_shot` in
+    # run(), which is what the naive-parity branches key off).
     self.max_code_proposals = int(cc.get("max_code_proposals", 2) or 2)
     # Sim reject-sampling budget: re-query the sim up to N times if it writes
     # code (an ordinary user never pastes a function). On exhaustion the
@@ -208,6 +211,24 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # codeonly/plot are meant to run at max_code_proposals=1.
     _sp = str(cc.get("sim_prompt", "") or "").strip()
     self.sim_prompt = "" if _sp.lower() in ("", "auto", "none") else _sp
+    # Premature-[TERMINATE] guard (+colbench.early_term_guard). ON by default =
+    # every run since the guard landed (7fb1715e). Turning it OFF restores the
+    # PRE-GUARD semantics -- the sim may end the episode before the solver has
+    # shown any code -- which is the ONLY way to reproduce a grounded/spec run
+    # from before that commit; without the flag that configuration is not
+    # reachable from this tree at all.
+    # NOTE for the A1/A2 ladder: ON is the setting that MATCHES the naive arm,
+    # not OFF. At max_code_proposals=1 there is no "after code" turn, so with the
+    # guard on the sim can never end an episode -- exactly like naive, where
+    # termination is the solver's or the turn cap's alone. It is near-moot in
+    # practice (the minimal sim prompt never names the sentinel, so
+    # sim_early_term_rejected should sit at ~0), but if it fires, ON is faithful.
+    _etg = cc.get("early_term_guard", True)
+    self.early_term_guard = (
+        _etg
+        if isinstance(_etg, bool)
+        else str(_etg).strip().lower() in ("1", "true", "yes", "on")
+    )
 
   @rollout_trace_op
   async def run(
@@ -216,6 +237,15 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     messages = list(kwargs["raw_prompt"])
     extra_info = kwargs.get("extra_info", {}) or {}
     index = int(kwargs.get("index", 0))
+
+    # SINGLE-SHOT mode: the naive arm's protocol, reached through this loop.
+    # EXACTLY 1, not "<=1" -- max_code_proposals is parsed with an `or 2`, so 0
+    # is coerced to the default and the reachable domain is >=1. Everything that
+    # makes A1/A2 faithful to naive keys off this one flag: the solver prompt
+    # below, the fenced_function submit signal, and the final-turn fallback.
+    # Derived here rather than stored on self, so the __init__-bypassing test
+    # fake cannot go stale on it.
+    single_shot = self.max_code_proposals == 1
 
     # ── Solver prompt must describe the protocol the solver is ACTUALLY in ──
     # The spec parquet bakes COLBENCH_SPEC_AGENT_SYSTEM_PROMPT into `prompt`
@@ -232,7 +262,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # any run at a cap of 1 is one-shot and gets the one-shot prompt.
     # Done at RUNTIME rather than by regenerating the parquet so both arms read
     # the same dataset (no dataset confound) and it is reversible.
-    if self.max_code_proposals <= 1:
+    if single_shot:
       messages = [
           {**m, "content": templates.COLBENCH_AGENT_SYSTEM_PROMPT}
           if m.get("role") == "system"
@@ -380,9 +410,54 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       sim_dialogue.append({"role": "assistant", "content": assistant_text})
 
       # 1. Did this turn propose a function? Track the grading target.
-      if templates.contains_code(assistant_text):
+      #
+      # WHICH DETECTOR -- and why it depends on the cap. `contains_code` fires on
+      # a fence OR a bare `def name(` ANYWHERE in prose. templates.fenced_function
+      # spells out why that is safe at the default 2-proposal budget and fatal at
+      # 1: "something like def parse(rows), is that right?" mid-clarification
+      # would consume the only proposal, force-grade a QUESTION, and end the
+      # episode at turn 1 -- taxing exactly the clarifying behavior this arm is
+      # meant to train. In SINGLE-SHOT mode we therefore use the NAIVE arm's signal
+      # verbatim (a fenced block that actually defines a function) and grade that
+      # block, matching env.is_answer -> templates.final_answer. Above 1 this is
+      # unchanged, so spec/grounded stay byte-identical.
+      if single_shot:
+        _fenced = templates.fenced_function(assistant_text)
+        proposed_code = _fenced is not None
+        code_this_turn = _fenced if proposed_code else ""
+      else:
+        proposed_code = templates.contains_code(assistant_text)
+        code_this_turn = (
+            templates.extract_last_code(sim_dialogue) if proposed_code else ""
+        )
+      # 1a. NAIVE-PARITY final-turn fallback (single-shot only). The naive arm
+      # never ends an episode empty-handed: on its LAST turn final_answer
+      # submits the whole response verbatim once it is >10 chars, code-like or
+      # not (env.is_answer(..., episode_done=True)). Without this the spec loop
+      # would score `no_code` = 0 where naive scores the turn -- and while that
+      # is the SAME 0 whenever the turn is prose (it reaches the sandbox as a
+      # SyntaxError), it differs for the one case that matters: real but
+      # UNFENCED code on the final turn, which naive grades and we would throw
+      # away. That is off-instruction under the fence solver prompt, hence rare,
+      # but it is most likely exactly when the arms are being compared -- early
+      # training and degeneration. Only fires single-shot (spec/grounded keep
+      # `no_code`), only on the last turn, and only if nothing was ever shown.
+      if (
+          single_shot
+          and not proposed_code
+          and not showed_code
+          and turn == self.max_assistant_turns - 1
+      ):
+        _has_ans, _ans = templates.final_answer(
+            assistant_text, episode_done=True
+        )
+        if _has_ans:
+          proposed_code = True
+          code_this_turn = _ans
+
+      if proposed_code:
         showed_code = True
-        last_code = templates.extract_last_code(sim_dialogue)
+        last_code = code_this_turn
         # This turn's span was just appended above, so its ordinal is len-1. The
         # LAST time this fires is the turn extract_last_code grades -> kept span
         # == graded code.
@@ -434,12 +509,14 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                   env.generate_user_turn,
                   list(sim_dialogue),
                   # allow_terminate (positional -- run_in_executor takes no
-                  # kwargs): the sim may only end the episode once a function is
-                  # on the table. Enforces in code the MINIMUM bar its own
-                  # prompt states, and covers the case where `sim_terminated`
-                  # fires on a passing MENTION of the sentinel rather than an
-                  # actual hand-off.
-                  showed_code,
+                  # kwargs): with the guard ON the sim may only end the episode
+                  # once a function is on the table. Enforces in code the
+                  # MINIMUM bar its own prompt states, and covers the case where
+                  # `sim_terminated` fires on a passing MENTION of the sentinel
+                  # rather than an actual hand-off. With the guard OFF this is
+                  # always True = the pre-7fb1715e behavior, for reproducing
+                  # runs that predate it.
+                  showed_code if self.early_term_guard else True,
               ),
               timeout=self.env_step_timeout,
           )
