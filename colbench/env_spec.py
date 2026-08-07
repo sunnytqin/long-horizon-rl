@@ -417,18 +417,28 @@ class ColBenchSpecUserSimEnv:
     self.last_sim_reply = reply
     if _DEBUG_SIM:
       n = _DEBUG_PREVIEW
+      # WHAT GETS DUMPED, and why it changed (2026-08-06). The previous version
+      # logged `sim_system` + `spec_requirements` + `plot`. In the codeonly/plot
+      # modes that is exactly backwards: the system message is the 28-char
+      # constant SIM_SYSTEM_PROMPT (Ray's log dedup even collapses it to a
+      # single "[repeated Nx]" line), `requirements` is not in the prompt at
+      # all, and everything that DOES vary -- the problem, the hidden GT, the
+      # optional plot clause, the rendered dialogue -- lives in `user_content`,
+      # which was never dumped. The GT arm logs `sim_user_prompt`, so the one
+      # comparison the dump exists to support (is A1's sim call byte-identical
+      # to A0's?) was the one it could not answer. Log the same field, plus the
+      # resolved mode so a dump self-identifies which rung of the ladder it is.
       logger.warning(
-          "[COLBENCH_SPEC_SIM] spec_requirements[:%d]=%r\n"
-          "[COLBENCH_SPEC_SIM] plot[:%d]=%r\n"
+          "[COLBENCH_SPEC_SIM] sim_prompt_mode=%r\n"
           "[COLBENCH_SPEC_SIM] sim_system[:%d]=%r\n"
+          "[COLBENCH_SPEC_SIM] sim_user_prompt[:%d]=%r\n"
           "[COLBENCH_SPEC_SIM] raw_reply[:%d]=%r\n"
           "[COLBENCH_SPEC_SIM] capped_reply=%r",
-          n,
-          str(self.spec.get("requirements"))[:n],
-          n,
-          str(self.spec.get("plot"))[:n],
+          self.sim_prompt,
           n,
           system_content[:n],
+          n,
+          user_content[:n],
           n,
           str(raw)[:n],
           reply,
