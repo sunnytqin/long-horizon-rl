@@ -34,6 +34,7 @@ from colbench.prompts import ANSWER_MARKER
 from colbench.prompts import COLBENCH_AGENT_SYSTEM_PROMPT
 from colbench.prompts import COLBENCH_SPEC_AGENT_SYSTEM_PROMPT
 from colbench.prompts import GROUNDED_SIM_SYSTEM_PROMPT
+from colbench.prompts import GROUNDED_SIM_SYSTEM_PROMPT_V0
 from colbench.prompts import HUMAN_SIMULATOR_PROMPT
 from colbench.prompts import MINIMAL_SIM_PROMPT_WITH_PLOT
 from colbench.prompts import SIM_SYSTEM_PROMPT
@@ -428,6 +429,7 @@ def build_grounded_sim_messages(
     ground_truth: str,
     plot: str,
     messages: list[dict[str, str]],
+    version: str = "v1",
 ) -> tuple[str, str]:
   """Build the GROUNDED sim's (system, user) messages for one turn.
 
@@ -451,7 +453,14 @@ def build_grounded_sim_messages(
   Returns:
     ``(system_content, user_content)`` for the simulator call.
   """
-  system = GROUNDED_SIM_SYSTEM_PROMPT.format(
+  # "v0" is the pre-guard literal, kept only so the pre-7fb1715e grounded
+  # baseline can be reproduced exactly; see the comment above it in prompts.py.
+  template = (
+      GROUNDED_SIM_SYSTEM_PROMPT_V0
+      if version == "v0"
+      else GROUNDED_SIM_SYSTEM_PROMPT
+  )
+  system = template.format(
       problem_description=problem_description,
       ground_truth=ground_truth,
       plot=plot or "",

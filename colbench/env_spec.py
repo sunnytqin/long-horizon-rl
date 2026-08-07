@@ -250,7 +250,7 @@ class ColBenchSpecUserSimEnv:
   # Modes that condition the sim on the hidden GT source. In all of them the
   # leak invariant is enforced by sim_wrote_code rejection sampling, NOT by
   # construction as in "spec".
-  _GT_CONDITIONED = frozenset({"grounded", "codeonly", "plot"})
+  _GT_CONDITIONED = frozenset({"grounded", "grounded_v0", "codeonly", "plot"})
 
   def __post_init__(self):
     if self.sim_backend is None:
@@ -267,7 +267,7 @@ class ColBenchSpecUserSimEnv:
           f"spec, {', '.join(sorted(self._GT_CONDITIONED))}"
       )
     # Keep the alias truthful for anything that still reads `.grounded`.
-    self.grounded = self.sim_prompt == "grounded"
+    self.grounded = self.sim_prompt in ("grounded", "grounded_v0")
 
   def _leaked_code(self, reply: str) -> bool:
     """Screen a candidate sim reply for code, using the ARM's own detector.
@@ -335,9 +335,13 @@ class ColBenchSpecUserSimEnv:
       ``last_sim_raw`` holds the uncapped form for ``[TERMINATE]`` detection.
     """
     plot = (self.spec or {}).get("plot", "")
-    if self.sim_prompt == "grounded":
+    if self.sim_prompt in ("grounded", "grounded_v0"):
       system_content, user_content = templates.build_grounded_sim_messages(
-          self.problem_description, self.ground_truth, plot, messages
+          self.problem_description,
+          self.ground_truth,
+          plot,
+          messages,
+          version="v0" if self.sim_prompt == "grounded_v0" else "v1",
       )
     elif self.sim_prompt in ("codeonly", "plot"):
       # A1 passes plot="" -> the naive arm's sim call, byte for byte.

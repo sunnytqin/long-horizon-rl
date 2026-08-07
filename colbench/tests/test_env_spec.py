@@ -729,6 +729,45 @@ def test_spec_and_grounded_keep_the_fence_only_detector():
     assert reply == leak, mode
 
 
+def test_grounded_v0_is_the_pre_guard_prompt_and_stays_frozen():
+  # The ONLY job of GROUNDED_SIM_SYSTEM_PROMPT_V0 is to be byte-identical to
+  # what the pre-7fb1715e grounded run used, so pin its length + a line that
+  # differs from V1. If this fails, the reproduction arm is no longer a
+  # reproduction. (V1 was NOT that text: 7fb1715e changed the prompt in the same
+  # commit that added the termination guard.)
+  from colbench import prompts  # pylint: disable=g-import-not-at-top
+
+  assert len(prompts.GROUNDED_SIM_SYSTEM_PROMPT_V0) == 2912
+  assert (
+      prompts.GROUNDED_SIM_SYSTEM_PROMPT_V0
+      != prompts.GROUNDED_SIM_SYSTEM_PROMPT
+  )
+  # V0 has no "Being unclear about what you WANT" role-boundary paragraph; that
+  # wording arrived with V1.
+  assert "Being unclear" not in prompts.GROUNDED_SIM_SYSTEM_PROMPT_V0
+
+
+def test_grounded_v0_routes_to_the_v0_template():
+  seen = {}
+
+  def backend(system_content, _user):
+    seen["system"] = system_content
+    return "sure"
+
+  for mode, template in (
+      ("grounded", "GROUNDED_SIM_SYSTEM_PROMPT"),
+      ("grounded_v0", "GROUNDED_SIM_SYSTEM_PROMPT_V0"),
+  ):
+    e = _env(sim_backend=backend, sim_prompt=mode)
+    e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+    from colbench import prompts  # pylint: disable=g-import-not-at-top
+
+    head = getattr(prompts, template).split("{")[0]
+    assert seen["system"].startswith(head), mode
+    # Both are GT-conditioned, so the legacy alias must stay truthful.
+    assert e.grounded, mode
+
+
 if __name__ == "__main__":
   for name, fn in sorted(globals().items()):
     if (

@@ -128,7 +128,17 @@ max_code_proposals=${MAX_CODE_PROPOSALS:-2}
 # Sim no-code rejection sampling: an ordinary user never pastes a function, so re-query the sim up
 # to N times if its reply contains a code fence; on exhaustion the conversation aborts
 # (terminated_by "sim_code_reject") and the last shown code is graded. Default 8 (matches eval).
-sim_max_tries=${SIM_MAX_TRIES:-8}
+#
+# WHY THE SIM_REJECT_MAX_TRIES FALLBACK (2026-08-06). This budget is the SAME knob as the GT arm's
+# sim_reject_max_tries -- same rejection sampler, same meaning -- but the two arms read DIFFERENT
+# env var names, and launch.py exports only SIM_REJECT_MAX_TRIES. So `--sim_reject_max_tries=3`
+# set the GT arm to 3 and silently left this arm at 8. That is not a cosmetic mismatch: exhaustion
+# is p^B in the budget, so at a per-draw leak rate of ~0.6 the two arms sat at 22% vs 2% episodes
+# killed by the sim -- which is most of the A0-vs-A1 reward gap the ladder was built to rule out.
+# Falling back keeps SIM_MAX_TRIES authoritative when set (so nothing that pins it changes) while
+# making the one flag that exists reach BOTH arms. NB this DOES change the effective budget of a
+# spec launch that passes --sim_reject_max_tries and never set SIM_MAX_TRIES: that is the point.
+sim_max_tries=${SIM_MAX_TRIES:-${SIM_REJECT_MAX_TRIES:-8}}
 # Solver sampling. Defaults = the SOLVER model's recommended generation settings; match these
 # to whatever --model you train. Qwen3-4B-Instruct-2507: temp 0.7, top_p 0.8, top_k 20, min_p 0
 # (min_p is verl's default 0, not a settable rollout field). Qwen3-32B (thinking): 0.6/0.95/20.
