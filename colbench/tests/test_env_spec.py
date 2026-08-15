@@ -718,6 +718,27 @@ def test_codeonly_uses_the_naive_arms_leak_detector():
   assert reply == clean
 
 
+def test_codeonly_bare_def_exhaustion_is_a_code_reject():
+  # A1's strict detector rejects bare ``def name(``, just like A0.  If EVERY
+  # draw is that leak, the loop must abort as sim_code_reject -- it must not
+  # relabel the exhaustion as an early termination merely because the final
+  # reply lacks a code fence, then inject the leaked reply.
+  leak = "Sure: def f(x, y): return x + y"
+  e = ColBenchSpecUserSimEnv(
+      problem_description=PROBLEM,
+      spec=SPEC,
+      ground_truth=GT,
+      test_cases=CALLS,
+      sim_max_tries=3,
+      sim_backend=_scripted_backend([leak]),
+      sim_prompt="codeonly",
+  )
+  e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert e.last_sim_code_rejected == 3
+  assert e.last_sim_code_reject_exhausted is True
+  assert e.last_sim_early_term_exhausted is False
+
+
 def test_spec_and_grounded_keep_the_fence_only_detector():
   # Regression guard: tightening the detector for the ladder must NOT change
   # spec/grounded, whose completed runs were produced under fence-only.

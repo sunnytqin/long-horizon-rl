@@ -402,15 +402,19 @@ class ColBenchSpecUserSimEnv:
     self.last_sim_code_rejected = rejected
     self.last_sim_early_term_rejected = early_term_rejected
     self.last_sim_early_term_samples = early_term_samples
-    # Attribute exhaustion to whatever the FINAL draw hit, not to whatever was
-    # rejected most: that keeps `last_sim_code_reject_exhausted` byte-identical
-    # in meaning to before (with allow_terminate=True, code is the only
-    # rejection ground, so "ran out of tries" implies the last draw wrote code),
-    # and it guarantees the "abort, do not inject" path still owns every case
-    # where the returned reply contains code.
-    last_wrote_code = templates.sim_wrote_code(stripped)
-    self.last_sim_code_reject_exhausted = (not accepted) and last_wrote_code
-    self.last_sim_early_term_exhausted = (not accepted) and not last_wrote_code
+    # Attribute exhaustion to the FINAL rejection ground, not to whichever
+    # ground happened most often. Crucially, use the SAME detector that drove
+    # the retry loop: codeonly/plot reject an unfenced ``def name(`` as well as
+    # a fence, while sim_wrote_code is fence-only. Using sim_wrote_code here
+    # would let eight rejected bare-def leaks be mislabeled as an early-term
+    # exhaustion and injected into the solver context.
+    final_rejected_for_code = self._leaked_code(stripped)
+    self.last_sim_code_reject_exhausted = (
+        (not accepted) and final_rejected_for_code
+    )
+    self.last_sim_early_term_exhausted = (
+        (not accepted) and not final_rejected_for_code
+    )
     # No post-hoc character truncation: the old HUMAN_RESPONSE_CHARACTER_LIMIT
     # slice chopped verbose replies mid-sentence (the solver then saw
     # fragments). Brevity is enforced at the source instead -- by the "one or
