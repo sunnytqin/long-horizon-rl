@@ -160,6 +160,12 @@ _DEBUG_PREVIEW = int(os.getenv("COLBENCH_DEBUG_CONVO_PREVIEW", "400") or "400")
 # dump. Bounded so a pathological sim cannot bloat the trajectory record.
 _EARLY_TERM_SAMPLES = 3
 
+# Legal values of `ColBenchSpecUserSimEnv.sim_code_leak_detector`. Public and
+# module-level so the agent loop can validate `+colbench.sim_code_leak_detector`
+# at LAUNCH against the same set the env enforces per episode, instead of
+# keeping a second copy that can drift.
+SIM_CODE_LEAK_DETECTORS = frozenset({"auto", "fence_only", "a0_strict"})
+
 
 @dataclass
 class ColBenchSpecUserSimEnv:
@@ -204,6 +210,22 @@ class ColBenchSpecUserSimEnv:
       that puts the GT in the sim's prompt -- grounded, codeonly, plot -- the
       ``sim_max_tries`` rejection above is the load-bearing leak defense rather
       than a character guard.
+    sim_code_leak_detector: WHICH detector screens a sim draw for code, as an
+      explicit experiment axis independent of ``sim_prompt``:
+        "auto"       -- per-arm legacy behavior: strict for codeonly/plot,
+                        fence-only for spec/grounded/grounded_v0. BACKWARD
+                        COMPATIBLE: every run before this knob existed is
+                        reproduced byte-for-byte by the default.
+        "fence_only" -- always ``templates.sim_wrote_code`` (triple-backtick
+                        fence only).
+        "a0_strict"  -- always the NAIVE arm's
+                        ``templates.detect_code_leak(..., ngram_n=0)``: bare
+                        ``def name(`` OR fence.
+      A string, not a bool, so a run record says which policy was in force
+      rather than leaving "strict=False" to be read against a per-arm default.
+      NB turning this on for grounded/spec makes the exhaustion path live there:
+      eight bare-def draws must end the episode as ``sim_code_reject``, which is
+      why the attribution below uses THIS predicate and not a fixed detector.
     last_sim_reply: the reply from the last ``generate_user_turn`` call, kept
       for the loop's debug dump / audit.
     last_sim_raw: the most recent RAW (uncapped, but ``<think>``-stripped) sim
@@ -225,6 +247,27 @@ class ColBenchSpecUserSimEnv:
       guard existed), so this flag is what tells you the guard was overruled.
     last_sim_early_term_samples: up to ``_EARLY_TERM_SAMPLES`` of the discarded
       premature-termination replies, so eval can dump WHY they were discarded.
+    last_sim_raw_attempts: how many RAW draws the last ``generate_user_turn``
+      pulled from the backend (accepted + rejected). The denominator for every
+      per-draw rate below; without it a rejection count is not a rate at all.
+    last_sim_raw_fenced_code: raw draws containing a code fence. No separate
+      "rejected_fenced" counter exists because every current policy rejects a
+      fence, so the two would be identical by construction.
+    last_sim_raw_bare_target_def: raw draws where the A0-strict detector fires
+      but fence-only does NOT -- i.e. an unfenced ``def name(``. This is the ONE
+      population the two policies disagree about, so it is the census that makes
+      a strict-vs-fence comparison readable.
+    last_sim_raw_early_termination: raw draws that are termination-like while
+      ``allow_terminate=False``. Counted BEFORE the code branch short-circuits,
+      so a draw that both leaks and terminates lands in both raw counters (the
+      *rejected* counters, which follow the loop, attribute it to code only).
+    last_sim_rejected_bare_target_def: bare-target-def draws discarded on the
+      CODE ground -- nonzero only under a strict policy.
+    last_sim_accepted_bare_target_def: bare-target-def draws that were ACCEPTED
+      and therefore injected into the solver's context, GT and all -- nonzero
+      only under a fence-only policy. Raw minus rejected minus accepted is the
+      residual: bare-def draws a fence-only policy let past the code branch and
+      the early-term guard then discarded.
   """
 
   problem_description: str
@@ -237,6 +280,7 @@ class ColBenchSpecUserSimEnv:
   sim_max_tries: int = 8
   grounded: bool = False
   sim_prompt: str = ""
+  sim_code_leak_detector: str = "auto"
   last_sim_reply: str = field(default="", repr=False)
   last_sim_raw: str = field(default="", repr=False)
   last_sim_code_rejected: int = field(default=0, repr=False)
@@ -246,11 +290,21 @@ class ColBenchSpecUserSimEnv:
   last_sim_early_term_samples: list[str] = field(
       default_factory=list, repr=False
   )
+  last_sim_raw_attempts: int = field(default=0, repr=False)
+  last_sim_raw_fenced_code: int = field(default=0, repr=False)
+  last_sim_raw_bare_target_def: int = field(default=0, repr=False)
+  last_sim_raw_early_termination: int = field(default=0, repr=False)
+  last_sim_rejected_bare_target_def: int = field(default=0, repr=False)
+  last_sim_accepted_bare_target_def: int = field(default=0, repr=False)
 
   # Modes that condition the sim on the hidden GT source. In all of them the
   # leak invariant is enforced by sim_wrote_code rejection sampling, NOT by
   # construction as in "spec".
   _GT_CONDITIONED = frozenset({"grounded", "grounded_v0", "codeonly", "plot"})
+  # Rejection-policy axis (see `sim_code_leak_detector`). "auto" is the legacy
+  # per-arm split; the other two override it in the same direction for every
+  # arm, so an experiment can vary the detector while holding the prompt fixed.
+  _LEAK_DETECTORS = SIM_CODE_LEAK_DETECTORS
 
   def __post_init__(self):
     if self.sim_backend is None:
@@ -268,11 +322,80 @@ class ColBenchSpecUserSimEnv:
       )
     # Keep the alias truthful for anything that still reads `.grounded`.
     self.grounded = self.sim_prompt in ("grounded", "grounded_v0")
+    # Fail loudly on a typo'd detector: silently falling back to "auto" would
+    # run the arm under the OPPOSITE policy from the one the run record claims,
+    # and the two differ only in how often the sim is resampled -- nothing in
+    # the logs would look wrong.
+    self.sim_code_leak_detector = (
+        str(self.sim_code_leak_detector or "auto").strip().lower()
+    )
+    if self.sim_code_leak_detector not in self._LEAK_DETECTORS:
+      raise ValueError(
+          "unknown sim_code_leak_detector"
+          f" {self.sim_code_leak_detector!r}; expected one of"
+          f" {', '.join(sorted(self._LEAK_DETECTORS))}"
+      )
+
+  def _fenced_code(self, reply: str) -> bool:
+    """True iff the reply contains a triple-backtick fence (the WEAK detector).
+
+    Args:
+      reply: the candidate sim reply, already ``<think>``-stripped.
+
+    Returns:
+      ``templates.sim_wrote_code(reply)``.
+    """
+    return templates.sim_wrote_code(reply)
+
+  def _a0_strict_code(self, reply: str) -> bool:
+    """True iff the NAIVE arm's detector fires (bare ``def name(`` OR fence).
+
+    Calls ``templates.detect_code_leak`` with the naive arm's exact arguments
+    (``ngram_n=0``, default ``min_operators``) -- deliberately the same function
+    object the GT env screens with, NOT a re-derived regex, so the two arms
+    cannot drift.
+
+    Args:
+      reply: the candidate sim reply, already ``<think>``-stripped.
+
+    Returns:
+      True iff a leak reason was found.
+    """
+    return templates.detect_code_leak(reply, self.ground_truth, 0) is not None
+
+  def _bare_target_def(self, reply: str) -> bool:
+    """True iff the reply is the population the two detectors DISAGREE about.
+
+    That is: an unfenced target-function definition -- A0-strict rejects it,
+    fence-only accepts it. Every other draw shape is scored identically by both
+    policies, so this is the only counter that separates them.
+
+    Args:
+      reply: the candidate sim reply, already ``<think>``-stripped.
+
+    Returns:
+      True iff strict fires and fence-only does not.
+    """
+    return (not self._fenced_code(reply)) and self._a0_strict_code(reply)
+
+  def _strict_detection(self) -> bool:
+    """Resolve ``sim_code_leak_detector`` (+ the arm, under "auto") to a policy.
+
+    Returns:
+      True iff draws should be screened with the A0-strict detector.
+    """
+    if self.sim_code_leak_detector == "a0_strict":
+      return True
+    if self.sim_code_leak_detector == "fence_only":
+      return False
+    return self.sim_prompt in ("codeonly", "plot")
 
   def _leaked_code(self, reply: str) -> bool:
-    """Screen a candidate sim reply for code, using the ARM's own detector.
+    """Screen a candidate sim reply for code, under the configured policy.
 
-    Two detectors are in play, and which one is right depends on the arm:
+    ``sim_code_leak_detector`` picks the detector; "auto" (the default, and the
+    behavior of every run predating that field) resolves it PER ARM, and it is
+    that per-arm split the rest of this docstring describes:
 
     * ``codeonly`` / ``plot`` (the A1/A2 ladder) use ``detect_code_leak`` with
       ``ngram_n=0`` -- the bare ``def name(`` regex PLUS the fence -- which is
@@ -283,10 +406,11 @@ class ColBenchSpecUserSimEnv:
       ``def f(x, y): return x + y`` must be rejected here exactly as it is
       there.
     * ``spec`` / ``grounded`` keep ``sim_wrote_code`` (any triple-backtick
-      fence). Deliberately NOT changed: every completed spec/grounded run was
-      produced under it, and tightening it now would break comparability with
-      them. ``spec`` also has no GT in the sim's prompt at all, so a leak is
-      impossible there by construction.
+      fence) -- the DEFAULT there, not a constraint: every completed
+      spec/grounded run was produced under it, so "auto" keeps them comparable.
+      ``sim_code_leak_detector="a0_strict"`` is how a new grounded arm opts into
+      the strict screen deliberately. ``spec`` also has no GT in the sim's
+      prompt at all, so a leak is impossible there by construction.
 
     The strict detector is not free -- ``def f(x, y):`` is also what a
     legitimate reply looks like when the user answers "what signature do you
@@ -299,11 +423,9 @@ class ColBenchSpecUserSimEnv:
     Returns:
       True iff the reply should be rejected and resampled.
     """
-    if self.sim_prompt in ("codeonly", "plot"):
-      return (
-          templates.detect_code_leak(reply, self.ground_truth, 0) is not None
-      )
-    return templates.sim_wrote_code(reply)
+    if self._strict_detection():
+      return self._a0_strict_code(reply)
+    return self._fenced_code(reply)
 
   def generate_user_turn(
       self, messages: list[dict[str, str]], allow_terminate: bool = True
@@ -374,11 +496,36 @@ class ColBenchSpecUserSimEnv:
     raw = ""
     stripped = ""
     accepted = False
+    # RAW per-draw census, scored with BOTH detectors regardless of which one is
+    # in force. Counting only what the active policy rejected would make the two
+    # policies incomparable: under fence_only nothing records that a bare def
+    # was ever drawn, so "strict rejects more" could not be told apart from "the
+    # sim stopped writing bare defs". These are the numerators the guard
+    # hypothesis needs; last_sim_raw_attempts is the denominator.
+    raw_attempts = 0
+    raw_fenced_code = 0
+    raw_bare_target_def = 0
+    raw_early_termination = 0
+    rejected_bare_target_def = 0
+    accepted_bare_target_def = 0
     for _ in range(max(1, self.sim_max_tries)):
       raw = self.sim_backend(system_content, user_content)
       stripped = templates.strip_think(raw)
+      raw_attempts += 1
+      fenced = self._fenced_code(stripped)
+      # Same predicate as _bare_target_def, inlined to reuse `fenced` rather
+      # than re-running the fence regex on every draw.
+      bare_target_def = (not fenced) and self._a0_strict_code(stripped)
+      raw_fenced_code += int(fenced)
+      raw_bare_target_def += int(bare_target_def)
+      # BEFORE the code branch below, which short-circuits: a draw that both
+      # leaks and terminates is a real premature termination and must show up in
+      # the raw census even though the loop attributes its REJECTION to code.
+      if not allow_terminate and templates.sim_terminated(stripped):
+        raw_early_termination += 1
       if self._leaked_code(stripped):
         rejected += 1
+        rejected_bare_target_def += int(bare_target_def)
         # Per-DRAW dump, mirroring the GT env (whose _DEBUG_SIM sits inside
         # _finalize_reply and therefore fires on every sample). Without this the
         # spec path dumps only the FINAL reply, so the rejected drafts -- the
@@ -398,16 +545,29 @@ class ColBenchSpecUserSimEnv:
           early_term_samples.append(stripped)
         continue
       accepted = True
+      # An ACCEPTED bare def is the failure this whole axis is about: the reply
+      # is injected into the solver's context with the GT function in it.
+      accepted_bare_target_def += int(bare_target_def)
       break
     self.last_sim_code_rejected = rejected
     self.last_sim_early_term_rejected = early_term_rejected
     self.last_sim_early_term_samples = early_term_samples
+    self.last_sim_raw_attempts = raw_attempts
+    self.last_sim_raw_fenced_code = raw_fenced_code
+    self.last_sim_raw_bare_target_def = raw_bare_target_def
+    self.last_sim_raw_early_termination = raw_early_termination
+    self.last_sim_rejected_bare_target_def = rejected_bare_target_def
+    self.last_sim_accepted_bare_target_def = accepted_bare_target_def
     # Attribute exhaustion to the FINAL rejection ground, not to whichever
     # ground happened most often. Crucially, use the SAME detector that drove
-    # the retry loop: codeonly/plot reject an unfenced ``def name(`` as well as
-    # a fence, while sim_wrote_code is fence-only. Using sim_wrote_code here
-    # would let eight rejected bare-def leaks be mislabeled as an early-term
-    # exhaustion and injected into the solver context.
+    # the retry loop: a strict policy (codeonly/plot under "auto", or ANY arm
+    # under sim_code_leak_detector="a0_strict") rejects an unfenced
+    # ``def name(`` as well as a fence, while sim_wrote_code is fence-only.
+    # Using sim_wrote_code here would let eight rejected bare-def leaks be
+    # mislabeled as an early-term exhaustion and injected into the solver
+    # context -- the 2026-08-07 bug. It is load-bearing for a0_strict on
+    # grounded/spec for exactly the same reason, so this line must keep calling
+    # _leaked_code and never a fixed detector.
     final_rejected_for_code = self._leaked_code(stripped)
     self.last_sim_code_reject_exhausted = (
         (not accepted) and final_rejected_for_code

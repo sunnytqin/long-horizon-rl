@@ -128,6 +128,7 @@ def _make_loop(
     grounded_sim=False,
     sim_prompt="",
     early_term_guard=True,
+    sim_code_leak_detector="auto",
 ):
   """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__.
 
@@ -159,6 +160,7 @@ def _make_loop(
   obj.grounded_sim = grounded_sim
   obj.sim_prompt = sim_prompt
   obj.early_term_guard = early_term_guard
+  obj.sim_code_leak_detector = sim_code_leak_detector
 
   # apply_chat_template is normally an AgentLoopBase method; override on the
   # instance with a byte-encoding stub (only token COUNTS + mask placement
@@ -632,3 +634,99 @@ def test_guard_off_restores_pre_guard_termination():
   assert rei["showed_code"] == 0.0
   assert rei["term_no_code"] == 1.0
   assert out.reward_score == 0.0
+
+
+# ── Rejection-policy axis (+colbench.sim_code_leak_detector) ──────────────────
+
+
+def test_a0_strict_makes_grounded_abort_on_a_bare_def():
+  # The knob's whole point: the SAME sim reply that a fence-only grounded run
+  # injects (with the GT in it) must, under a0_strict, exhaust the budget and
+  # abort as sim_code_reject. This is the path the 2026-08-07 attribution bug
+  # broke, now reachable from grounded -- so it is pinned end to end, not just
+  # in the env.
+  bare_def = "Sure: def f(x, y): return x + y"
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=[bare_def],
+      sim_max_tries=3,
+      sim_prompt="grounded",
+      sim_code_leak_detector="a0_strict",
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["term_sim_code_reject"] == 1.0
+  assert rei["sim_code_rejected"] == 3.0
+  assert rei["term_early_term_exhausted"] == 0.0
+  # Never injected -> the solver never saw the GT.
+  assert rei["sim_accepted_bare_target_def"] == 0.0
+  assert rei["sim_rejected_bare_target_def"] == 3.0
+  assert rei["sim_raw_bare_target_def"] == 3.0
+  assert rei["sim_raw_attempts"] == 3.0
+
+
+def test_fence_only_grounded_injects_the_same_bare_def():
+  # The other side of the same comparison, and the number that makes the two
+  # arms readable against each other: under the default policy that reply is
+  # ACCEPTED, so the GT reaches the solver's context.
+  bare_def = "Sure: def f(x, y): return x + y"
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=[bare_def, "Looks good."],
+      sim_prompt="grounded",
+      sim_code_leak_detector="fence_only",
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  assert rei["term_sim_code_reject"] == 0.0
+  assert rei["sim_code_rejected"] == 0.0
+  assert rei["sim_raw_bare_target_def"] >= 1.0
+  assert rei["sim_accepted_bare_target_def"] >= 1.0
+  assert rei["sim_rejected_bare_target_def"] == 0.0
+
+
+def test_raw_draw_census_reaches_reward_extra_info():
+  # Every counter must exist on a plain episode too: verl reads the
+  # reward_extra_info KEY SET from the first sample, so a key that appears only
+  # on leaky episodes would be dropped from the dashboards entirely.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["It's 10.", "Perfect, thanks! [TERMINATE]"],
+  )
+  out = _run(obj)
+  rei = out.extra_fields["reward_extra_info"]
+  for key in (
+      "sim_raw_attempts",
+      "sim_raw_fenced_code",
+      "sim_raw_bare_target_def",
+      "sim_raw_early_termination",
+      "sim_rejected_bare_target_def",
+      "sim_accepted_bare_target_def",
+  ):
+    assert key in rei, key
+  # Two sim turns, one clean draw each.
+  assert rei["sim_raw_attempts"] == 2.0
+  assert rei["sim_raw_bare_target_def"] == 0.0
+
+
+def test_guard_on_raw_early_termination_is_visible():
+  # The guard hypothesis reads raw_early_termination (what the sim PRODUCED)
+  # against sim_early_term_rejected (what the guard discarded). With the guard
+  # off the sim's [TERMINATE] is admissible, so nothing is premature and the raw
+  # counter stays 0 -- that asymmetry is the metric, not a bug.
+  on = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["[TERMINATE]", "It's 10.", "Looks good."],
+      early_term_guard=True,
+  )
+  rei_on = _run(on).extra_fields["reward_extra_info"]
+  assert rei_on["sim_raw_early_termination"] >= 1.0
+  assert rei_on["sim_early_term_rejected"] >= 1.0
+
+  off = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["[TERMINATE]", "It's 10.", "Looks good."],
+      early_term_guard=False,
+  )
+  rei_off = _run(off).extra_fields["reward_extra_info"]
+  assert rei_off["sim_raw_early_termination"] == 0.0

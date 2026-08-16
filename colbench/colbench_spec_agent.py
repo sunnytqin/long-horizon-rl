@@ -67,6 +67,7 @@ from codecontest.masking import apply_train_turns_mask
 from codecontest.masking import TRAIN_TURNS_MODES
 from colbench import templates
 from colbench.env_spec import ColBenchSpecUserSimEnv
+from colbench.env_spec import SIM_CODE_LEAK_DETECTORS
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase
 from verl.experimental.agent_loop.agent_loop import AgentLoopOutput
 from verl.experimental.agent_loop.agent_loop import register
@@ -211,6 +212,24 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # codeonly/plot are meant to run at max_code_proposals=1.
     _sp = str(cc.get("sim_prompt", "") or "").strip()
     self.sim_prompt = "" if _sp.lower() in ("", "auto", "none") else _sp
+    # WHICH code-leak detector screens sim draws
+    # (+colbench.sim_code_leak_detector):
+    # auto | fence_only | a0_strict. "auto" (default) = the legacy per-arm split
+    # -- strict for codeonly/plot, fence-only for spec/grounded -- so every
+    # existing launch is byte-identical. The other two hold the detector fixed
+    # across arms, which is what makes rejection policy an experiment axis
+    # separate from sim_prompt and from early_term_guard. Validated HERE as well
+    # as in the env so a typo fails at launch, not per-rollout inside Ray.
+    _sd = (
+        str(cc.get("sim_code_leak_detector", "auto") or "auto").strip().lower()
+    )
+    self.sim_code_leak_detector = "auto" if _sd in ("", "none") else _sd
+    if self.sim_code_leak_detector not in SIM_CODE_LEAK_DETECTORS:
+      raise ValueError(
+          "colbench.sim_code_leak_detector must be one of"
+          f" {sorted(SIM_CODE_LEAK_DETECTORS)}, got"
+          f" {self.sim_code_leak_detector!r}"
+      )
     # Premature-[TERMINATE] guard (+colbench.early_term_guard). ON by default =
     # every run since the guard landed (7fb1715e). Turning it OFF restores the
     # PRE-GUARD semantics -- the sim may end the episode before the solver has
@@ -299,6 +318,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         sim_max_tries=self.sim_max_tries,
         grounded=self.grounded_sim,
         sim_prompt=self.sim_prompt,
+        sim_code_leak_detector=self.sim_code_leak_detector,
     )
 
     request_id = uuid4().hex
@@ -334,6 +354,18 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # shown, and whether it was overruled by exhausting the try budget.
     sim_early_term_rejected = 0
     early_term_exhausted = False
+    # Per-DRAW census summed over the episode's sim turns (see the env's
+    # last_sim_raw_* attributes). The rejected_* counters above are decisions;
+    # these are what the sim actually PRODUCED, which is what separates "strict
+    # rejection changed the sim's behavior" from "strict rejection threw more of
+    # the same behavior away". sim_raw_attempts is the denominator for all of
+    # them.
+    sim_raw_attempts = 0
+    sim_raw_fenced_code = 0
+    sim_raw_bare_target_def = 0
+    sim_raw_early_termination = 0
+    sim_rejected_bare_target_def = 0
+    sim_accepted_bare_target_def = 0
     # The sim reply that ended the episode, when the sim ended it -- kept so the
     # convo debug dump and the `term_standalone` metric can say WHY.
     terminating_reply = None
@@ -541,6 +573,12 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
       early_term_exhausted = (
           early_term_exhausted or env.last_sim_early_term_exhausted
       )
+      sim_raw_attempts += env.last_sim_raw_attempts
+      sim_raw_fenced_code += env.last_sim_raw_fenced_code
+      sim_raw_bare_target_def += env.last_sim_raw_bare_target_def
+      sim_raw_early_termination += env.last_sim_raw_early_termination
+      sim_rejected_bare_target_def += env.last_sim_rejected_bare_target_def
+      sim_accepted_bare_target_def += env.last_sim_accepted_bare_target_def
       raw = env.last_sim_raw
 
       if env.last_sim_code_reject_exhausted:
@@ -709,6 +747,27 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 # conversation, which is the intended effect.
                 "sim_early_term_rejected": float(sim_early_term_rejected),
                 "term_early_term_exhausted": float(early_term_exhausted),
+                # ── Per-DRAW census (rejection-policy axis) ──
+                # sim_raw_attempts is the denominator; the rest are per-episode
+                # sums over sim turns. The comparison these exist for:
+                #   * weak/off vs weak/on -- does the guard raise raw_attempts,
+                #     raw_bare_target_def, or accepted_bare_target_def before
+                #     the collapse? That is the hypothesis, as three numbers.
+                #   * fence_only vs a0_strict -- raw_bare_target_def should be
+                #     comparable while accepted -> rejected. If raw MOVES, the
+                #     policy changed the sim's behavior, not just the filter.
+                # accepted_bare_target_def is the leak that actually reaches the
+                # solver: it can only be nonzero under a fence-only policy.
+                "sim_raw_attempts": float(sim_raw_attempts),
+                "sim_raw_fenced_code": float(sim_raw_fenced_code),
+                "sim_raw_bare_target_def": float(sim_raw_bare_target_def),
+                "sim_raw_early_termination": float(sim_raw_early_termination),
+                "sim_rejected_bare_target_def": float(
+                    sim_rejected_bare_target_def
+                ),
+                "sim_accepted_bare_target_def": float(
+                    sim_accepted_bare_target_def
+                ),
                 # Of the sim-ended episodes, was the closing reply the bare
                 # sentinel the prompt asks for (1) or prose that merely mentions
                 # it (0)? 0 means `sim_terminated`'s unanchored match is what

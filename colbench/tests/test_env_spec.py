@@ -63,7 +63,12 @@ def _scripted_backend(replies):
   return backend
 
 
-def _env(sim_backend=None, grounded=False, sim_prompt=""):
+def _env(
+    sim_backend=None,
+    grounded=False,
+    sim_prompt="",
+    sim_code_leak_detector="auto",
+):
   return ColBenchSpecUserSimEnv(
       problem_description=PROBLEM,
       spec=SPEC,
@@ -72,6 +77,7 @@ def _env(sim_backend=None, grounded=False, sim_prompt=""):
       sim_backend=sim_backend,
       grounded=grounded,
       sim_prompt=sim_prompt,
+      sim_code_leak_detector=sim_code_leak_detector,
   )
 
 
@@ -748,6 +754,192 @@ def test_spec_and_grounded_keep_the_fence_only_detector():
     reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
     assert e.last_sim_code_rejected == 0, mode
     assert reply == leak, mode
+
+
+# ── sim_code_leak_detector: rejection policy as an explicit axis ──────────────
+# The detector used to be implied by the arm. These pin the three settings, so a
+# grounded run can pay A0's rejection cost without changing its sim prompt --
+# and so "auto" keeps meaning exactly what every completed run was produced
+# under.
+
+# An unfenced target-function definition: the ONE draw shape the two detectors
+# disagree about (A0-strict rejects, fence-only accepts).
+BARE_DEF = "Sure: def f(x, y): return x + y"
+CLEAN_REPLY = "Above ten we add them, below we subtract."
+
+
+def test_auto_detector_preserves_the_per_arm_split():
+  # The default must reproduce the pre-knob behavior on BOTH sides of the split,
+  # in one test, so a change to either half fails here.
+  weak = _env(sim_backend=_scripted_backend([BARE_DEF]), sim_prompt="grounded")
+  assert weak.generate_user_turn([{"role": "user", "content": PROBLEM}]) == (
+      BARE_DEF
+  )
+  assert weak.last_sim_code_rejected == 0
+
+  strict = _env(
+      sim_backend=_scripted_backend([BARE_DEF, CLEAN_REPLY]),
+      sim_prompt="codeonly",
+  )
+  assert strict.generate_user_turn([{"role": "user", "content": PROBLEM}]) == (
+      CLEAN_REPLY
+  )
+  assert strict.last_sim_code_rejected == 1
+
+
+def test_fence_only_forces_the_weak_detector_on_every_arm():
+  # Including codeonly, whose "auto" policy is strict -- otherwise the knob
+  # could not hold the detector fixed while varying the prompt.
+  for mode in ("grounded", "codeonly"):
+    e = _env(
+        sim_backend=_scripted_backend([BARE_DEF]),
+        sim_prompt=mode,
+        sim_code_leak_detector="fence_only",
+    )
+    reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+    assert reply == BARE_DEF, mode
+    assert e.last_sim_code_rejected == 0, mode
+
+
+def test_a0_strict_rejects_a_bare_def_on_grounded_and_resamples():
+  # The primary new arm: grounded prompt, A0's detector. The bare def is thrown
+  # away and the next clean draw is what the solver sees.
+  e = _env(
+      sim_backend=_scripted_backend([BARE_DEF, CLEAN_REPLY]),
+      sim_prompt="grounded",
+      sim_code_leak_detector="a0_strict",
+  )
+  reply = e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert reply == CLEAN_REPLY
+  assert e.last_sim_code_rejected == 1
+  assert e.last_sim_code_reject_exhausted is False
+
+
+def test_a0_strict_bare_def_exhaustion_is_a_code_reject_on_grounded():
+  # The 2026-08-07 bug, in its new home. Forcing strict detection onto an arm
+  # whose attribution used to be fence-only is exactly the condition that bug
+  # needed: if the exhaustion were attributed with sim_wrote_code, N bare-def
+  # draws would come back as an early-term exhaustion and the loop would INJECT
+  # the last leaked reply (GT included) instead of aborting.
+  for mode in ("grounded", "spec"):
+    e = ColBenchSpecUserSimEnv(
+        problem_description=PROBLEM,
+        spec=SPEC,
+        ground_truth=GT,
+        test_cases=CALLS,
+        sim_max_tries=3,
+        sim_backend=_scripted_backend([BARE_DEF]),
+        sim_prompt=mode,
+        sim_code_leak_detector="a0_strict",
+    )
+    e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+    assert e.last_sim_code_rejected == 3, mode
+    assert e.last_sim_code_reject_exhausted is True, mode
+    assert e.last_sim_early_term_exhausted is False, mode
+
+
+def test_bare_def_census_splits_accepted_from_rejected_by_policy():
+  # The counters must show the SAME raw population under both policies and
+  # differ only in its disposition -- that is what makes weak-vs-strict runs
+  # comparable. accepted_bare_target_def is the leak that reaches the solver.
+  weak = _env(
+      sim_backend=_scripted_backend([BARE_DEF]),
+      sim_prompt="grounded",
+      sim_code_leak_detector="fence_only",
+  )
+  weak.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert weak.last_sim_raw_attempts == 1
+  assert weak.last_sim_raw_bare_target_def == 1
+  assert weak.last_sim_accepted_bare_target_def == 1
+  assert weak.last_sim_rejected_bare_target_def == 0
+  assert weak.last_sim_raw_fenced_code == 0
+
+  strict = _env(
+      sim_backend=_scripted_backend([BARE_DEF, CLEAN_REPLY]),
+      sim_prompt="grounded",
+      sim_code_leak_detector="a0_strict",
+  )
+  strict.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert strict.last_sim_raw_attempts == 2
+  assert strict.last_sim_raw_bare_target_def == 1
+  assert strict.last_sim_rejected_bare_target_def == 1
+  assert strict.last_sim_accepted_bare_target_def == 0
+
+
+def test_fenced_code_is_counted_raw_under_both_policies():
+  # A fence is rejected by every policy, so raw_fenced_code has no "rejected"
+  # twin -- but it still has to be COUNTED, or the bare-def numbers cannot be
+  # read against total code-writing behavior.
+  fenced = "Here you go:\n```python\ndef f(x, y):\n    return x + y\n```"
+  e = _env(
+      sim_backend=_scripted_backend([fenced, CLEAN_REPLY]),
+      sim_prompt="grounded",
+      sim_code_leak_detector="fence_only",
+  )
+  e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert e.last_sim_raw_fenced_code == 1
+  # A fence is not a BARE def: the disagreement counter must not count it.
+  assert e.last_sim_raw_bare_target_def == 0
+  assert e.last_sim_code_rejected == 1
+
+
+def test_raw_early_termination_is_counted_alongside_the_existing_rejects():
+  # The guard hypothesis is read off raw_early_termination vs
+  # early_term_rejected: the first is what the sim PRODUCED, the second what the
+  # guard threw away.
+  e = _env(
+      sim_backend=_scripted_backend(
+          ["Sounds good, I think you have it. [TERMINATE]", CLEAN_REPLY]
+      ),
+      sim_prompt="grounded",
+  )
+  e.generate_user_turn(
+      [{"role": "user", "content": PROBLEM}], allow_terminate=False
+  )
+  assert e.last_sim_raw_early_termination == 1
+  assert e.last_sim_early_term_rejected == 1
+  assert e.last_sim_raw_attempts == 2
+
+  # With termination admissible there is nothing premature to count.
+  ok = _env(
+      sim_backend=_scripted_backend(["You have it. [TERMINATE]"]),
+      sim_prompt="grounded",
+  )
+  ok.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert ok.last_sim_raw_early_termination == 0
+  assert ok.last_sim_early_term_rejected == 0
+
+
+def test_raw_census_counts_a_draw_that_both_leaks_and_terminates():
+  # The code branch short-circuits the loop, so the two RAW counters must be
+  # taken before it -- otherwise a sim that quits WITH code looks like it never
+  # tried to quit at all, and the guard metric silently under-reports.
+  both = BARE_DEF + " [TERMINATE]"
+  e = _env(
+      sim_backend=_scripted_backend([both, CLEAN_REPLY]),
+      sim_prompt="grounded",
+      sim_code_leak_detector="a0_strict",
+  )
+  e.generate_user_turn(
+      [{"role": "user", "content": PROBLEM}], allow_terminate=False
+  )
+  assert e.last_sim_raw_bare_target_def == 1
+  assert e.last_sim_raw_early_termination == 1
+  # The DECISION is attributed to code only -- one draw, one rejection ground.
+  assert e.last_sim_code_rejected == 1
+  assert e.last_sim_early_term_rejected == 0
+
+
+def test_unknown_sim_code_leak_detector_fails_loudly():
+  # Same reasoning as the sim_prompt typo guard: falling back to "auto" would
+  # run the arm under the opposite rejection policy from the one the run record
+  # claims, and nothing in the logs would look wrong.
+  try:
+    _env(sim_prompt="grounded", sim_code_leak_detector="a0strict")
+  except ValueError as e:
+    assert "unknown sim_code_leak_detector" in str(e)
+  else:
+    raise AssertionError("a typo'd sim_code_leak_detector was accepted")
 
 
 def test_grounded_v0_is_the_pre_guard_prompt_and_stays_frozen():

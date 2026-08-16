@@ -32,8 +32,8 @@
 #   MAX_RESPONSE_LENGTH, MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
 #   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD, SIM_MAX_TOKENS,
-#   GROUNDED_SIM, SIM_PROMPT, EARLY_TERM_GUARD, TERMINATE_ON_ALLPASS, BINARY_REWARD, LENGTH_PENALTY_COEF,
-#   LENGTH_SOFT_CAP.
+#   GROUNDED_SIM, SIM_PROMPT, EARLY_TERM_GUARD, SIM_CODE_LEAK_DETECTOR, TERMINATE_ON_ALLPASS,
+#   BINARY_REWARD, LENGTH_PENALTY_COEF, LENGTH_SOFT_CAP.
 
 
 set -xeuo pipefail
@@ -122,6 +122,16 @@ sim_prompt=${SIM_PROMPT:-auto}   # auto = defer to GROUNDED_SIM (back-compat)
 # MAX_CODE_PROPOSALS=1 the sim then can never end an episode, as in naive), though it is near-moot
 # there because the minimal sim prompt never names the sentinel.
 early_term_guard=${EARLY_TERM_GUARD:-True}
+# WHICH detector screens a sim draw for code: auto | fence_only | a0_strict.
+#   auto       -- BACKWARD COMPATIBLE default, and the behavior of every run predating this knob:
+#                 strict for codeonly/plot, fence-only (```fence) for spec/grounded/grounded_v0.
+#   fence_only -- fence-only for EVERY arm.
+#   a0_strict  -- the naive arm's detect_code_leak(..., ngram_n=0) (bare `def name(` OR fence) for
+#                 EVERY arm. This is what makes grounded/spec pay the same rejection cost A0 does.
+# A separate axis from EARLY_TERM_GUARD on purpose -- vary ONE at a time. Under a0_strict the
+# exhaustion path goes live on grounded/spec: N bare-def draws end the episode as
+# term_sim_code_reject instead of injecting the leaked reply.
+sim_code_leak_detector=${SIM_CODE_LEAK_DETECTOR:-auto}
 # Spec-path guardrail: max ```python proposals before the loop force-grades the last one (default
 # 2, reduced from 3 after eval). Replaces the GT path's sim_reject_max_tries.
 max_code_proposals=${MAX_CODE_PROPOSALS:-2}
@@ -319,6 +329,7 @@ python3 -m verl.trainer.main_ppo \
    +colbench.grounded_sim=${grounded_sim} \
    +colbench.sim_prompt="${sim_prompt}" \
    +colbench.early_term_guard=${early_term_guard} \
+   +colbench.sim_code_leak_detector="${sim_code_leak_detector}" \
    trainer.balance_batch=True \
    trainer.logger='["console","tensorboard"]' \
    trainer.project_name=${PROJECT_NAME} \
