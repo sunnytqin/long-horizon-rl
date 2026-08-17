@@ -24,6 +24,18 @@ uses. The GT source is passed ONLY inside the sim prompt and never enters the
 solver's message list; there is no code leak possible here (the sim conditions
 on the NL spec, not code).
 
+``--sim_code_leak_detector`` (default ``a0_strict`` since harness v3, on
+2026-08-16) is the screen a sim reply must pass before it is injected. Strict =
+the naive arm's ``detect_code_leak(ngram_n=0)``: an unfenced ``def name(``
+counts as a leak, not just a ```fence. It replaced the fence-only screen because
+a bare ``def f(x, y): return x + y`` from a strong or GT-conditioned sim hands
+the solver the answer, and the old screen injected it. On exhaustion of
+``--sim_max_tries`` the SAME predicate decides the outcome, so N bare-def draws
+end the conversation as ``terminated_by="sim_code_reject"`` -- never as a
+premature termination, and never injected (that mislabeling was a real bug on
+the training path). Pass ``--sim_code_leak_detector fence_only`` to reproduce a
+pre-v3 eval.
+
 ``--grounded`` (default off) switches the sim to GROUNDED conditioning -- the
 hidden GT source + ``spec["plot"]`` instead of persona/scenario/requirements,
 the same ``+colbench.grounded_sim`` mode the training loop has. It is a
@@ -70,6 +82,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # pylint: disable=g-import-not-at-top,wrong-import-position
 from colbench import templates
 from colbench.env_spec import ColBenchSpecUserSimEnv
+from colbench.env_spec import SIM_CODE_LEAK_DETECTORS
 import pandas as pd
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -99,7 +112,20 @@ MAX_EARLY_TERM_DUMP = 6
 #         budget), the terminating reply is recorded, and the sim prompt's
 #         [TERMINATE] instructions were rewritten. Premature-termination rates
 #         are NOT comparable across this line.
-EVAL_HARNESS_VERSION = "v2"
+#   v3 -> 2026-08-16 STRICT code-leak screen by default. The sim reply screen
+#         moved from fence-only (``sim_wrote_code``) to the naive arm's
+#         ``detect_code_leak(ngram_n=0)``, which also rejects an UNFENCED
+#         ``def name(``. WHY: with a GT-conditioned or strong sim, a bare
+#         ``def f(x, y): return x + y`` is a real leak -- the fence-only screen
+#         injected it and the solver could read the answer off the user's turn.
+#         Measured on the existing dumps before flipping: 0.2-5% of convos
+#         contained a bare def, so pre-v3 numbers are only mildly affected and
+#         were NOT re-run; that is also why this is a version bump rather than a
+#         silent fix. Consequences on this line: `sim_code_rejected` rises,
+#         `sim_code_reject` becomes a reachable terminated_by on the spec arm,
+#         and pass rates may move slightly. Override with
+#         --sim_code_leak_detector to reproduce a pre-v3 run (fence_only).
+EVAL_HARNESS_VERSION = "v3"
 
 
 # -----------------------------------------------------------------------------
@@ -396,6 +422,7 @@ def build_trajectories(val_df, n_samples, args, sim_backend=None):
           sim_backend=sim_backend,
           sim_max_tries=args.sim_max_tries,
           grounded=args.grounded,
+          sim_code_leak_detector=args.sim_code_leak_detector,
       )
       trajs.append(
           Trajectory(
@@ -852,6 +879,11 @@ def _aggregate(trajs, temperature, n_samples, args, elapsed):
       # the same value, so it is recorded next to sim_model rather than left
       # implicit in the filename.
       "sim_conditioning": "grounded" if args.grounded else "spec",
+      # Same reasoning as sim_conditioning: the screen decides what the sim was
+      # allowed to say, so two summaries are only comparable at the same value.
+      # Recorded explicitly rather than inferred from harness_version, which
+      # only pins the DEFAULT.
+      "sim_code_leak_detector": args.sim_code_leak_detector,
       "n_problems": len(by_problem),
       "n_samples_per_problem": n_samples,
       "n_trajectories": n,
@@ -1120,6 +1152,20 @@ def main():
       "inspection.",
   )
   ap.add_argument(
+      "--sim_code_leak_detector",
+      default="a0_strict",
+      choices=sorted(SIM_CODE_LEAK_DETECTORS),
+      help="WHICH detector screens a sim reply for code before it is injected. "
+      "DEFAULT 'a0_strict' since harness v3: the naive arm's "
+      "detect_code_leak(ngram_n=0), i.e. an unfenced `def name(` OR a fence. "
+      "'fence_only' is the pre-v3 screen, for reproducing an older eval; "
+      "'auto' resolves per arm (fence-only for spec/grounded) and is what "
+      "training uses. "
+      "defaults to. Deliberately has NO env-var default: launch.py exports "
+      "SIM_CODE_LEAK_DETECTOR for the TRAINING job, and reading it here would "
+      "let a training arm silently downgrade the eval's screen.",
+  )
+  ap.add_argument(
       "--grounded",
       action="store_true",
       default=os.environ.get("GROUNDED_SIM", "False") == "True",
@@ -1174,7 +1220,8 @@ def main():
       (
           f"[validate_spec] loaded {len(val_df)} spec problems from"
           f" {args.val_file}; solver_backend={args.solver_backend};"
-          f" sim_conditioning={'grounded' if args.grounded else 'spec'}"
+          f" sim_conditioning={'grounded' if args.grounded else 'spec'};"
+          f" sim_code_leak_detector={args.sim_code_leak_detector}"
       )
   )
 

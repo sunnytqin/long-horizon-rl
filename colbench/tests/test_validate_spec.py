@@ -112,9 +112,15 @@ def _val_df():
   )
 
 
-def _args(sim_max_tries=8, max_assistant_turns=4, grounded=False):
+def _args(
+    sim_max_tries=8,
+    max_assistant_turns=4,
+    grounded=False,
+    sim_code_leak_detector="a0_strict",
+):
   return Namespace(
       grounded=grounded,
+      sim_code_leak_detector=sim_code_leak_detector,
       model="fake-model",
       solver_backend="openai",
       val_file="fake.parquet",
@@ -333,3 +339,70 @@ def test_summary_records_the_conditioning(tmp_path):
   )
   assert spec_summary["sim_conditioning"] == "spec"
   assert grounded_summary["sim_conditioning"] == "grounded"
+
+
+# ── STRICT code-leak screen (harness v3 default) ──────────────────────────────
+
+
+def test_bare_def_is_rejected_and_resampled_by_default(tmp_path):
+  # v3 DEFAULT. An unfenced `def f(...)` from the sim is a leak -- the solver
+  # could read the answer straight off the user's turn -- so it must be
+  # resampled, not injected. Under the pre-v3 fence-only screen this reply went
+  # into the conversation verbatim.
+  bare_def = "Sure: def f(x, y): return x + y"
+  _, dump, _ = _run(
+      tmp_path,
+      solver_turns=["What's the cutoff for x?", _code_turn(GT)],
+      sim_replies=[bare_def, "It's 10.", "Great, thanks! [TERMINATE]"],
+  )
+  (traj,) = dump["trajectories"]
+  assert traj["sim_code_rejected"] == 1
+  assert traj["terminated_by"] == "user"
+  # The leak never reached the solver's message list.
+  assert all(bare_def not in m["content"] for m in traj["messages"])
+
+
+def test_bare_def_exhaustion_ends_as_sim_code_reject(tmp_path):
+  # THE TRAP, pinned. When every try is a bare def the budget is exhausted, and
+  # the outcome must be attributed with the SAME strict predicate that drove the
+  # retries. Attributing with the fence-only detector (the 2026-08-07 training
+  # bug) would call this a premature-termination exhaustion and INJECT the last
+  # leaked reply instead of ending the conversation.
+  bare_def = "Sure: def f(x, y): return x + y"
+  _, dump, _ = _run(
+      tmp_path,
+      solver_turns=["What's the cutoff for x?", _code_turn(GT)],
+      sim_replies=[bare_def],
+      sim_max_tries=2,
+  )
+  (traj,) = dump["trajectories"]
+  assert traj["terminated_by"] == "sim_code_reject"
+  assert traj["sim_code_rejected"] == 2
+  assert traj["early_term_exhausted"] is False
+
+
+def test_fence_only_reproduces_the_pre_v3_screen(tmp_path):
+  # The escape hatch for re-running an old eval: the same reply is injected and
+  # the conversation continues, exactly as before v3.
+  bare_def = "Sure: def f(x, y): return x + y"
+  _, dump, _ = _run(
+      tmp_path,
+      solver_turns=["What's the cutoff for x?", _code_turn(GT)],
+      sim_replies=[bare_def, "Great, thanks! [TERMINATE]"],
+      sim_code_leak_detector="fence_only",
+  )
+  (traj,) = dump["trajectories"]
+  assert traj["sim_code_rejected"] == 0
+  assert any(bare_def in m["content"] for m in traj["messages"])
+
+
+def test_summary_records_the_detector(tmp_path):
+  # Comparability again: a v3 summary and a fence_only re-run are different
+  # environments, so the screen is recorded next to sim_conditioning.
+  summary, _, _ = _run(
+      tmp_path,
+      solver_turns=[_code_turn(GT)],
+      sim_replies=[TERMINATE],
+  )
+  assert summary["sim_code_leak_detector"] == "a0_strict"
+  assert summary["harness_version"] == "v3"
