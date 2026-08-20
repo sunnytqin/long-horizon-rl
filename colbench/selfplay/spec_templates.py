@@ -177,13 +177,19 @@ reproduce the reference behavior EXACTLY.
 4) "plot": This field is an INSTRUCTION to the user-simulator -- the model that will role-play \
 this user in the conversation. Write it in that tone, telling the simulator how to behave: \
 "the user would first...", "the user would...", "if the assistant asks..., the user would...". \
-Now LOOK at the requirements you just wrote and invent ONE natural, interesting way THIS \
+Now LOOK AT THE REFERENCE IMPLEMENTATION ABOVE and invent ONE natural, interesting way THIS \
 particular conversation could unfold so the assistant has to work a little to get the full \
 intent -- a DIRECTION, not a script.
 
-First choose WHICH single detail is not clear up front, and in WHAT WAY (pick what best fits \
-this function): the user forgets an edge case; states one specific value or piece of the logic \
-WRONG; is VAGUE about a threshold/default; or knows it but would not think to say it unprompted.
+First choose WHICH single detail is not clear up front. That detail MUST be a behavior the \
+REFERENCE IMPLEMENTATION ACTUALLY EXHIBITS -- a specific branch it takes, a constant it uses, a \
+threshold or comparison it makes, a value it returns. Do NOT invent edge cases, error handling, \
+or any other behavior the reference does not have: if the reference would crash or is undefined \
+for some input (dividing by zero, an empty list, a missing key), that is NOT a valid choice -- \
+pick something the code really does. Describe it in WORDS, never as code. Then pick in WHAT WAY \
+it is unclear (whatever best fits this function): the user forgets that rule; states one \
+specific value or piece of the logic WRONG; is VAGUE about a threshold/default; or knows it but \
+would not think to say it unprompted.
 
 Then describe HOW it comes out -- but ONLY in terms of the USER's behavior, made CONDITIONAL on \
 what the assistant does. The assistant is a separate agent we do NOT control, so you must NEVER \

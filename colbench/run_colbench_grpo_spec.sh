@@ -31,7 +31,7 @@
 #   MAX_ASSISTANT_TURNS, MAX_CODE_PROPOSALS, SIM_MAX_TRIES, TRAIN_BATCH_SIZE, MAX_PROMPT_LENGTH,
 #   MAX_RESPONSE_LENGTH, MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
-#   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD, SIM_MAX_TOKENS,
+#   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD, SIM_MAX_TOKENS, SIM_LIVE,
 #   GROUNDED_SIM, SIM_PROMPT, EARLY_TERM_GUARD, SIM_CODE_LEAK_DETECTOR, TERMINATE_ON_ALLPASS,
 #   BINARY_REWARD, LENGTH_PENALTY_COEF, LENGTH_SOFT_CAP.
 
@@ -54,6 +54,8 @@ NNODES=${NNODES:-1}
 # exports NGPUS_PER_NODE (default 6 on an 8-GPU node: GPUs 0-5 train, GPU 7 = sim, GPU 6 idle).
 # MUST be divisible by rollout_tp below (6 % 2 == 0); 7 would crash (7 % 2 != 0). For a small
 # model you can run NGPUS_PER_NODE=7 with ROLLOUT_TP=1 to avoid the idle GPU.
+# Under SIM_LIVE=True there is no sim server to host, so the entrypoint sets SIM_TP=0 and exports
+# NGPUS_PER_NODE=8: train/mini batch 120 stays divisible by 8 and by the dp size 8/2=4.
 NGPUS_PER_NODE=${NGPUS_PER_NODE:-6}
 
 
@@ -176,6 +178,16 @@ export CODECONTEST_EXEC_CONCURRENCY=${CODECONTEST_EXEC_CONCURRENCY:-32}
 # bounded only by a prompt instruction to a 4B model, while every eval dump we diagnosed ran at 256.
 # 256 matches eval; watch the sim_reply_chars metric.
 export SIM_MAX_TOKENS=${SIM_MAX_TOKENS:-256}
+# LIVE-weights user simulator (SIM_LIVE=True, set by launch.py --sim_live): the user turn is
+# generated on the TRAINING rollout engine, so the sim IS the current policy -- ONE copy of the
+# weights for the whole run, no frozen base model and no second server. Default False keeps the
+# frozen-server baseline (rollout byte-identical to every spec run so far). ORTHOGONAL to
+# SIM_PROMPT, so any arm (spec / grounded / codeonly / plot) can run live. The entrypoint gives
+# training ALL GPUs in this mode (SIM_TP=0 -> NGPUS_PER_NODE=8), and the sim then shares the
+# rollout engine's queue with the solver: watch sim_seconds / sim_turn_timeout and raise
+# ENV_STEP_TIMEOUT if the latter starts firing. SIM_MAX_TOKENS above is the sim's generation cap
+# in BOTH arms.
+sim_live=${SIM_LIVE:-False}
 
 
 # Training hparams
@@ -320,6 +332,7 @@ python3 -m verl.trainer.main_ppo \
    +colbench.train_turns=${train_turns} \
    +colbench.max_code_proposals=${max_code_proposals} \
    +colbench.sim_max_tries=${sim_max_tries} \
+   +colbench.sim_live=${sim_live} \
    +colbench.reward_time_limit=${reward_time_limit} \
    +colbench.env_step_timeout=${env_step_timeout} \
    +colbench.length_penalty_coef=${length_penalty_coef} \

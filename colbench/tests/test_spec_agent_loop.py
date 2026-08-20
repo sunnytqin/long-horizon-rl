@@ -161,6 +161,10 @@ def _make_loop(
   obj.sim_prompt = sim_prompt
   obj.early_term_guard = early_term_guard
   obj.sim_code_leak_detector = sim_code_leak_detector
+  # FROZEN sim: these tests all drive the scripted sync backend below. The LIVE
+  # arm (sim_live=True, user turn generated on the training rollout engine) has
+  # its own module, tests/test_agent_loop_live_sim_spec.py.
+  obj.sim_live = False
 
   # apply_chat_template is normally an AgentLoopBase method; override on the
   # instance with a byte-encoding stub (only token COUNTS + mask placement
