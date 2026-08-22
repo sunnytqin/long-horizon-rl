@@ -109,8 +109,9 @@ binary_reward=${BINARY_REWARD:-False}
 # grade-last-shown-code, sim_wrote_code rejection, the solver prompt, the parquet -- is unchanged.
 # OFF by default; eval never honors it, so the golden eval stays spec-conditioned.
 grounded_sim=${GROUNDED_SIM:-False}
-# WHICH user-sim prompt / arm: spec | grounded | codeonly | plot. Empty (default) defers to
-# GROUNDED_SIM above, so every existing launch is byte-identical. The "improve UP from naive"
+# WHICH user-sim prompt / arm: spec | grounded | grounded_v0 | grounded_v0_no_plot | codeonly |
+# plot. Empty (default) defers to GROUNDED_SIM above, so every existing launch is byte-identical.
+# The "improve UP from naive"
 # ladder: codeonly (A1) = the naive arm's stock answerer on the GT, no plot, no role-play --
 # a NULL-DELTA CONTROL that must reproduce the naive arm; plot (A2) = A1 + spec.plot. BOTH are
 # meant to run with MAX_CODE_PROPOSALS=1, which removes the sim's judging and termination roles
@@ -120,13 +121,16 @@ sim_prompt=${SIM_PROMPT:-auto}   # auto = defer to GROUNDED_SIM (back-compat)
 # Premature-[TERMINATE] guard. True (default) = every run since the guard landed: the sim may not
 # end the episode before the solver has shown code (rejection-sampled out of the sim_max_tries
 # budget). False restores PRE-GUARD semantics and is the ONLY way to reproduce a grounded/spec run
-# from before it. NB for the A1/A2 ladder, True is what MATCHES the naive arm (at
+# from before it. `grounded_v0_no_plot` is the exact V0 prompt with only the plot removed, so it
+# too must use False when compared to the V0 reference. NB for the A1/A2 ladder, True is what
+# MATCHES the naive arm (at
 # MAX_CODE_PROPOSALS=1 the sim then can never end an episode, as in naive), though it is near-moot
 # there because the minimal sim prompt never names the sentinel.
 early_term_guard=${EARLY_TERM_GUARD:-True}
 # WHICH detector screens a sim draw for code: auto | fence_only | a0_strict.
 #   auto       -- BACKWARD COMPATIBLE default, and the behavior of every run predating this knob:
-#                 strict for codeonly/plot, fence-only (```fence) for spec/grounded/grounded_v0.
+#                 strict for codeonly/plot, fence-only (```fence) for
+#                 spec/grounded/grounded_v0/grounded_v0_no_plot.
 #   fence_only -- fence-only for EVERY arm.
 #   a0_strict  -- the naive arm's detect_code_leak(..., ngram_n=0) (bare `def name(` OR fence) for
 #                 EVERY arm. This is what makes grounded/spec pay the same rejection cost A0 does.
@@ -143,13 +147,11 @@ max_code_proposals=${MAX_CODE_PROPOSALS:-2}
 #
 # WHY THE SIM_REJECT_MAX_TRIES FALLBACK (2026-08-06). This budget is the SAME knob as the GT arm's
 # sim_reject_max_tries -- same rejection sampler, same meaning -- but the two arms read DIFFERENT
-# env var names, and launch.py exports only SIM_REJECT_MAX_TRIES. So `--sim_reject_max_tries=3`
-# set the GT arm to 3 and silently left this arm at 8. That is not a cosmetic mismatch: exhaustion
-# is p^B in the budget, so at a per-draw leak rate of ~0.6 the two arms sat at 22% vs 2% episodes
-# killed by the sim -- which is most of the A0-vs-A1 reward gap the ladder was built to rule out.
-# Falling back keeps SIM_MAX_TRIES authoritative when set (so nothing that pins it changes) while
-# making the one flag that exists reach BOTH arms. NB this DOES change the effective budget of a
-# spec launch that passes --sim_reject_max_tries and never set SIM_MAX_TRIES: that is the point.
+# env var names, and launch.py exports only SIM_REJECT_MAX_TRIES. The fallback makes an explicit
+# nonzero launcher flag (for example `--sim_reject_max_tries=3`) reach both arms. With the launcher's
+# default 0, this shell variable is 0, and ColBenchSpecAgentLoop deliberately applies `or 8` when it
+# parses the Hydra config; therefore SPEC launches retain their legacy effective default of 8 tries.
+# SIM_MAX_TRIES is still authoritative when set directly.
 sim_max_tries=${SIM_MAX_TRIES:-${SIM_REJECT_MAX_TRIES:-8}}
 # Solver sampling. Defaults = the SOLVER model's recommended generation settings; match these
 # to whatever --model you train. Qwen3-4B-Instruct-2507: temp 0.7, top_p 0.8, top_k 20, min_p 0

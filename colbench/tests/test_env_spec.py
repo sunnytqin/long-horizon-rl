@@ -970,6 +970,7 @@ def test_grounded_v0_routes_to_the_v0_template():
   for mode, template in (
       ("grounded", "GROUNDED_SIM_SYSTEM_PROMPT"),
       ("grounded_v0", "GROUNDED_SIM_SYSTEM_PROMPT_V0"),
+      ("grounded_v0_no_plot", "GROUNDED_SIM_SYSTEM_PROMPT_V0"),
   ):
     e = _env(sim_backend=backend, sim_prompt=mode)
     e.generate_user_turn([{"role": "user", "content": PROBLEM}])
@@ -979,6 +980,28 @@ def test_grounded_v0_routes_to_the_v0_template():
     assert seen["system"].startswith(head), mode
     # Both are GT-conditioned, so the legacy alias must stay truthful.
     assert e.grounded, mode
+
+
+def test_grounded_v0_no_plot_omits_only_the_plot():
+  from colbench import prompts  # pylint: disable=g-import-not-at-top
+
+  seen = {}
+
+  def backend(system_content, _user):
+    seen["system"] = system_content
+    return "sure"
+
+  e = _env(sim_backend=backend, sim_prompt="grounded_v0_no_plot")
+  e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+
+  assert seen["system"] == prompts.GROUNDED_SIM_SYSTEM_PROMPT_V0.format(
+      problem_description=PROBLEM,
+      ground_truth=GT,
+      plot="",
+  )
+  assert SPEC["plot"] not in seen["system"]
+  assert e.sim_prompt == "grounded_v0_no_plot"
+  assert e.grounded
 
 
 if __name__ == "__main__":

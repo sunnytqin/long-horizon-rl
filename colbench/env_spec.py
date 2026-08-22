@@ -200,6 +200,10 @@ class ColBenchSpecUserSimEnv:
       selects an arm:
         "spec"     -- authored persona/scenario/requirements/plot, no GT.
         "grounded" -- hidden GT source + ``spec["plot"]``, character role-play.
+        "grounded_v0" -- the historical pre-guard grounded prompt + plot.
+        "grounded_v0_no_plot" -- the same historical grounded prompt, but
+                                  with the plot omitted. This is the clean
+                                  plot ablation for the V0 reference arm.
         "codeonly" -- A1: the NAIVE arm's stock answerer on the GT, no plot, no
                       role-play. Byte-identical to the naive arm's sim call, so
                       it is the null-delta CONTROL for the ladder.
@@ -207,13 +211,15 @@ class ColBenchSpecUserSimEnv:
       "codeonly"/"plot" are meant to run at ``max_code_proposals=1``, which
       removes the sim's judging and termination roles entirely (the loop grades
       on the first proposal and breaks before the sim's next turn). In every mode
-      that puts the GT in the sim's prompt -- grounded, codeonly, plot -- the
+      that puts the GT in the sim's prompt -- grounded, grounded_v0,
+      grounded_v0_no_plot, codeonly, plot -- the
       ``sim_max_tries`` rejection above is the load-bearing leak defense rather
       than a character guard.
     sim_code_leak_detector: WHICH detector screens a sim draw for code, as an
       explicit experiment axis independent of ``sim_prompt``:
         "auto"       -- per-arm legacy behavior: strict for codeonly/plot,
-                        fence-only for spec/grounded/grounded_v0. BACKWARD
+                        fence-only for spec/grounded/grounded_v0/
+                        grounded_v0_no_plot. BACKWARD
                         COMPATIBLE: every run before this knob existed is
                         reproduced byte-for-byte by the default.
         "fence_only" -- always ``templates.sim_wrote_code`` (triple-backtick
@@ -300,7 +306,9 @@ class ColBenchSpecUserSimEnv:
   # Modes that condition the sim on the hidden GT source. In all of them the
   # leak invariant is enforced by sim_wrote_code rejection sampling, NOT by
   # construction as in "spec".
-  _GT_CONDITIONED = frozenset({"grounded", "grounded_v0", "codeonly", "plot"})
+  _GT_CONDITIONED = frozenset(
+      {"grounded", "grounded_v0", "grounded_v0_no_plot", "codeonly", "plot"}
+  )
   # Rejection-policy axis (see `sim_code_leak_detector`). "auto" is the legacy
   # per-arm split; the other two override it in the same direction for every
   # arm, so an experiment can vary the detector while holding the prompt fixed.
@@ -321,7 +329,11 @@ class ColBenchSpecUserSimEnv:
           f"spec, {', '.join(sorted(self._GT_CONDITIONED))}"
       )
     # Keep the alias truthful for anything that still reads `.grounded`.
-    self.grounded = self.sim_prompt in ("grounded", "grounded_v0")
+    self.grounded = self.sim_prompt in (
+        "grounded",
+        "grounded_v0",
+        "grounded_v0_no_plot",
+    )
     # Fail loudly on a typo'd detector: silently falling back to "auto" would
     # run the arm under the OPPOSITE policy from the one the run record claims,
     # and the two differ only in how often the sim is resampled -- nothing in
@@ -457,13 +469,17 @@ class ColBenchSpecUserSimEnv:
       ``last_sim_raw`` holds the uncapped form for ``[TERMINATE]`` detection.
     """
     plot = (self.spec or {}).get("plot", "")
-    if self.sim_prompt in ("grounded", "grounded_v0"):
+    if self.sim_prompt in ("grounded", "grounded_v0", "grounded_v0_no_plot"):
       system_content, user_content = templates.build_grounded_sim_messages(
           self.problem_description,
           self.ground_truth,
-          plot,
+          "" if self.sim_prompt == "grounded_v0_no_plot" else plot,
           messages,
-          version="v0" if self.sim_prompt == "grounded_v0" else "v1",
+          version=(
+              "v0"
+              if self.sim_prompt in ("grounded_v0", "grounded_v0_no_plot")
+              else "v1"
+          ),
       )
     elif self.sim_prompt in ("codeonly", "plot"):
       # A1 passes plot="" -> the naive arm's sim call, byte for byte.
