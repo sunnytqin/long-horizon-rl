@@ -129,6 +129,7 @@ def _make_loop(
     sim_prompt="",
     early_term_guard=True,
     sim_code_leak_detector="auto",
+    sim_protocol="assistant",
 ):
   """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__.
 
@@ -161,6 +162,10 @@ def _make_loop(
   obj.sim_prompt = sim_prompt
   obj.early_term_guard = early_term_guard
   obj.sim_code_leak_detector = sim_code_leak_detector
+  # HOW the sim is driven: "assistant" (flattened transcript, model answers in
+  # the assistant slot) = every run to date and every test here. "userlm" needs a
+  # user LM served as the sim; its protocol seam is covered in tests/test_userlm.py.
+  obj.sim_protocol = sim_protocol
   # FROZEN sim: these tests all drive the scripted sync backend below. The LIVE
   # arm (sim_live=True, user turn generated on the training rollout engine) has
   # its own module, tests/test_agent_loop_live_sim_spec.py.

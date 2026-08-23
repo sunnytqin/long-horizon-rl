@@ -75,6 +75,26 @@ the current policy. That isolates "the environment drifts with the policy" from
 NOT a flag flip here: the sim's tokens are sampled from a DIFFERENT prompt (the
 spec, or in the GT-conditioned arms the hidden GT), so they cannot be relabelled
 mask=1 inside the solver's sequence.
+
+HOW the simulator is driven is a THIRD axis, ``+colbench.sim_protocol``
+(launch.py ``--sim_protocol``, normally derived from ``--sim_model`` by
+entrypoint_colbench.sh):
+
+  * default "assistant" = every run to date: an ASSISTANT model receives the
+    arm's prompt with the dialogue flattened into a single user message
+    (``templates.str_dialogue_history``) and replies in the assistant slot.
+  * "userlm" = microsoft/UserLM-8b, a Llama-3-8B post-trained to predict the USER
+    turn (arXiv:2510.06552). The arm's prompt becomes a task-intent system
+    message, the dialogue is passed with its REAL user/assistant roles, the model
+    generates in the USER slot, and its ``<|endconversation|>`` token is
+    translated to ``[TERMINATE]`` -- so the termination state machine above, the
+    premature-termination guard and ``term_standalone`` all work untouched, now
+    driven by the simulator's best-measured skill instead of by a prose
+    instruction an 8B base-derived model would ignore. Requires the sim to BE a
+    user LM (a mismatch is a hard error, since it fails silently otherwise), and
+    is incompatible with ``sim_live`` (the live "user" is the training policy).
+    See ``colbench.userlm``, including the four decoding guardrails from the
+    paper that are deliberately NOT implemented.
 """
 
 # This tree imports names directly (``from colbench.env import
@@ -94,6 +114,8 @@ from colbench import templates
 from colbench.env import _sim_sampling
 from colbench.env_spec import ColBenchSpecUserSimEnv
 from colbench.env_spec import SIM_CODE_LEAK_DETECTORS
+from colbench.userlm import is_userlm_model
+from colbench.userlm import SIM_PROTOCOLS
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase
 from verl.experimental.agent_loop.agent_loop import AgentLoopOutput
 from verl.experimental.agent_loop.agent_loop import register
@@ -242,6 +264,24 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     # codeonly/plot are meant to run at max_code_proposals=1.
     _sp = str(cc.get("sim_prompt", "") or "").strip()
     self.sim_prompt = "" if _sp.lower() in ("", "auto", "none") else _sp
+    # HOW the sim is driven (+colbench.sim_protocol): assistant | userlm.
+    # A third axis, orthogonal to sim_prompt (WHAT the sim is told) and sim_live
+    # (WHOSE weights answer). "assistant" is every run to date -- an assistant
+    # model gets the arm's prompt with the dialogue flattened into one user
+    # message and answers in the assistant slot. "userlm" drives a purpose-built
+    # user LM (microsoft/UserLM-8b): arm prompt -> task-intent system message,
+    # dialogue passed with its real user/assistant roles, model generates in the
+    # USER slot, and its <|endconversation|> token is translated to [TERMINATE]
+    # so this loop's termination handling is untouched. See colbench/userlm.py.
+    # Validated HERE as well as in the env so a typo fails at launch rather than
+    # per-rollout inside Ray.
+    _spr = str(cc.get("sim_protocol", "") or "").strip().lower()
+    self.sim_protocol = "assistant" if _spr in ("", "auto", "none") else _spr
+    if self.sim_protocol not in SIM_PROTOCOLS:
+      raise ValueError(
+          "colbench.sim_protocol must be one of"
+          f" {sorted(SIM_PROTOCOLS)}, got {self.sim_protocol!r}"
+      )
     # WHICH code-leak detector screens sim draws
     # (+colbench.sim_code_leak_detector):
     # auto | fence_only | a0_strict. "auto" (default) = the legacy per-arm split
@@ -290,6 +330,30 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         if isinstance(_sl, bool)
         else str(_sl).strip().lower() in ("1", "true", "yes", "on")
     )
+    # sim_live + userlm is incoherent, so fail at launch rather than train for
+    # hours on a silently wrong arm: --sim_live means "the user turn is generated
+    # by the TRAINING policy", and the training policy is a code-writing
+    # assistant, not a user LM. Reaching a UserLM simulator requires the separate
+    # frozen server (--sim_model microsoft/UserLM-8b).
+    if self.sim_live and self.sim_protocol == "userlm":
+      raise ValueError(
+          "colbench.sim_live=True is incompatible with"
+          " colbench.sim_protocol='userlm': the live sim IS the training"
+          " policy, which is not a user LM. Serve UserLM as a separate frozen"
+          " sim (--sim_model microsoft/UserLM-8b) instead."
+      )
+    # Cross-check the protocol against the model actually being served as the
+    # sim (MULTITURN_MODEL_NAME is a fixed alias, so read the identity the
+    # entrypoint resolved). Pairing UserLM weights with the assistant protocol
+    # produces fluent assistant prose in the user slot and NOTHING in the metrics
+    # looks wrong, so it has to be caught here.
+    _sim_model_id = os.environ.get("SIM_MODEL", "")
+    if is_userlm_model(_sim_model_id) and self.sim_protocol != "userlm":
+      raise ValueError(
+          f"SIM_MODEL={_sim_model_id!r} is a user LM but"
+          f" colbench.sim_protocol={self.sim_protocol!r}; a user LM must be"
+          " driven with sim_protocol='userlm' (set SIM_PROTOCOL=userlm)."
+      )
 
   def _make_live_sim_backend(self):
     """Sim backend that generates on the TRAINING rollout engine.
@@ -481,6 +545,7 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
         sim_max_tries=self.sim_max_tries,
         grounded=self.grounded_sim,
         sim_prompt=self.sim_prompt,
+        sim_protocol=self.sim_protocol,
         sim_code_leak_detector=self.sim_code_leak_detector,
     )
     # LIVE-weights arm: swap the ONE seam that decides WHO answers. Assigned
@@ -1004,6 +1069,10 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 # missing on the no-sim-turn path would break logging for the
                 # whole run.
                 "sim_live": float(self.sim_live),
+                # Likewise a constant LABEL: 1.0 = the sim is a user LM driven
+                # in the USER slot with a real role-tagged dialogue, 0.0 = the
+                # assistant protocol every run before it used.
+                "sim_protocol_userlm": float(self.sim_protocol == "userlm"),
                 "sim_seconds": (
                     sum(sim_seconds) / len(sim_seconds) if sim_seconds else 0.0
                 ),

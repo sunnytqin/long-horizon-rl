@@ -27,6 +27,18 @@ only owns the two seams the loop drives:
     IDENTICAL to the GT env; grading is unchanged, still objective GT code +
     test_cases.
 
+A THIRD, orthogonal axis is ``sim_protocol`` (``+colbench.sim_protocol``): HOW
+the simulator is driven, as opposed to WHAT it is told (``sim_prompt``) or WHOSE
+weights answer (``sim_live``). "assistant" (default, and every run to date) hands
+an assistant model the arm's prompt with the dialogue FLATTENED into one user
+message and takes its reply from the ASSISTANT slot. "userlm" drives a
+purpose-built user LM (microsoft/UserLM-8b): the arm's prompt is collapsed into a
+task-intent system message, the dialogue is passed with its real user/assistant
+roles, the model generates in the USER slot, and its ``<|endconversation|>``
+token is translated to ``[TERMINATE]`` so everything below is unchanged. The
+prompt-building and rejection-sampling code here is shared by both; only
+``_draw`` and ``_userlm_intent`` differ. See ``colbench.userlm``.
+
 Note there is no ``is_answer`` seam: in the spec path the solver does not
 "submit" with a marker (it proposes via a ```python block and the USER
 terminates), so answer detection / grading-target selection lives in the loop
@@ -46,6 +58,7 @@ from typing import Optional
 
 from colbench import reward
 from colbench import templates
+from colbench import userlm
 
 # Reuse the GT env's frozen-sim HTTP backend + sampling resolution verbatim --
 # only the PROMPT built here differs (spec vs GT source). Keeps sim sampling /
@@ -54,6 +67,9 @@ from colbench.env import _sim_extra_body  # pylint: disable=unused-import
 from colbench.env import _sim_sampling  # pylint: disable=unused-import
 from colbench.env import openai_sim_backend  # pylint: disable=unused-import
 from colbench.env import SimBackend  # pylint: disable=unused-import
+from colbench.userlm import ChatSimBackend  # pylint: disable=unused-import
+from colbench.userlm import make_userlm_sim_backend
+from colbench.userlm import SIM_PROTOCOLS
 
 
 def make_openai_sim_backend(
@@ -215,6 +231,16 @@ class ColBenchSpecUserSimEnv:
       grounded_v0_no_plot, codeonly, plot -- the
       ``sim_max_tries`` rejection above is the load-bearing leak defense rather
       than a character guard.
+    sim_protocol: HOW the simulator is driven -- "assistant" (default) or
+      "userlm". A THIRD axis, orthogonal to ``sim_prompt`` (WHAT the sim is told)
+      and ``sim_live`` (WHOSE weights answer). "assistant" is every run to date:
+      an assistant model gets the arm's prompt plus the dialogue flattened into
+      one user message and replies in the ASSISTANT slot. "userlm" drives a
+      purpose-built user LM (microsoft/UserLM-8b): the arm's prompt becomes a
+      task-intent SYSTEM message, the dialogue is passed with its real
+      user/assistant roles, the model generates in the USER slot, and its
+      ``<|endconversation|>`` token is translated to ``[TERMINATE]`` so the
+      loop's termination machinery is unchanged. See ``colbench.userlm``.
     sim_code_leak_detector: WHICH detector screens a sim draw for code, as an
       explicit experiment axis independent of ``sim_prompt``:
         "auto"       -- per-arm legacy behavior: strict for codeonly/plot,
@@ -283,9 +309,11 @@ class ColBenchSpecUserSimEnv:
   max_steps: int = 10
   reward_time_limit: float = 6.0
   sim_backend: Optional[SimBackend] = None
+  sim_chat_backend: Optional[ChatSimBackend] = None
   sim_max_tries: int = 8
   grounded: bool = False
   sim_prompt: str = ""
+  sim_protocol: str = "assistant"
   sim_code_leak_detector: str = "auto"
   last_sim_reply: str = field(default="", repr=False)
   last_sim_raw: str = field(default="", repr=False)
@@ -317,6 +345,19 @@ class ColBenchSpecUserSimEnv:
   def __post_init__(self):
     if self.sim_backend is None:
       self.sim_backend = openai_sim_backend
+    # PROTOCOL axis (see the `sim_protocol` attribute). Validated before it is
+    # used to pick a backend so a typo cannot silently fall back to "assistant"
+    # -- that would run a UserLM checkpoint through the flattened-transcript
+    # prompt, which produces plausible-looking assistant prose in the user slot
+    # and nothing in the logs would look wrong.
+    self.sim_protocol = str(self.sim_protocol or "assistant").strip().lower()
+    if self.sim_protocol not in SIM_PROTOCOLS:
+      raise ValueError(
+          f"unknown sim_protocol {self.sim_protocol!r}; expected one of"
+          f" {', '.join(sorted(SIM_PROTOCOLS))}"
+      )
+    if self.sim_protocol == "userlm" and self.sim_chat_backend is None:
+      self.sim_chat_backend = make_userlm_sim_backend()
     # Resolve the arm ONCE, here, so generate_user_turn just dispatches. An
     # explicit sim_prompt wins; otherwise the legacy `grounded` bool decides, so
     # existing callers (+colbench.grounded_sim, validate's --grounded, the older
@@ -439,6 +480,98 @@ class ColBenchSpecUserSimEnv:
       return self._a0_strict_code(reply)
     return self._fenced_code(reply)
 
+  def _build_sim_prompt(
+      self, messages: list[dict[str, str]]
+  ) -> tuple[str, str]:
+    """Build this arm's ``(system_content, user_content)`` for one sim call.
+
+    The ONE place the arm ladder is dispatched. Extracted from
+    ``generate_user_turn`` so the UserLM protocol can re-render the SAME prompt
+    with an empty dialogue to recover a standalone task intent
+    (``_userlm_intent``) -- there must be exactly one copy of this branching, or
+    an arm could be told different things by the two protocols.
+
+    Args:
+      messages: the running dialogue as ``[{role, content}, ...]``; carries no
+        GT. Pass ``[]`` to render the arm's conditioning with no dialogue.
+
+    Returns:
+      ``(system_content, user_content)`` for the simulator call.
+    """
+    plot = (self.spec or {}).get("plot", "")
+    if self.sim_prompt in ("grounded", "grounded_v0", "grounded_v0_no_plot"):
+      return templates.build_grounded_sim_messages(
+          self.problem_description,
+          self.ground_truth,
+          "" if self.sim_prompt == "grounded_v0_no_plot" else plot,
+          messages,
+          version=(
+              "v0"
+              if self.sim_prompt in ("grounded_v0", "grounded_v0_no_plot")
+              else "v1"
+          ),
+      )
+    if self.sim_prompt in ("codeonly", "plot"):
+      # A1 passes plot="" -> the naive arm's sim call, byte for byte.
+      return templates.build_minimal_sim_messages(
+          self.problem_description,
+          self.ground_truth,
+          plot if self.sim_prompt == "plot" else "",
+          messages,
+      )
+    return templates.build_spec_sim_messages(self.spec, messages)
+
+  def _userlm_intent(self) -> str:
+    """The arm's prompt, recast as a UserLM "task intent" (system message).
+
+    A UserLM takes the dialogue as real role-tagged messages, so everything the
+    simulator is TOLD has to be collected into one standalone text. The arms split
+    two ways on where that text lives, and the split is structural, not
+    cosmetic:
+
+    * ``spec`` / ``grounded*`` put the conditioning in the SYSTEM message and the
+      dialogue alone in the user message -- so the intent is ``system_content``.
+    * ``codeonly`` / ``plot`` inherit sweet_rl's shape, where the system message
+      is the constant "You are a helpful assistant." and the problem, the hidden
+      GT and the dialogue are all interpolated into the USER message -- so the
+      intent is ``user_content`` rendered with an EMPTY dialogue, minus the
+      trailing "answer the agent" cue that then has nothing to answer.
+
+    Rendering with ``messages=[]`` rather than slicing a real prompt is what keeps
+    this honest: the intent is produced by the arm's own builder, so it cannot
+    drift from what the assistant protocol sends.
+
+    Returns:
+      The task intent for ``sim_chat_backend``.
+    """
+    system_content, user_content = self._build_sim_prompt([])
+    if self.sim_prompt in ("codeonly", "plot"):
+      return templates.strip_dialogue_cue(user_content)
+    return system_content
+
+  def _draw(
+      self,
+      system_content: str,
+      user_content: str,
+      messages: list[dict[str, str]],
+  ) -> str:
+    """One raw sim draw, through whichever protocol is in force.
+
+    Args:
+      system_content: the arm's system message under the "assistant" protocol;
+        the task INTENT under "userlm" (the caller resolves which, once per turn,
+        so a rejection resample does not re-render the prompt).
+      user_content: the arm's user message with the flattened dialogue. Unused
+        under "userlm", where the dialogue travels as ``messages``.
+      messages: the running dialogue with real roles (userlm protocol).
+
+    Returns:
+      The simulator's raw reply text.
+    """
+    if self.sim_protocol == "userlm":
+      return self.sim_chat_backend(system_content, messages)
+    return self.sim_backend(system_content, user_content)
+
   def generate_user_turn(
       self, messages: list[dict[str, str]], allow_terminate: bool = True
   ) -> str:
@@ -468,31 +601,14 @@ class ColBenchSpecUserSimEnv:
       The next user reply: ``<think>``-stripped and char-capped.
       ``last_sim_raw`` holds the uncapped form for ``[TERMINATE]`` detection.
     """
-    plot = (self.spec or {}).get("plot", "")
-    if self.sim_prompt in ("grounded", "grounded_v0", "grounded_v0_no_plot"):
-      system_content, user_content = templates.build_grounded_sim_messages(
-          self.problem_description,
-          self.ground_truth,
-          "" if self.sim_prompt == "grounded_v0_no_plot" else plot,
-          messages,
-          version=(
-              "v0"
-              if self.sim_prompt in ("grounded_v0", "grounded_v0_no_plot")
-              else "v1"
-          ),
-      )
-    elif self.sim_prompt in ("codeonly", "plot"):
-      # A1 passes plot="" -> the naive arm's sim call, byte for byte.
-      system_content, user_content = templates.build_minimal_sim_messages(
-          self.problem_description,
-          self.ground_truth,
-          plot if self.sim_prompt == "plot" else "",
-          messages,
-      )
-    else:
-      system_content, user_content = templates.build_spec_sim_messages(
-          self.spec, messages
-      )
+    system_content, user_content = self._build_sim_prompt(messages)
+    if self.sim_protocol == "userlm":
+      # A user LM speaks in the USER slot and takes the dialogue as real
+      # role-tagged messages, so the arm's conditioning is collapsed into one
+      # task-intent system message and `user_content` goes unused. Resolved ONCE
+      # per turn (it does not depend on the dialogue), so the rejection loop's
+      # resamples cost one request each, not one request plus a re-render.
+      system_content = self._userlm_intent()
     # Rejection sampling, on TWO grounds, sharing one try budget:
     #  (a) an ordinary user never pastes code. If the sim writes a code fence,
     #      re-query (sampling temperature makes retries differ). If EVERY try
@@ -525,7 +641,7 @@ class ColBenchSpecUserSimEnv:
     rejected_bare_target_def = 0
     accepted_bare_target_def = 0
     for _ in range(max(1, self.sim_max_tries)):
-      raw = self.sim_backend(system_content, user_content)
+      raw = self._draw(system_content, user_content, messages)
       stripped = templates.strip_think(raw)
       raw_attempts += 1
       fenced = self._fenced_code(stripped)
@@ -586,11 +702,11 @@ class ColBenchSpecUserSimEnv:
     # _leaked_code and never a fixed detector.
     final_rejected_for_code = self._leaked_code(stripped)
     self.last_sim_code_reject_exhausted = (
-        (not accepted) and final_rejected_for_code
-    )
+        not accepted
+    ) and final_rejected_for_code
     self.last_sim_early_term_exhausted = (
-        (not accepted) and not final_rejected_for_code
-    )
+        not accepted
+    ) and not final_rejected_for_code
     # No post-hoc character truncation: the old HUMAN_RESPONSE_CHARACTER_LIMIT
     # slice chopped verbose replies mid-sentence (the solver then saw
     # fragments). Brevity is enforced at the source instead -- by the "one or
@@ -612,17 +728,26 @@ class ColBenchSpecUserSimEnv:
       # comparison the dump exists to support (is A1's sim call byte-identical
       # to A0's?) was the one it could not answer. Log the same field, plus the
       # resolved mode so a dump self-identifies which rung of the ladder it is.
+      # Under the userlm protocol `system_content` holds the task INTENT and
+      # `user_content` was never sent -- dump the role-tagged dialogue that took
+      # its place instead, or the one comparison the dump exists to support
+      # (what did the simulator actually condition on?) is unanswerable again.
       logger.warning(
-          "[COLBENCH_SPEC_SIM] sim_prompt_mode=%r\n"
+          "[COLBENCH_SPEC_SIM] sim_prompt_mode=%r protocol=%r\n"
           "[COLBENCH_SPEC_SIM] sim_system[:%d]=%r\n"
           "[COLBENCH_SPEC_SIM] sim_user_prompt[:%d]=%r\n"
           "[COLBENCH_SPEC_SIM] raw_reply[:%d]=%r\n"
           "[COLBENCH_SPEC_SIM] capped_reply=%r",
           self.sim_prompt,
+          self.sim_protocol,
           n,
           system_content[:n],
           n,
-          user_content[:n],
+          (
+              str(userlm.to_userlm_dialogue(messages))[:n]
+              if self.sim_protocol == "userlm"
+              else user_content[:n]
+          ),
           n,
           str(raw)[:n],
           reply,

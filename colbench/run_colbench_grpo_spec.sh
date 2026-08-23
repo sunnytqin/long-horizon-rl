@@ -32,7 +32,8 @@
 #   MAX_RESPONSE_LENGTH, MAX_NEW_TOKENS_PER_TURN, TRAIN_TURNS, REWARD_TIME_LIMIT, ENV_STEP_TIMEOUT,
 #   CODECONTEST_EXEC_MEM_GB, CODECONTEST_EXEC_CONCURRENCY, ROLLOUT_GPU_MEM_UTIL,
 #   KL_LOSS_COEF, PARAM_OFFLOAD, OPT_OFFLOAD, SIM_MAX_TOKENS, SIM_LIVE,
-#   GROUNDED_SIM, SIM_PROMPT, EARLY_TERM_GUARD, SIM_CODE_LEAK_DETECTOR, TERMINATE_ON_ALLPASS,
+#   GROUNDED_SIM, SIM_PROMPT, SIM_PROTOCOL, EARLY_TERM_GUARD, SIM_CODE_LEAK_DETECTOR,
+#   TERMINATE_ON_ALLPASS,
 #   BINARY_REWARD, LENGTH_PENALTY_COEF, LENGTH_SOFT_CAP.
 
 
@@ -118,6 +119,25 @@ grounded_sim=${GROUNDED_SIM:-False}
 # (the loop grades the first proposal and breaks before the sim speaks again) and swaps the
 # solver's system prompt to the naive one-shot wording. See colbench/prompts.py.
 sim_prompt=${SIM_PROMPT:-auto}   # auto = defer to GROUNDED_SIM (back-compat)
+# HOW the user-sim is driven: assistant | userlm. A THIRD axis, orthogonal to
+# SIM_PROMPT (what the sim is TOLD) and SIM_LIVE (whose WEIGHTS answer).
+#   assistant -- every run to date: an assistant model gets the arm's prompt with
+#                the dialogue FLATTENED into one user message and replies in the
+#                assistant slot.
+#   userlm    -- microsoft/UserLM-8b, a Llama-3-8B post-trained to predict the
+#                USER turn (arXiv:2510.06552). The arm's prompt becomes a
+#                task-intent system message, the dialogue is passed with its real
+#                user/assistant roles, the model generates in the USER slot, and
+#                its <|endconversation|> token is translated to [TERMINATE] so
+#                termination, the early_term_guard and term_standalone are
+#                unchanged. Requires the sim to BE a UserLM
+#                (--sim_model microsoft/UserLM-8b); entrypoint_colbench.sh
+#                derives this automatically from the sim model, and the agent loop
+#                refuses a UserLM served under the assistant protocol. Incompatible
+#                with SIM_LIVE (the live sim is the training policy, not a user
+#                LM). Reply length is bounded only by SIM_MAX_TOKENS -- the paper's
+#                25-word guardrail is NOT implemented; watch sim_reply_chars.
+sim_protocol=${SIM_PROTOCOL:-assistant}
 # Premature-[TERMINATE] guard. True (default) = every run since the guard landed: the sim may not
 # end the episode before the solver has shown code (rejection-sampled out of the sim_max_tries
 # budget). False restores PRE-GUARD semantics and is the ONLY way to reproduce a grounded/spec run
@@ -343,6 +363,7 @@ python3 -m verl.trainer.main_ppo \
    +colbench.binary_reward=${binary_reward} \
    +colbench.grounded_sim=${grounded_sim} \
    +colbench.sim_prompt="${sim_prompt}" \
+   +colbench.sim_protocol="${sim_protocol}" \
    +colbench.early_term_guard=${early_term_guard} \
    +colbench.sim_code_leak_detector="${sim_code_leak_detector}" \
    trainer.balance_batch=True \

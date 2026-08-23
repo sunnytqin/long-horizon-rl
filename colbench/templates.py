@@ -48,7 +48,6 @@ from colbench.prompts import TERMINATE_MARKER
 HUMAN_RESPONSE_CHARACTER_LIMIT = 400
 
 
-
 # ── <think> stripping ─────────────────────────────────────────────────────────
 # Qwen3 (and other reasoning models) may emit a <think>...</think> block. We strip it from
 # BOTH the solver text (before searching for the answer marker) and the sim reply (before the
@@ -340,6 +339,41 @@ def final_answer(assistant_text: str, episode_done: bool) -> tuple[bool, str]:
   return False, ""
 
 
+# The trailing cue ``str_dialogue_history`` appends so an ASSISTANT-role sim
+# answers as the human to the agent's latest turn. Named because two other places
+# need to reason about it: the UserLM protocol, which renders the dialogue with
+# real roles and must therefore CUT this cue off when it reuses an arm's prompt as
+# a task intent (``strip_dialogue_cue``), and the A1 byte-identity test.
+DIALOGUE_CUE = "agent:"
+
+
+def strip_dialogue_cue(text: str) -> str:
+  """Drop the bare ``DIALOGUE_CUE`` line from a prompt rendered with NO dialogue.
+
+  Used to turn an arm's sim prompt into a standalone task intent for the UserLM
+  protocol, which passes the dialogue as real role-tagged messages instead. With
+  ``messages=[]``, ``str_dialogue_history`` renders exactly ``DIALOGUE_CUE`` and
+  nothing else, so the interpolated prompt contains one line that IS the bare cue
+  -- an "answer the agent" prompt with no agent turn under it. Removing that line
+  is the whole edit: everything else the arm says (the problem, the hidden
+  information, the brevity instruction) is kept verbatim, because the point of the
+  protocol swap is to change HOW the simulator is driven and nothing about WHAT it
+  is told.
+
+  Deliberately line-scoped rather than "cut everything after the cue": in
+  ``prompts.HUMAN_SIMULATOR_PROMPT`` the dialogue sits in the MIDDLE, with the
+  brevity instruction after it, so a tail cut would silently drop part of the
+  arm's prompt. Text with no such line is returned unchanged.
+
+  Args:
+    text: a sim prompt rendered with an empty dialogue.
+
+  Returns:
+    ``text`` without any line that consists solely of the cue.
+  """
+  return "\n".join(ln for ln in text.split("\n") if ln.strip() != DIALOGUE_CUE)
+
+
 def str_dialogue_history(messages: list[dict[str, str]]) -> str:
   """Render the running dialogue as the sim-prompt ``{dialogue_history}`` string.
 
@@ -359,7 +393,7 @@ def str_dialogue_history(messages: list[dict[str, str]]) -> str:
   for d in messages:
     result += str(d.get("role")) + ":"
     result += str(d.get("content")) + "\n\n\n\n"
-  return result + "agent:"
+  return result + DIALOGUE_CUE
 
 
 def build_sim_user_message(
@@ -389,7 +423,6 @@ def build_initial_user_message(problem_description: str) -> str:
 # prompt, the spec sim, the GROUNDED sim, the [TERMINATE] sentinel and the
 # rationale comments for all of them) is in colbench/prompts.py.
 # ═════════════════════════════════════════════════════════════════════════════
-
 
 
 def build_spec_sim_messages(

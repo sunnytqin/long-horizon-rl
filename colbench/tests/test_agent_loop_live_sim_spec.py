@@ -160,6 +160,7 @@ def _make_loop(
     grounded_sim=False,
     early_term_guard=True,
     sim_code_leak_detector="auto",
+    sim_protocol="assistant",
 ):
   """Construct a ColBenchSpecAgentLoop bypassing AgentLoopBase.__init__.
 
@@ -191,6 +192,9 @@ def _make_loop(
   obj.sim_prompt = sim_prompt
   obj.early_term_guard = early_term_guard
   obj.sim_code_leak_detector = sim_code_leak_detector
+  # The live arm is assistant-protocol by construction: the "user" IS the
+  # training policy. userlm is rejected at config time (see colbench/userlm.py).
+  obj.sim_protocol = sim_protocol
   obj.sim_live = sim_live
   # Normally set by AgentLoopBase.__init__ from data.apply_chat_template_kwargs.
   obj.apply_chat_template_kwargs = {}

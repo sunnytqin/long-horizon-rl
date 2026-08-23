@@ -24,6 +24,20 @@ uses. The GT source is passed ONLY inside the sim prompt and never enters the
 solver's message list; there is no code leak possible here (the sim conditions
 on the NL spec, not code).
 
+This harness is ASSISTANT-PROTOCOL ONLY, deliberately: the sim always receives
+the arm's prompt with the dialogue FLATTENED into one user message
+(``templates.str_dialogue_history``) and replies in the assistant slot. The
+training path has a ``sim_protocol`` axis that can instead drive a purpose-built
+user LM (``+colbench.sim_protocol=userlm``; see ``colbench.userlm``), and it is
+intentionally NOT plumbed here -- there is no ``--sim_protocol`` flag and
+SIM_PROTOCOL is ignored. A user-LM sim is a different ENVIRONMENT, not a decoding
+setting, so evaluating in it would break the one property the golden eval exists
+to have: comparability of every checkpoint against one fixed simulator.
+``entrypoint_eval_colbench.sh`` also has no UserLM entry in its model registry,
+so an eval launched with such a ``--sim_model`` fails at model resolution rather
+than running the sim the wrong way. Do not add the axis back without a reason
+that survives that argument.
+
 ``--sim_code_leak_detector`` (default ``a0_strict`` since harness v3, on
 2026-08-16) is the screen a sim reply must pass before it is injected. Strict =
 the naive arm's ``detect_code_leak(ngram_n=0)``: an unfenced ``def name(``
