@@ -37,6 +37,47 @@ set -xeuo pipefail
 PROJECT_NAME=${PROJECT_NAME:-colbench_mt}
 EXPERIMENT_NAME=${EXPERIMENT_NAME:-local_${EXP_NAME:-debug}_$(date +%m%d_%H%M)}
 
+# Checkpoint destination. verl's config default is `checkpoints/${project}/${experiment}`
+# RELATIVE to cwd. That was fine under Docker (cwd was scratch space that the entrypoint
+# rsynced to GCS) but wrong under Singularity, where cwd is the bind-mounted git checkout
+# in $HOME (~18G free). The slurm entrypoint sets CKPT_LOCAL_DIR to an absolute path on
+# netscratch and it is passed through as trainer.default_local_dir below. Unset => the old
+# relative default, i.e. byte-identical for xcloud and ad-hoc local runs (the xcloud
+# entrypoint set CKPT_LOCAL_DIR to exactly that same string).
+CKPT_LOCAL_DIR=${CKPT_LOCAL_DIR:-}
+
+# Loggers + checkpoint retention.
+#
+# LOGGERS: verl's Tracking backends, as a space-free JSON list. The slurm entrypoint
+# (configure_wandb) always sets this, normally to ["console","wandb"].
+#
+# TENSORBOARD IS RETIRED. wandb is the only metrics backend, so this fallback is
+# console-only: verl constructs its SummaryWriter solely inside
+# `if "tensorboard" in default_backend`, so leaving tensorboard out means no tfevents
+# files are written at all. To bring it back for a one-off, pass it explicitly:
+#   LOGGERS='["console","tensorboard"]' bash colbench/run_colbench_grpo.sh
+#
+# MAX_CKPT_KEEP: verl's trainer.max_actor_ckpt_to_keep, which defaults to null = KEEP
+# EVERY CHECKPOINT. On xcloud that was survivable (GCS, and save_freq=60). On a shared
+# filesystem it is not: a smoke run with SAVE_FREQ=2 over one 83-step epoch wrote 42
+# checkpoints x 47G = 2.0 TB of netscratch (2026-09-04).
+#
+# ⚠️ IT EVICTS BY RECENCY, NOT BY VALUE. On a run that collapses -- which so far is every
+# colbench RL run -- the most recent N checkpoints are all POST-detonation garbage
+# (entropy near-uniform, reward ~0, an absorbing state nothing recovers from), so a tight
+# cap silently throws away the peak and keeps only the wreckage.
+#
+# So the settings are deliberately GENEROUS during the run and pruned after it:
+# 10 x SAVE_FREQ=100 spans a 1000-step window, which has held the peak of every colbench
+# run to date (latest peak so far: step 980), at 10 x 47 GB = ~470 GB. Steady-state disk
+# is MAX_CKPT_KEEP x 47 GB regardless of SAVE_FREQ -- the cap is the only footprint lever
+# on a LONG run, and SAVE_FREQ only on a SHORT one where the cap never binds -- but the
+# footprint is reclaimed by `slurm_setup/prune_checkpoints.sh` once wandb shows where the
+# peak actually was. Losing the peak is unrecoverable; disk is not.
+LOGGERS=${LOGGERS:-'["console"]'}
+MAX_CKPT_KEEP=${MAX_CKPT_KEEP:-10}
+
+
 AGENTLOOP_CONFIG_PATH=${AGENTLOOP_CONFIG_PATH:-colbench/config/agent_loop_config.yaml}
 
 INFER_BACKEND=${INFER_BACKEND:-sglang}
@@ -101,6 +142,21 @@ sim_reject_max_tries=${SIM_REJECT_MAX_TRIES:-0}
 # frozen-server baseline. The entrypoint gives training ALL GPUs in this mode (SIM_TP=0), so
 # NGPUS_PER_NODE comes back as 8 rather than 6.
 sim_live=${SIM_LIVE:-False}
+# WHICH system prompt the frozen user-sim gets. Same knob as the spec path's SIM_PROMPT
+# ("what the sim is TOLD"), extended to the GT path so one --sim_prompt flag reads the same
+# on both. auto/"" = the stock "You are a helpful assistant." -> byte-identical to every GT
+# run to date. role / role_restraint = the client-role variants added 2026-09-09 after a
+# candidate pilot found 96% of sim replies in ANALYST voice ("The function calculates...")
+# and measured the code-leak rate falling 0.34 -> 0.08 on this one string alone. An unknown
+# value RAISES in templates.resolve_sim_system rather than silently running the default.
+#
+# DEFAULT IS role_restraint AS OF 2026-09-10, by decision, on both the training path and the
+# simtrain collector -- so the frozen sim S_0 that the assistant trains against is the SAME
+# simulator the SFT pipeline is collecting and improving. Any mismatch there makes the
+# alternating scheme (train sim against A_0, then train A against S_1) compare two different
+# environments. Pass SIM_PROMPT=auto to recover the stock "You are a helpful assistant."
+# baseline; runs before this date were auto and are NOT byte-comparable to new ones.
+sim_prompt=${SIM_PROMPT:-role_restraint}
 # ── USER-TURN BUDGET. Aligned with run_colbench_grpo_spec.sh so the GT-vs-SPEC comparison does
 # ── not confound "better environment" with "the user is allowed to say 2.5x more per turn".
 #
@@ -163,9 +219,15 @@ total_epochs=${TOTAL_EPOCHS:-15}
 # 60/20 (was 20/5), applied identically to the spec script so all three arms of the gold-sim study
 # checkpoint and validate on the same schedule. In-training val is the expensive one here: ~2k
 # problems, each a full multi-turn episode against the sim, so test_freq=5 spent a large fraction
-# of wall-clock validating. Cost of save_freq=60: a preempted job resumes from up to 60 steps back
-# instead of 20.
-save_freq=${SAVE_FREQ:-60}
+# of wall-clock validating.
+# save_freq=100 (was 60) because DISK, not wall-clock, is the binding constraint: one Qwen3-4B
+# checkpoint is ~47 GB (16.8 GB sharded weights + 30 GB Adam moments), and the dam_lab netscratch
+# quota is a GROUP 50 TB that a dozen colbench runs filled completely on 2026-09-15 -- at which
+# point Slurm could not create a job's .out file and jobs FAILED in ~4 s with no log at all.
+# Cost of save_freq=100: a preempted job resumes from up to 100 steps back instead of 60.
+# That is the right trade -- val runs every test_freq=20 steps, so a peak is still located to
+# within 20 steps, and the checkpoint bracketing it is at most 100 steps stale.
+save_freq=${SAVE_FREQ:-100}
 test_freq=${TEST_FREQ:-20}
 
 
@@ -175,7 +237,18 @@ test_freq=${TEST_FREQ:-20}
 rollout_is=${ROLLOUT_IS:-sequence}
 rollout_is_threshold=${ROLLOUT_IS_THRESHOLD:-2.0}
 clip_ratio_low=${CLIP_RATIO_LOW:-0.2}
+# NB high > low is DAPO's "clip-higher", whose stated purpose is preventing entropy
+# COLLAPSE by allowing larger upward updates on low-probability tokens. Runs fighting an
+# entropy EXPLOSION want symmetry (CLIP_RATIO_HIGH=0.2) instead -- see the 2026-09 collapse
+# scoreboard. Default keeps every prior run byte-identical.
 clip_ratio_high=${CLIP_RATIO_HIGH:-0.28}
+# Entropy regularizer. verl applies `policy_loss -= entropy_coeff * entropy_loss`
+# (workers/utils/losses.py), so POSITIVE ENCOURAGES entropy and NEGATIVE PENALIZES it.
+# 0 (verl's default, and every run to date) means entropy is completely unregulated in
+# either direction, which is how it drifts 0.145 -> ~1.5 and then detonates. A small
+# negative value (start -0.001, ~the weight of the existing KL term) damps the drift
+# without driving the policy deterministic -- over-penalizing causes the OPPOSITE failure.
+entropy_coeff=${ENTROPY_COEFF:-0}
 
 
 # FSDP CPU offload (frees GPU model/optimizer state; ~free given the node's host RAM).
@@ -211,6 +284,30 @@ if [ -n "${SOLVER_ENABLE_THINKING:-}" ]; then
 fi
 
 
+# Replay a specific checkpoint instead of this experiment's own latest.
+# Unset (default) => trainer.resume_mode=auto: resume from ${RUN_ROOT}/checkpoints if it has
+# any, else train from scratch. That is what --chain relies on.
+# Set to a global_step_N directory (verl PARSES N out of the name and resumes AT step N) =>
+# resume_mode=resume_path, which loads that checkpoint's weights, optimizer state and
+# dataloader position. Use it to re-enter an OLD run a few steps before something happened
+# with new diagnostics compiled in, under a NEW --exp_name: replaying 40 steps costs ~1 h
+# where re-training to the same point costs ~14 h.
+# NB give it a DIFFERENT --exp_name than the source run. Same name resolves to the same
+# $RUN_ROOT and the same deterministic WANDB_RUN_ID, so it would resume in place and re-log
+# steps wandb has already seen (which it drops).
+resume_from_path=${RESUME_FROM_PATH:-}
+
+if [ -n "${resume_from_path}" ]; then
+  case "${resume_from_path}" in
+    *global_step_*) ;;
+    *) echo "RESUME_FROM_PATH must name a global_step_N directory (verl reads the step from it); got '${resume_from_path}'" >&2; exit 1 ;;
+  esac
+  [ -d "${resume_from_path}" ] || { echo "RESUME_FROM_PATH does not exist: ${resume_from_path}" >&2; exit 1; }
+  resume_mode=resume_path
+else
+  resume_mode=auto
+fi
+
 python3 -m verl.trainer.main_ppo \
    ${chat_template_args[@]+"${chat_template_args[@]}"} \
    algorithm.adv_estimator=grpo \
@@ -244,7 +341,7 @@ python3 -m verl.trainer.main_ppo \
    actor_rollout_ref.actor.clip_ratio_low=${clip_ratio_low} \
    actor_rollout_ref.actor.clip_ratio_high=${clip_ratio_high} \
    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
-   actor_rollout_ref.actor.entropy_coeff=0 \
+   actor_rollout_ref.actor.entropy_coeff=${entropy_coeff} \
    actor_rollout_ref.actor.loss_agg_mode=${loss_agg_mode} \
    actor_rollout_ref.rollout.temperature=${rollout_temp} \
    actor_rollout_ref.rollout.top_p=${rollout_top_p} \
@@ -272,15 +369,20 @@ python3 -m verl.trainer.main_ppo \
    +colbench.train_turns=${train_turns} \
    +colbench.sim_reject_max_tries=${sim_reject_max_tries} \
    +colbench.sim_live=${sim_live} \
+   +colbench.sim_prompt="${sim_prompt}" \
    +colbench.reward_time_limit=${reward_time_limit} \
    +colbench.env_step_timeout=${env_step_timeout} \
    trainer.balance_batch=True \
-   trainer.logger='["console","tensorboard"]' \
+   trainer.logger="${LOGGERS}" \
    trainer.project_name=${PROJECT_NAME} \
    trainer.experiment_name=${EXPERIMENT_NAME} \
+   trainer.default_local_dir="${CKPT_LOCAL_DIR:-checkpoints/${PROJECT_NAME}/${EXPERIMENT_NAME}}" \
+   trainer.resume_mode=${resume_mode} \
+   trainer.resume_from_path="${resume_from_path}" \
    trainer.n_gpus_per_node=${NGPUS_PER_NODE} \
    trainer.nnodes=${NNODES} \
    trainer.save_freq=${save_freq} \
+   trainer.max_actor_ckpt_to_keep=${MAX_CKPT_KEEP} \
    trainer.test_freq=${test_freq} \
    trainer.total_epochs=${total_epochs} \
    "$@"

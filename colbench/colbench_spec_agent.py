@@ -213,8 +213,21 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
     self.max_code_proposals = int(cc.get("max_code_proposals", 2) or 2)
     # Sim reject-sampling budget: re-query the sim up to N times if it writes
     # code (an ordinary user never pastes a function). On exhaustion the
-    # conversation is aborted. Default 8.
-    self.sim_max_tries = int(cc.get("sim_max_tries", 8) or 8)
+    # conversation is aborted. Default 8. ZERO turns the sampler OFF -- one
+    # unscreened draw, injected as-is (see `sim_max_tries` in env_spec) -- which
+    # is the no-guardrail baseline and the same meaning 0 carries on the GT
+    # path's `sim_reject_max_tries`.
+    #
+    # An explicit 0 must SURVIVE this parse. It used to read `or 8`, coercing
+    # 0 -> 8 so that launch.py's `--sim_reject_max_tries=0` DEFAULT still gave
+    # the spec arm its legacy budget of 8. Each path's default now lives in its
+    # own run script (`:-0` on GT, `:-8` on spec) and the launcher passes empty
+    # when the flag is untyped, so one env var can mean one thing on both paths
+    # and "off" is reachable at all. Only "" / None fall back to 8 now.
+    # NB a REPLAYED pre-2026-09 spec env file pinning SIM_REJECT_MAX_TRIES="0"
+    # therefore means OFF under this tree, where it used to mean 8.
+    _smt = cc.get("sim_max_tries", 8)
+    self.sim_max_tries = 8 if _smt is None or _smt == "" else int(_smt)
     # Terminate-on-all-pass (TRAINING-only rollout cleanup; needs the GT
     # oracle). Once the solver's latest code passes ALL tests, end the episode
     # immediately (never consult the sim again) so the frozen sim cannot press
@@ -1004,8 +1017,14 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                 #   * fence_only vs a0_strict -- raw_bare_target_def should be
                 #     comparable while accepted -> rejected. If raw MOVES, the
                 #     policy changed the sim's behavior, not just the filter.
-                # accepted_bare_target_def is the leak that actually reaches the
-                # solver: it can only be nonzero under a fence-only policy.
+                # accepted_bare_target_def is the BARE-def leak that actually
+                # reaches the solver: nonzero only under a fence-only policy,
+                # or under sim_max_tries=0, where nothing is screened at all.
+                # NB at budget 0 there is exactly one draw per sim turn and it
+                # is always accepted, so raw == accepted: sim_raw_fenced_code
+                # is then the FENCED leak rate reaching the solver (there is no
+                # separate accepted_fenced counter) and sim_raw_attempts is the
+                # per-episode sim-turn denominator for both.
                 "sim_raw_attempts": float(sim_raw_attempts),
                 "sim_raw_fenced_code": float(sim_raw_fenced_code),
                 "sim_raw_bare_target_def": float(sim_raw_bare_target_def),
@@ -1024,6 +1043,43 @@ class ColBenchSpecAgentLoop(AgentLoopBase):
                     float(templates.sim_terminate_standalone(terminating_reply))
                     if terminating_reply is not None
                     else 0.0
+                ),
+                # ── The two sim-side judge vetoes, as RL counters ──
+                # `term_standalone` above cannot be read on its own: it is 0
+                # BOTH when the sim spoke before the sentinel and when the sim
+                # never ended the episode at all, and no existing key separates
+                # those. `term_by_sim` is that missing denominator -- 1 iff the
+                # SIM ended this episode (the only branch that sets
+                # terminating_reply, ~L853), so it excludes turn_cap, code_cap,
+                # oracle_solved and the timeout/overflow paths. NB term_no_code
+                # is NOT a substitute: it is also assigned on three
+                # non-termination paths.
+                #
+                # The two numerators are 1:1 with the simtrain judge's vetoes on
+                # the grounded arm, which is the point -- the SFT'd sim's static
+                # veto rates are a PREDICTION and these are its test:
+                #   sim_term_premature <-> judge `term_vetoed` (terminated with
+                #     no function on the table yet)
+                #   sim_term_spoke     <-> judge `form_vetoed`  (spoke AND
+                #     emitted the sentinel in one reply, which the sim's own
+                #     prompt forbids)
+                # Read as conditionals: sim_term_premature / term_by_sim and
+                # sim_term_spoke / term_by_sim. Divide by sim_raw_attempts
+                # instead to compare against the static PER-DRAW veto rates.
+                #
+                # Both are complete, not proxies: a premature or speak-then-
+                # terminate draw ALWAYS ends the episode, because
+                # `sim_terminated` is an unanchored substring match, so every
+                # such draw is the terminating reply and is scored here.
+                # sim_term_spoke is exactly term_by_sim - term_standalone; it is
+                # emitted anyway so the panel needs no arithmetic.
+                "term_by_sim": float(terminating_reply is not None),
+                "sim_term_premature": float(
+                    terminating_reply is not None and not showed_code
+                ),
+                "sim_term_spoke": float(
+                    terminating_reply is not None
+                    and not templates.sim_terminate_standalone(terminating_reply)
                 ),
                 "first_code_pass_rate": float(first_code_pass_rate),
                 "pass_rate": float(pass_rate),

@@ -208,6 +208,15 @@ class ColBenchSpecUserSimEnv:
       a function); if ALL tries still contain a code fence the loop aborts the
       episode (see ``last_sim_code_reject_exhausted``) rather than injecting or
       stripping a bad reply.
+      **0 turns the sampler OFF entirely**: exactly one draw, accepted as-is
+      whatever it contains, so a code-writing reply reaches the solver's
+      context and the exhaustion path can never fire. That makes 0 mean the
+      same thing here as it does for the GT path's ``sim_reject_max_tries``,
+      and it is the no-guardrail BASELINE arm -- how well a plain user-sim
+      trains the solver with no leak defense at all. With the sampler off
+      ``sim_code_leak_detector`` and the caller's ``allow_terminate`` have
+      nothing to act on and are inert; the raw per-draw census below is still
+      recorded, so the honest leak rate stays MEASURED while it no longer acts.
     grounded: BACK-COMPAT alias for ``sim_prompt="grounded"`` -- kept so
       ``+colbench.grounded_sim``, validate_colbench_spec's ``--grounded`` and
       every existing run record keep working unchanged. Setting it is equivalent
@@ -277,6 +286,12 @@ class ColBenchSpecUserSimEnv:
       on ending before the solver had shown any code. The reply is returned
       anyway (the loop then ends the episode exactly as it did before this
       guard existed), so this flag is what tells you the guard was overruled.
+    last_sim_code_reject_samples: up to ``_EARLY_TERM_SAMPLES`` of the
+      discarded CODE-WRITING replies. Counted since day one but never kept, so
+      the modal draft -- what the sim ACTUALLY wanted to say before the sampler
+      replaced it -- was only ever visible in a debug log. Keeping it makes the
+      rejection sampler's effect measurable rather than inferred, and gives the
+      sim-training pipeline (rejected draft, accepted reply) pairs for free.
     last_sim_early_term_samples: up to ``_EARLY_TERM_SAMPLES`` of the discarded
       premature-termination replies, so eval can dump WHY they were discarded.
     last_sim_raw_attempts: how many RAW draws the last ``generate_user_turn``
@@ -321,6 +336,9 @@ class ColBenchSpecUserSimEnv:
   last_sim_code_reject_exhausted: bool = field(default=False, repr=False)
   last_sim_early_term_rejected: int = field(default=0, repr=False)
   last_sim_early_term_exhausted: bool = field(default=False, repr=False)
+  last_sim_code_reject_samples: list[str] = field(
+      default_factory=list, repr=False
+  )
   last_sim_early_term_samples: list[str] = field(
       default_factory=list, repr=False
   )
@@ -634,12 +652,18 @@ class ColBenchSpecUserSimEnv:
     # was ever drawn, so "strict rejects more" could not be told apart from "the
     # sim stopped writing bare defs". These are the numerators the guard
     # hypothesis needs; last_sim_raw_attempts is the denominator.
+    code_reject_samples: list[str] = []
     raw_attempts = 0
     raw_fenced_code = 0
     raw_bare_target_def = 0
     raw_early_termination = 0
     rejected_bare_target_def = 0
     accepted_bare_target_def = 0
+    # Budget 0 = sampler OFF (see `sim_max_tries`): still draw exactly once,
+    # but screen nothing, so the reply is injected as-is. `max(1, ...)` keeps
+    # the single draw; `screen` is what distinguishes "off" from "budget 1",
+    # which DOES screen and ends the episode on a leaking draw.
+    screen = self.sim_max_tries > 0
     for _ in range(max(1, self.sim_max_tries)):
       raw = self._draw(system_content, user_content, messages)
       stripped = templates.strip_think(raw)
@@ -655,9 +679,11 @@ class ColBenchSpecUserSimEnv:
       # the raw census even though the loop attributes its REJECTION to code.
       if not allow_terminate and templates.sim_terminated(stripped):
         raw_early_termination += 1
-      if self._leaked_code(stripped):
+      if screen and self._leaked_code(stripped):
         rejected += 1
         rejected_bare_target_def += int(bare_target_def)
+        if len(code_reject_samples) < _EARLY_TERM_SAMPLES:
+          code_reject_samples.append(stripped)
         # Per-DRAW dump, mirroring the GT env (whose _DEBUG_SIM sits inside
         # _finalize_reply and therefore fires on every sample). Without this the
         # spec path dumps only the FINAL reply, so the rejected drafts -- the
@@ -671,7 +697,7 @@ class ColBenchSpecUserSimEnv:
               stripped[:_DEBUG_PREVIEW],
           )
         continue
-      if not allow_terminate and templates.sim_terminated(stripped):
+      if screen and not allow_terminate and templates.sim_terminated(stripped):
         early_term_rejected += 1
         if len(early_term_samples) < _EARLY_TERM_SAMPLES:
           early_term_samples.append(stripped)
@@ -682,6 +708,7 @@ class ColBenchSpecUserSimEnv:
       accepted_bare_target_def += int(bare_target_def)
       break
     self.last_sim_code_rejected = rejected
+    self.last_sim_code_reject_samples = code_reject_samples
     self.last_sim_early_term_rejected = early_term_rejected
     self.last_sim_early_term_samples = early_term_samples
     self.last_sim_raw_attempts = raw_attempts
@@ -700,7 +727,10 @@ class ColBenchSpecUserSimEnv:
     # context -- the 2026-08-07 bug. It is load-bearing for a0_strict on
     # grounded/spec for exactly the same reason, so this line must keep calling
     # _leaked_code and never a fixed detector.
-    final_rejected_for_code = self._leaked_code(stripped)
+    # With the sampler off `accepted` is always True on the first draw, so
+    # BOTH exhaustion flags below stay False -- an off budget can never end an
+    # episode, which is what makes it a baseline rather than a policy.
+    final_rejected_for_code = screen and self._leaked_code(stripped)
     self.last_sim_code_reject_exhausted = (
         not accepted
     ) and final_rejected_for_code

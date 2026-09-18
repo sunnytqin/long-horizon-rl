@@ -68,6 +68,7 @@ def _env(
     grounded=False,
     sim_prompt="",
     sim_code_leak_detector="auto",
+    sim_max_tries=8,
 ):
   return ColBenchSpecUserSimEnv(
       problem_description=PROBLEM,
@@ -78,6 +79,7 @@ def _env(
       grounded=grounded,
       sim_prompt=sim_prompt,
       sim_code_leak_detector=sim_code_leak_detector,
+      sim_max_tries=sim_max_tries,
   )
 
 
@@ -928,6 +930,82 @@ def test_raw_census_counts_a_draw_that_both_leaks_and_terminates():
   # The DECISION is attributed to code only -- one draw, one rejection ground.
   assert e.last_sim_code_rejected == 1
   assert e.last_sim_early_term_rejected == 0
+
+
+def test_zero_budget_turns_the_rejection_sampler_off():
+  # The no-guardrail BASELINE. 0 means OFF on this path exactly as it does on
+  # the GT path -- one draw, and even a FENCED block (the shape every detector
+  # rejects) is injected as-is on the arms where a leak is possible at all.
+  leak = _code_turn("def f(x, y): return x + y\n")
+  for mode in ("grounded", "codeonly"):
+    e = _env(
+        sim_backend=_scripted_backend([leak, CLEAN_REPLY]),
+        sim_prompt=mode,
+        sim_max_tries=0,
+    )
+    assert e.generate_user_turn(
+        [{"role": "user", "content": PROBLEM}]
+    ) == leak, mode
+    assert e.last_sim_code_rejected == 0, mode
+    # Exactly ONE draw: the sim is called once a turn, never resampled.
+    assert e.last_sim_raw_attempts == 1, mode
+    # And an off budget can never END an episode. This is the property that
+    # separates it from budget 1, which screens and aborts on a leaking draw.
+    assert not e.last_sim_code_reject_exhausted, mode
+    assert not e.last_sim_early_term_exhausted, mode
+    # The leak is still MEASURED. Turning the sampler off must not blind the
+    # census, or the baseline cannot be compared against a defended arm.
+    assert e.last_sim_raw_fenced_code == 1, mode
+
+
+def test_budget_one_still_screens_and_aborts():
+  # The distinction the `screen` flag exists for: 1 is a POLICY with a budget of
+  # one (draw, screen, abort on exhaustion), 0 is no policy. If these collapsed
+  # into each other, "off" would silently still be ending episodes.
+  e = _env(
+      sim_backend=_scripted_backend([BARE_DEF, CLEAN_REPLY]),
+      sim_prompt="codeonly",
+      sim_max_tries=1,
+  )
+  e.generate_user_turn([{"role": "user", "content": PROBLEM}])
+  assert e.last_sim_raw_attempts == 1
+  assert e.last_sim_code_rejected == 1
+  assert e.last_sim_code_reject_exhausted
+
+
+def test_zero_budget_makes_the_early_term_guard_inert():
+  # With no resampling budget there is nothing to resample a premature
+  # [TERMINATE] away INTO, so allow_terminate=False cannot be honored. Pinned
+  # because the alternative (ending the episode instead) would be a guardrail
+  # smuggled into the no-guardrail arm.
+  quit_early = "All good, thanks. [TERMINATE]"
+  e = _env(
+      sim_backend=_scripted_backend([quit_early, CLEAN_REPLY]),
+      sim_prompt="grounded",
+      sim_max_tries=0,
+  )
+  reply = e.generate_user_turn(
+      [{"role": "user", "content": PROBLEM}], allow_terminate=False
+  )
+  assert reply == quit_early
+  assert e.last_sim_early_term_rejected == 0
+  assert not e.last_sim_early_term_exhausted
+  # Still counted in the RAW census, so the behavior stays observable.
+  assert e.last_sim_raw_early_termination == 1
+
+
+def test_zero_budget_leaves_a_clean_reply_untouched():
+  # Sanity: the off path must not change the ordinary case, only stop screening.
+  e = _env(
+      sim_backend=_scripted_backend([CLEAN_REPLY]),
+      sim_prompt="spec",
+      sim_max_tries=0,
+  )
+  assert e.generate_user_turn([{"role": "user", "content": PROBLEM}]) == (
+      CLEAN_REPLY
+  )
+  assert e.last_sim_raw_fenced_code == 0
+  assert e.last_sim_code_rejected == 0
 
 
 def test_unknown_sim_code_leak_detector_fails_loudly():

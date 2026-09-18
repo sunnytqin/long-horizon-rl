@@ -1,0 +1,8 @@
+[harness] node=holygpu8a13201  stage=both
+[harness] partner=/n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200
+[harness] sim=/n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
+[harness] data=/n/netscratch/dam_lab/Lab/sqin/verl_data/colbench/train.fence.parquet rows [0,40)  out=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/gs200  SIM_CHAR_LIMIT=0
+[harness] ERROR: /n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200 has no weights. Merge the checkpoint first:
+[harness]   python -m verl.model_merger merge --backend fsdp \
+[harness]     --local_dir /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_mt/qwen3_4b_nonspec_baseline/checkpoints/global_step_200/actor \
+[harness]     --target_dir /n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200

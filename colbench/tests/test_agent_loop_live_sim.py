@@ -125,6 +125,7 @@ def _make_loop(
     sim_replies,
     *,
     sim_live=True,
+    sim_prompt="",
     max_assistant_turns=10,
     sim_reject_max_tries=0,
     train_turns="all",
@@ -147,6 +148,10 @@ def _make_loop(
   obj.train_turns = train_turns
   obj.sim_reject_max_tries = sim_reject_max_tries
   obj.sim_live = sim_live
+  # WHICH system prompt the sim gets ("" = the stock one). Set here because
+  # this fixture bypasses __init__ via object.__new__, so every attribute
+  # ColBenchAgentLoop.run() reads has to be mirrored by hand.
+  obj.sim_prompt = sim_prompt
   # Normally set by AgentLoopBase.__init__ from data.apply_chat_template_kwargs.
   obj.apply_chat_template_kwargs = {}
 

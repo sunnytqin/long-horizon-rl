@@ -1,0 +1,164 @@
+[harness] node=holy7c04202.rc.fas.harvard.edu  rubric=r6  judge=gpt-5.4-mini
+[harness] prefixes=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/prefixes.train.fence.c1.jsonl
+[harness] candidates=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/candidates.train.fence.c1.jsonl
+[harness] -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r6.jsonl
+[harness] max_prefixes=0 (0 = all)  cap=$20 per pass  tier=default
+[harness] === pass 1/3 (rows on disk: 5000) ===
+[judge_candidates] rubric=r6 harness=h2 judge=gpt-5.4-mini
+[judge_candidates] 12819 prefixes in scope, 5000 already judged, 7819 to judge -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r6.jsonl
+[judge_candidates] 20/7819 judged (20 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.03) in 12s
+[judge_candidates] 40/7819 judged (40 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.06) in 15s
+[judge_candidates] 60/7819 judged (60 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.10) in 18s
+[judge_candidates] 80/7819 judged (80 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.13) in 21s
+[judge_candidates] 100/7819 judged (100 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.16) in 23s
+[judge_candidates] 120/7819 judged (120 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.19) in 26s
+[judge_candidates] 140/7819 judged (140 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.23) in 29s
+[judge_candidates] 160/7819 judged (160 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.26) in 32s
+[judge_candidates] 180/7819 judged (180 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.28) in 34s
+[judge_candidates] 200/7819 judged (200 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.31) in 37s
+[judge_candidates] 220/7819 judged (220 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.34) in 39s
+[judge_candidates] 240/7819 judged (240 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.37) in 42s
+[judge_candidates] 260/7819 judged (260 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.40) in 45s
+[judge_candidates] 280/7819 judged (279 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.44) in 47s
+[judge_candidates] 300/7819 judged (299 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.47) in 51s
+[judge_candidates] 320/7819 judged (319 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.51) in 54s
+[judge_candidates] 340/7819 judged (339 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.54) in 56s
+[judge_candidates] 360/7819 judged (359 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.57) in 59s
+[judge_candidates] 380/7819 judged (379 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.60) in 61s
+[judge_candidates] 400/7819 judged (398 parsed ok, 2 needed a temp-0 retry, 0 deferred, $0.62) in 63s
+[judge_candidates] 420/7819 judged (418 parsed ok, 2 needed a temp-0 retry, 0 deferred, $0.66) in 67s
+[judge_candidates] 440/7819 judged (438 parsed ok, 2 needed a temp-0 retry, 0 deferred, $0.70) in 70s
+[judge_candidates] 460/7819 judged (458 parsed ok, 2 needed a temp-0 retry, 0 deferred, $0.73) in 72s
+[judge_candidates] 480/7819 judged (478 parsed ok, 2 needed a temp-0 retry, 0 deferred, $0.76) in 75s
+[judge_candidates] 500/7819 judged (498 parsed ok, 3 needed a temp-0 retry, 0 deferred, $0.80) in 78s
+[judge_candidates] 520/7819 judged (518 parsed ok, 4 needed a temp-0 retry, 0 deferred, $0.83) in 81s
+[judge_candidates] 540/7819 judged (538 parsed ok, 4 needed a temp-0 retry, 0 deferred, $0.86) in 84s
+[judge_candidates] 560/7819 judged (558 parsed ok, 4 needed a temp-0 retry, 0 deferred, $0.90) in 87s
+[judge_candidates] 580/7819 judged (578 parsed ok, 4 needed a temp-0 retry, 0 deferred, $0.93) in 90s
+[judge_candidates] 600/7819 judged (598 parsed ok, 4 needed a temp-0 retry, 0 deferred, $0.96) in 93s
+[judge_candidates] 620/7819 judged (618 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.00) in 96s
+[judge_candidates] 640/7819 judged (638 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.02) in 98s
+[judge_candidates] 660/7819 judged (658 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.06) in 101s
+[judge_candidates] 680/7819 judged (678 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.08) in 104s
+[judge_candidates] 700/7819 judged (698 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.12) in 107s
+[judge_candidates] 720/7819 judged (718 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.15) in 110s
+[judge_candidates] 740/7819 judged (738 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.18) in 112s
+[judge_candidates] 760/7819 judged (758 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.21) in 115s
+[judge_candidates] 780/7819 judged (778 parsed ok, 4 needed a temp-0 retry, 0 deferred, $1.25) in 118s
+[judge_candidates] 800/7819 judged (797 parsed ok, 5 needed a temp-0 retry, 0 deferred, $1.28) in 122s
+[judge_candidates] 820/7819 judged (817 parsed ok, 5 needed a temp-0 retry, 0 deferred, $1.31) in 124s
+[judge_candidates] 840/7819 judged (837 parsed ok, 5 needed a temp-0 retry, 0 deferred, $1.34) in 126s
+[judge_candidates] 860/7819 judged (857 parsed ok, 5 needed a temp-0 retry, 0 deferred, $1.36) in 129s
+[judge_candidates] 880/7819 judged (877 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.40) in 131s
+[judge_candidates] 900/7819 judged (897 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.42) in 134s
+[judge_candidates] 920/7819 judged (917 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.46) in 137s
+[judge_candidates] 940/7819 judged (937 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.49) in 140s
+[judge_candidates] 960/7819 judged (957 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.52) in 142s
+[judge_candidates] 980/7819 judged (977 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.55) in 145s
+[judge_candidates] 1000/7819 judged (997 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.58) in 148s
+[judge_candidates] 1020/7819 judged (1017 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.61) in 151s
+[judge_candidates] 1040/7819 judged (1037 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.65) in 153s
+[judge_candidates] 1060/7819 judged (1057 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.68) in 156s
+[judge_candidates] 1080/7819 judged (1077 parsed ok, 6 needed a temp-0 retry, 0 deferred, $1.71) in 159s
+[judge_candidates] 1100/7819 judged (1097 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.73) in 161s
+[judge_candidates] 1120/7819 judged (1117 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.77) in 164s
+[judge_candidates] 1140/7819 judged (1137 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.80) in 167s
+[judge_candidates] 1160/7819 judged (1157 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.84) in 170s
+[judge_candidates] 1180/7819 judged (1177 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.87) in 172s
+[judge_candidates] 1200/7819 judged (1197 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.89) in 175s
+[judge_candidates] 1220/7819 judged (1217 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.93) in 178s
+[judge_candidates] 1240/7819 judged (1237 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.96) in 180s
+[judge_candidates] 1260/7819 judged (1257 parsed ok, 7 needed a temp-0 retry, 0 deferred, $1.99) in 183s
+[judge_candidates] 1280/7819 judged (1277 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.02) in 185s
+[judge_candidates] 1300/7819 judged (1297 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.05) in 188s
+[judge_candidates] 1320/7819 judged (1317 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.08) in 191s
+[judge_candidates] 1340/7819 judged (1337 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.11) in 194s
+[judge_candidates] 1360/7819 judged (1357 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.14) in 196s
+[judge_candidates] 1380/7819 judged (1377 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.17) in 199s
+[judge_candidates] 1400/7819 judged (1397 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.20) in 202s
+[judge_candidates] 1420/7819 judged (1417 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.24) in 205s
+[judge_candidates] 1440/7819 judged (1437 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.27) in 208s
+[judge_candidates] 1460/7819 judged (1457 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.30) in 211s
+[judge_candidates] 1480/7819 judged (1477 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.33) in 213s
+[judge_candidates] 1500/7819 judged (1497 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.36) in 215s
+[judge_candidates] 1520/7819 judged (1517 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.39) in 218s
+[judge_candidates] 1540/7819 judged (1537 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.42) in 221s
+[judge_candidates] 1560/7819 judged (1557 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.46) in 224s
+[judge_candidates] 1580/7819 judged (1577 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.49) in 226s
+[judge_candidates] 1600/7819 judged (1597 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.52) in 230s
+[judge_candidates] 1620/7819 judged (1617 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.56) in 233s
+[judge_candidates] 1640/7819 judged (1637 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.59) in 235s
+[judge_candidates] 1660/7819 judged (1657 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.62) in 238s
+[judge_candidates] 1680/7819 judged (1677 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.65) in 241s
+[judge_candidates] 1700/7819 judged (1697 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.68) in 243s
+[judge_candidates] 1720/7819 judged (1717 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.72) in 246s
+[judge_candidates] 1740/7819 judged (1737 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.74) in 249s
+[judge_candidates] 1760/7819 judged (1757 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.77) in 252s
+[judge_candidates] 1780/7819 judged (1777 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.81) in 254s
+[judge_candidates] 1800/7819 judged (1797 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.84) in 257s
+[judge_candidates] 1820/7819 judged (1817 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.87) in 260s
+[judge_candidates] 1840/7819 judged (1837 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.91) in 263s
+[judge_candidates] 1860/7819 judged (1857 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.93) in 265s
+[judge_candidates] 1880/7819 judged (1877 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.96) in 267s
+[judge_candidates] 1900/7819 judged (1897 parsed ok, 7 needed a temp-0 retry, 0 deferred, $2.99) in 270s
+[judge_candidates] 1920/7819 judged (1917 parsed ok, 8 needed a temp-0 retry, 0 deferred, $3.02) in 272s
+[judge_candidates] 1940/7819 judged (1937 parsed ok, 8 needed a temp-0 retry, 0 deferred, $3.05) in 275s
+[judge_candidates] 1960/7819 judged (1957 parsed ok, 8 needed a temp-0 retry, 0 deferred, $3.08) in 278s
+[judge_candidates] 1980/7819 judged (1977 parsed ok, 8 needed a temp-0 retry, 0 deferred, $3.11) in 281s
+[judge_candidates] 2000/7819 judged (1997 parsed ok, 8 needed a temp-0 retry, 0 deferred, $3.15) in 283s
+[judge_candidates] 2020/7819 judged (2017 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.18) in 286s
+[judge_candidates] 2040/7819 judged (2037 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.21) in 289s
+[judge_candidates] 2060/7819 judged (2057 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.24) in 291s
+[judge_candidates] 2080/7819 judged (2077 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.27) in 294s
+[judge_candidates] 2100/7819 judged (2097 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.29) in 296s
+[judge_candidates] 2120/7819 judged (2117 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.33) in 299s
+[judge_candidates] 2140/7819 judged (2137 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.36) in 301s
+[judge_candidates] 2160/7819 judged (2157 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.39) in 304s
+[judge_candidates] 2180/7819 judged (2177 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.42) in 307s
+[judge_candidates] 2200/7819 judged (2197 parsed ok, 9 needed a temp-0 retry, 0 deferred, $3.46) in 310s
+[judge_candidates] 2220/7819 judged (2217 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.49) in 312s
+[judge_candidates] 2240/7819 judged (2237 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.52) in 315s
+[judge_candidates] 2260/7819 judged (2257 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.54) in 316s
+[judge_candidates] 2280/7819 judged (2277 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.57) in 320s
+[judge_candidates] 2300/7819 judged (2297 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.60) in 322s
+[judge_candidates] 2320/7819 judged (2317 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.64) in 325s
+[judge_candidates] 2340/7819 judged (2337 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.66) in 328s
+[judge_candidates] 2360/7819 judged (2357 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.69) in 330s
+[judge_candidates] 2380/7819 judged (2377 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.72) in 333s
+[judge_candidates] 2400/7819 judged (2397 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.76) in 336s
+[judge_candidates] 2420/7819 judged (2417 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.79) in 340s
+[judge_candidates] 2440/7819 judged (2437 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.82) in 343s
+[judge_candidates] 2460/7819 judged (2457 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.86) in 346s
+[judge_candidates] 2480/7819 judged (2477 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.89) in 348s
+[judge_candidates] 2500/7819 judged (2497 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.91) in 351s
+[judge_candidates] 2520/7819 judged (2517 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.94) in 354s
+[judge_candidates] 2540/7819 judged (2537 parsed ok, 10 needed a temp-0 retry, 0 deferred, $3.97) in 356s
+[judge_candidates] 2560/7819 judged (2557 parsed ok, 10 needed a temp-0 retry, 0 deferred, $4.01) in 360s
+[judge_candidates] 2580/7819 judged (2577 parsed ok, 10 needed a temp-0 retry, 0 deferred, $4.03) in 362s
+[judge_candidates] 2600/7819 judged (2596 parsed ok, 11 needed a temp-0 retry, 0 deferred, $4.06) in 365s
+[judge_candidates] 2620/7819 judged (2615 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.09) in 367s
+[judge_candidates] 2640/7819 judged (2635 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.12) in 370s
+[judge_candidates] 2660/7819 judged (2655 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.15) in 373s
+[judge_candidates] 2680/7819 judged (2675 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.18) in 376s
+[judge_candidates] 2700/7819 judged (2695 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.21) in 379s
+[judge_candidates] 2720/7819 judged (2715 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.25) in 382s
+[judge_candidates] 2740/7819 judged (2735 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.28) in 385s
+[judge_candidates] 2760/7819 judged (2755 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.31) in 388s
+[judge_candidates] 2780/7819 judged (2775 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.35) in 392s
+[judge_candidates] 2800/7819 judged (2795 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.39) in 395s
+[judge_candidates] 2820/7819 judged (2815 parsed ok, 12 needed a temp-0 retry, 0 deferred, $4.42) in 398s
+[judge_candidates] DONE 2825 judged, 2820 parsed ok, 0 deferred, 0 refused, 402s -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r6.jsonl
+[judge_candidates] judge_parse_fail_rate=0.0018 (12 rows needed the temp-0 retry)
+[judge_candidates] USAGE: 4587 requests issued / 4577 returned | prompt 9,432,150 (cached 3,840) | completion 1,041,658 (reasoning 0)
+[judge_candidates] EST COST: $4.44 at $0.25/M in + $2.0/M out (completion tokens INCLUDE hidden reasoning)
+[judge_candidates] ABORTED on a non-retryable API error: non-retryable API error: RateLimitError("Error code: 429 - {'error': {'message': 'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.', 'type': 'insufficient_quota', 'param': None, 'code': 'credit_balance_exhausted'}}")
+[judge_candidates] 2825 rows saved; fix the cause and re-run.
+[harness] pass 1: 5000 -> 7825 rows, then a FATAL API error -> stopping.
+[dump_judged] 7825 pages -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/dump.train.fence.c1.r6.txt
+[harness] DONE. judged -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r6.jsonl
+[harness]       dump   -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/dump.train.fence.c1.r6.txt
+[harness] READ THE DUMP before spending the bulk budget. Fan it out with
+[harness]   python -m colbench.simtrain.dump_judged --prefixes /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/prefixes.train.fence.c1.jsonl \
+[harness]     --judged /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r6.jsonl --slice i/4 --out part_i.txt
+[harness] and start with the cases the judge and the regex disagree about:
+[harness]   ... --only leak_disagree

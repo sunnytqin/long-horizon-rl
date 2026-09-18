@@ -16,7 +16,7 @@
 # Run INSIDE the verl container, e.g. on FASRC:
 #   singularity exec --nv \
 #     --bind /n/home05/sqin/long-horizon-RL/verl:/workspace/verl \
-#     --bind /n/netscratch/dam_lab/Lab/sqin:/data \
+#     --bind /n/netscratch/barak_lab/Lab/sqin:/data \
 #     <verl.sif> \
 #     bash -c 'cd /workspace/verl && PYTHONPATH=/workspace/verl codecontest/run_validate_codecontest.sh'
 #

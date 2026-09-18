@@ -67,6 +67,7 @@ from verl.trainer.ppo.utils import (
     need_teacher_policy,
 )
 from verl.trainer.ppo.v1.replay_buffer import ReplayBuffer
+from verl.trainer.ppo.ray_trainer import compute_advantage_logprob_cov, compute_turn_bucketed_entropy
 from verl.trainer.ppo.v1.utils import compute_advantage_for_multi_trajectories
 from verl.utils import hf_processor, hf_tokenizer
 from verl.utils import tensordict_utils as tu
@@ -1272,6 +1273,13 @@ class PPOTrainer(ABC):
             "actor/entropy": entropy_agg.detach().item(),
             # "perf/mfu/actor_infer": old_log_prob_mfu,
         }
+        # Is the actor/entropy rise a real per-position change or just a shift in
+        # the turn MIX? See compute_turn_bucketed_entropy. NB the v1 field is
+        # "entropy"; ray_trainer's v0 path calls the same tensor "entropys".
+        if "response_mask" in data.batch:
+            old_log_prob_metrics.update(
+                compute_turn_bucketed_entropy(data.batch["entropy"], data.batch["response_mask"])
+            )
         metrics.update(old_log_prob_metrics)
 
         # 4. calculate rollout vs actor logprobs diff
@@ -1371,6 +1379,20 @@ class PPOTrainer(ABC):
             config=self.config.algorithm,
         )
 
+        # 3b. Drift term behind the entropy curve -- logged here because this is
+        # the first point where advantages exist. See compute_advantage_logprob_cov.
+        # Key-guarded rather than try//except: a missing field means the batch
+        # layout changed and should be noticed, but a diagnostic must never be the
+        # thing that kills a multi-hour run.
+        if all(k in data.batch for k in ("advantages", "old_log_probs", "response_mask")):
+            metrics.update(
+                compute_advantage_logprob_cov(
+                    data.batch["advantages"],
+                    data.batch["old_log_probs"],
+                    data.batch["response_mask"],
+                )
+            )
+
         # 4. write nested advantages and returns back to TransferQueue
         fields = ["advantages", "returns"]
         if self.config.algorithm.use_kl_in_reward:
@@ -1457,9 +1479,20 @@ class PPOTrainer(ABC):
             "rm_scores",
             "token_level_rewards",
             "num_turns",
+            # "uid" is the GRPO group id. It is needed here purely for
+            # compute_data_metrics' critic/group_reward_std/* metrics, which key the
+            # per-prompt reward variance off batch.non_tensor_batch["uid"]. Without it
+            # those two metrics silently report nan on EVERY step (they are guarded by
+            # `if "uid" in batch.non_tensor_batch`), which is how an 83-step run logged
+            # nan for the one quantity that says whether GRPO groups are degenerate.
+            "uid",
         ]
         data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
         num_turns = np.array(data.pop("num_turns").tolist())
+        # Pop before to_padded_tensor(): uid is a string field and belongs in
+        # non_tensor_batch, not the padded TensorDict. Same conversion as
+        # _compute_advantage() does for the advantage estimator.
+        uid = np.array(data.pop("uid").tolist(), dtype=object)
         prompt_length = data["prompts"].offsets().diff()
         response_length = data["responses"].offsets().diff()
         global_token_num = (prompt_length + response_length).tolist()
@@ -1486,7 +1519,13 @@ class PPOTrainer(ABC):
             data["token_level_rewards"] = data["rm_scores"]
         data["prompt_length"] = prompt_length.float()
         data["response_length"] = response_length.float()
-        batch = DataProto(batch=data, meta_info={"global_token_num": global_token_num})
+        batch = DataProto(
+            batch=data,
+            non_tensor_batch={"uid": uid},
+            meta_info={"global_token_num": global_token_num},
+        )
+        # select_idxs carries non_tensor_batch through (protocol.py), so metrics_batch
+        # keeps its uids and the group-variance metrics see only non-padding rows.
         metrics_batch = batch.select_idxs(non_padding_mask) if non_padding_mask.any() else batch
 
         # 2. compute metrics

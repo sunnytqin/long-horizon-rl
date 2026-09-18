@@ -1,0 +1,28 @@
+[harness] node=holy7c12109.rc.fas.harvard.edu  rubric=r5  judge=gpt-5.4-mini
+[harness] prefixes=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/prefixes.train.fence.c1.jsonl
+[harness] candidates=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/candidates.train.fence.c1.jsonl
+[harness] -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r5.pilot50.jsonl
+[harness] max_prefixes=50 (0 = all)  cap=$3 per pass  tier=default
+[harness] === pass 1/3 (rows on disk: 0) ===
+[judge_candidates] rubric=r5 harness=h1 judge=gpt-5.4-mini
+[judge_candidates] 50 prefixes in scope, 0 already judged, 50 to judge -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r5.pilot50.jsonl
+[judge_candidates] 20/50 judged (20 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.03) in 15s
+[judge_candidates] 40/50 judged (40 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.06) in 17s
+[judge_candidates] DONE 50 judged, 50 parsed ok, 0 deferred, 0 refused, 20s -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r5.pilot50.jsonl
+[judge_candidates] judge_parse_fail_rate=0.0000 (0 rows needed the temp-0 retry)
+[judge_candidates] USAGE: 83 requests issued / 83 returned | prompt 136,413 (cached 0) | completion 14,884 (reasoning 0)
+[judge_candidates] EST COST: $0.06 at $0.25/M in + $2.0/M out (completion tokens INCLUDE hidden reasoning)
+[harness] pass 1: 0 -> 50 rows
+[harness] === pass 2/3 (rows on disk: 50) ===
+[judge_candidates] rubric=r5 harness=h1 judge=gpt-5.4-mini
+[judge_candidates] 50 prefixes in scope, 50 already judged, 0 to judge -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r5.pilot50.jsonl
+[harness] pass 2: 50 -> 50 rows
+[harness] no progress this pass -- stopping early
+[dump_judged] 50 pages -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/dump.train.fence.c1.r5.pilot50.txt
+[harness] DONE. judged -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r5.pilot50.jsonl
+[harness]       dump   -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/dump.train.fence.c1.r5.pilot50.txt
+[harness] READ THE DUMP before spending the bulk budget. Fan it out with
+[harness]   python -m colbench.simtrain.dump_judged --prefixes /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/prefixes.train.fence.c1.jsonl \
+[harness]     --judged /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/base_partner/judged.train.fence.c1.r5.pilot50.jsonl --slice i/4 --out part_i.txt
+[harness] and start with the cases the judge and the regex disagree about:
+[harness]   ... --only leak_disagree

@@ -117,6 +117,179 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
     return data, metrics
 
 
+def _solver_turn_index(response_mask: torch.Tensor):
+    """Run-length decode `response_mask` into per-token SOLVER-TURN ordinals.
+
+    Both colbench agent loops append a contiguous run of 1s per solver turn and
+    0s for every simulator reply, and `masking.apply_train_turns_mask` zeros
+    whole spans, so a run of 1s is exactly one kept solver turn. Recovering the
+    boundaries here costs nothing and avoids plumbing a per-token turn-index
+    tensor through AgentLoopOutput (and keeps the GT and spec loops in sync by
+    construction, since neither has to change).
+
+    Single source of truth for the decode: it is the fragile part -- an
+    off-by-one would misattribute every token by one turn and silently invert
+    whatever is read off the buckets -- so both bucketed metrics share it and
+    one set of tests pins it.
+
+    CAVEAT: the run ordinal equals the true solver-turn ordinal only when the
+    kept turns are a PREFIX of the emitted ones -- true for train_turns "all"
+    and "upto_last_code" (which zeros only TRAILING turns), NOT for
+    "final_only", where ordinal 0 is the LAST turn.
+
+    Args:
+        response_mask: (batch, response_length) 0/1 loss mask.
+
+    Returns:
+        ``(mask, turn_idx, run_start)`` -- the bool mask, the 0-based run
+        ordinal per token (meaningful only where ``mask``), and a bool tensor
+        marking the first token of each run.
+    """
+    mask = response_mask.bool()
+    prev = torch.zeros_like(mask)
+    prev[:, 1:] = mask[:, :-1]
+    run_start = mask & ~prev
+    turn_idx = run_start.long().cumsum(dim=1) - 1
+    return mask, turn_idx, run_start
+
+
+def _bucket_selectors(mask: torch.Tensor, turn_idx: torch.Tensor, n_buckets: int):
+    """Yield ``(name, selector)`` per turn bucket; the last absorbs the tail."""
+    for b in range(n_buckets):
+        last = b == n_buckets - 1
+        sel = mask & ((turn_idx >= b) if last else (turn_idx == b))
+        yield (f"turn{b}plus" if last else f"turn{b}"), sel
+
+
+def compute_advantage_logprob_cov(
+    advantages: torch.Tensor,
+    old_log_probs: torch.Tensor,
+    response_mask: torch.Tensor,
+    n_buckets: int = 4,
+) -> dict[str, float]:
+    """Cov(advantage, log pi) over masked tokens, overall and per solver turn.
+
+    Under idealized distribution-space policy-gradient dynamics
+    (``pi_dot(a) = pi(a) (A(a) - E_pi[A])``), the entropy obeys
+
+        H_dot = -Cov_{a~pi}(A(a), log pi(a))
+
+    so this is the first-order DRIFT term behind the entropy curve, logged with
+    the covariance's own sign (NOT negated):
+
+        Cov > 0  =>  likely actions earn more advantage  =>  H falls (sharpening)
+        Cov < 0  =>  likely actions earn less advantage  =>  H rises
+
+    NB that is the OPPOSITE orientation to `actor/entropy`'s own change: pair
+    `Cov_t` with a NEGATED forward difference, -(H_{t+1} - H_t). The metric is
+    logged at step t from step t's batch and advantages, i.e. it describes the
+    update step t is about to make -- regressing it on H_t - H_{t-1} tests the
+    lagged relation and will look like noise.
+
+    Per-token, with the trajectory advantage broadcast across its own tokens, so
+    it matches `actor/entropy`'s token-mean population. That is algebraically
+    the token-WEIGHTED trajectory-level Cov(A_i, mean_t log pi_it); using the
+    per-trajectory SUM of logprobs instead would be a trap -- longer
+    trajectories have more negative sums, so it would partly measure "do long
+    trajectories earn less reward", a length effect wearing an entropy costume.
+
+    Residual note: H_dot also picks up the entropy/KL regularizers (known) and a
+    second-order gradient-NOISE diffusion term (which this omits). The gap
+    between the observed dH and this drift term is what isolates the noise
+    contribution -- the point of logging it.
+
+    Args:
+        advantages: (batch, response_length) per-token advantage.
+        old_log_probs: (batch, response_length) logprob under the policy that
+            generated the samples -- the `pi` in the formula.
+        response_mask: (batch, response_length) 0/1 loss mask.
+        n_buckets: turn buckets; the last absorbs all later turns.
+
+    Returns:
+        Mapping of metric name to float. A bucket with under 2 tokens is
+        omitted rather than reported as 0.0, since its covariance is undefined.
+    """
+    with torch.no_grad():
+        mask, turn_idx, _ = _solver_turn_index(response_mask)
+        # float64: these are masked sums over ~half a million tokens of small
+        # products, where float32 accumulation error is comparable to the
+        # covariance itself.
+        adv = advantages.detach().double()
+        logp = old_log_probs.detach().double()
+        prod = adv * logp
+
+        def _cov(sel: torch.Tensor):
+            n = sel.sum()
+            if n < 2:
+                return None
+            w = sel.double()
+            n = n.double()
+            return ((prod * w).sum() / n - (adv * w).sum() / n * (logp * w).sum() / n).item()
+
+        metrics: dict[str, float] = {}
+        overall = _cov(mask)
+        if overall is not None:
+            metrics["actor/adv_logp_cov"] = overall
+        for name, sel in _bucket_selectors(mask, turn_idx, n_buckets):
+            c = _cov(sel)
+            if c is not None:
+                metrics[f"actor/adv_logp_cov_{name}"] = c
+        return metrics
+
+
+def compute_turn_bucketed_entropy(
+    entropys: torch.Tensor, response_mask: torch.Tensor, n_buckets: int = 4
+) -> dict[str, float]:
+    """Split the mean policy entropy by SOLVER-TURN ordinal within each rollout.
+
+    Diagnostic for the ColBench entropy explosion: `actor/entropy` is a
+    token-mean over the whole masked span, so it rises either because the
+    per-position entropy rose (a real policy change) or merely because episodes
+    grew more turns and the token MIX shifted toward later, longer-context turns
+    (a composition artifact). Those two have the same `actor/entropy` curve and
+    opposite implications, so this reports the per-bucket means AND the mix.
+
+    Turn boundaries come from `_solver_turn_index` -- see it for how they are
+    recovered and for the "final_only" caveat.
+
+    Args:
+        entropys: (batch, response_length) per-token entropy.
+        response_mask: (batch, response_length) 0/1 loss mask.
+        n_buckets: number of buckets; the last one absorbs all later turns.
+            Default 4 (turns 0, 1, 2, 3+) because the observed turn growth on
+            colbench runs sits in the 2-4 range -- pooling at 3 would hide it.
+
+    Returns:
+        Mapping of metric name to float: per-bucket mean entropy, per-bucket
+        share of masked tokens, and the mean number of kept solver turns.
+    """
+    with torch.no_grad():
+        mask, turn_idx, run_start = _solver_turn_index(response_mask)
+        total = mask.sum()
+        metrics: dict[str, float] = {
+            "actor/entropy_turns/mean": run_start.sum(dim=1).float().mean().item()
+        }
+        if total == 0:
+            return metrics
+        # Mean tokens per KEPT solver turn, on the TRAIN batch. H1 (turn
+        # composition) needs turn COUNT and per-turn LENGTH separately, and
+        # until now the only per-reply length was val-aux/solver_resp_len_mean
+        # -- a validation metric, so "assistant replies stayed flat" could not
+        # be checked on the batch the gradient actually sees. `response_length`
+        # is no substitute: it comes off the attention mask and includes the
+        # simulator's tokens.
+        n_turns = run_start.sum()
+        if n_turns > 0:
+            metrics["actor/solver_turn_len/mean"] = (total / n_turns).item()
+        ent = entropys.detach().float()
+        for name, sel in _bucket_selectors(mask, turn_idx, n_buckets):
+            n = sel.sum()
+            metrics[f"actor/entropy_{name}/tok_frac"] = (n / total).item()
+            if n > 0:
+                metrics[f"actor/entropy_{name}"] = (ent * sel).sum().item() / n.item()
+        return metrics
+
+
 def compute_response_mask(data: DataProto):
     """Compute the attention mask for the response part of the sequence.
 
@@ -1611,6 +1784,12 @@ class RayPPOTrainer:
                                 "actor/entropy": entropy_agg.detach().item(),
                                 "perf/mfu/actor_infer": old_log_prob_mfu,
                             }
+                            # Is the actor/entropy rise a real per-position
+                            # change or just a shift in the turn MIX? See
+                            # compute_turn_bucketed_entropy.
+                            old_log_prob_metrics.update(
+                                compute_turn_bucketed_entropy(entropys, response_masks)
+                            )
                             metrics.update(old_log_prob_metrics)
                             old_log_prob.batch.pop("entropys")
                             if "routed_experts" in batch.batch and "routed_experts" in old_log_prob.batch:
@@ -1686,6 +1865,17 @@ class RayPPOTrainer:
                             num_repeat=self.config.actor_rollout_ref.rollout.n,
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             config=self.config.algorithm,
+                        )
+
+                        # Drift term behind the entropy curve. See
+                        # compute_advantage_logprob_cov -- logged here because
+                        # this is the first point where advantages exist.
+                        metrics.update(
+                            compute_advantage_logprob_cov(
+                                batch.batch["advantages"],
+                                batch.batch["old_log_probs"],
+                                batch.batch["response_mask"],
+                            )
                         )
                     # update critic
                     if self.use_critic:

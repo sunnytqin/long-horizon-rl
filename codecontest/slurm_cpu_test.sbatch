@@ -7,7 +7,7 @@
 # (container env kept, PYTHONPATH via --env, NO --cleanenv, NO `bash -lc`).
 #
 # Submit:  sbatch codecontest/slurm_cpu_test.sbatch
-# Logs:    /n/netscratch/dam_lab/Lab/sqin/docker_images/cc_cpu_test_<jobid>.{out,err}
+# Logs:    /n/netscratch/barak_lab/Lab/sqin/docker_images/cc_cpu_test_<jobid>.{out,err}
 # Adjust --partition / --account below if needed.
 
 #SBATCH -J cc_cpu_test
@@ -16,14 +16,14 @@
 #SBATCH -c 16
 #SBATCH --mem=48G
 #SBATCH -t 03:00:00
-#SBATCH -o /n/netscratch/dam_lab/Lab/sqin/docker_images/cc_cpu_test_%j.out
-#SBATCH -e /n/netscratch/dam_lab/Lab/sqin/docker_images/cc_cpu_test_%j.err
+#SBATCH -o /n/netscratch/barak_lab/Lab/sqin/docker_images/cc_cpu_test_%j.out
+#SBATCH -e /n/netscratch/barak_lab/Lab/sqin/docker_images/cc_cpu_test_%j.err
 
 set -uo pipefail
 set -x
 
 REPO=/n/home05/sqin/long-horizon-RL/verl
-DIR=/n/netscratch/dam_lab/Lab/sqin/docker_images
+DIR=/n/netscratch/barak_lab/Lab/sqin/docker_images
 SANDBOX=$DIR/verl-sgl0512-dev2
 
 export SINGULARITY_DISABLE_CACHE=false

@@ -37,6 +37,8 @@ from colbench.prompts import GROUNDED_SIM_SYSTEM_PROMPT
 from colbench.prompts import GROUNDED_SIM_SYSTEM_PROMPT_V0
 from colbench.prompts import HUMAN_SIMULATOR_PROMPT
 from colbench.prompts import MINIMAL_SIM_PROMPT_WITH_PLOT
+from colbench.prompts import SIM_ROLE_RESTRAINT_SYSTEM_PROMPT
+from colbench.prompts import SIM_ROLE_SYSTEM_PROMPT
 from colbench.prompts import SIM_SYSTEM_PROMPT
 from colbench.prompts import SPEC_SIM_SYSTEM_PROMPT
 from colbench.prompts import TERMINATE_MARKER
@@ -188,6 +190,108 @@ _PY_FENCE_RE = re.compile(r"```python", re.IGNORECASE)
 # punctuation.
 _CODE_OPERATORS = frozenset("+-*/%()[]=<>")
 
+# ── Detector (C): code EXPRESSIONS over the hidden function's own names ──────
+# Added 2026-09-10. `SIM_JUDGE_USER_TEMPLATE`'s code_leak anchor has always
+# named "a dict, list or tuple literal such as {'employees': employees - 126}"
+# and "an indexing expression such as bios_config['boot_disk']" as leaks, but
+# NOTHING implemented them: (A) needs a `def`, (B) needs a fence, (D) is off by
+# default. So a reply could hand over `1.2 * force_level` or
+# `{'employees': employees - 126}` and score clean. Measured on the pilot: the
+# judge's own code_leak agreed it was clean, so both screens missed it.
+#
+# OPT-IN (`expr_over_gt_names=True`) and OFF BY DEFAULT ON PURPOSE. This
+# function is what `env.py` uses for rejection sampling and for the
+# `sim_leak_frac` metric, so widening the default would move that number and
+# make every historical run non-comparable -- the exact silent cross-run break
+# this file warns about elsewhere. simtrain's stage-1 screen turns it on.
+#
+# THE LINE IT DRAWS is expression-vs-data, not brace-vs-no-brace:
+#   {'employees': employees - 126}          -> LEAK. The value is an expression
+#                                              over the function's parameters,
+#                                              i.e. a fragment of the body.
+#   {'disk': 'sda', 'partition_size': 100}  -> NOT a leak. Concrete values
+#                                              only; this is a DATA EXAMPLE
+#                                              answering "what shape is the
+#                                              input?", and the key names are
+#                                              arbitrary facts the agent cannot
+#                                              guess and must be told.
+# Gated on identifiers that actually occur in the ground truth so ordinary
+# prose ("half the profits, times the subscriptions") cannot trip it.
+_IDENT_RE = re.compile(r"\b[A-Za-z_]\w*\b")
+_PY_KEYWORDS = frozenset("""
+and as assert break class continue def del elif else except False finally for
+from global if import in is lambda None nonlocal not or pass raise return True
+try while with yield abs all any bool dict enumerate float format int len list
+list max min print range round set sorted str sum tuple type zip self
+""".split())
+# `name['key']` / `name[ident]` / `name[0]`. NO whitespace allowed before the
+# bracket: `os['disk']` is a subscript, but "list1 is [1, 2, 2, 3]" is a DATA
+# EXAMPLE and matched when this allowed `\s*`.
+_SUBSCRIPT_RE = re.compile(r"\b([A-Za-z_]\w*)\[\s*['\x22]?\w")
+# `a * b`, `1.2 * b`, `a / 10` -- a python arithmetic operator with an
+# identifier on at least one side.
+#
+# `-` and `+` REQUIRE whitespace beside them; the others do not. Without that,
+# every hyphenated proper noun in the hidden data reads as subtraction:
+# "Atari 8-bit" matched as `8 - bit` (and `bit` is an identifier of the GT
+# string 'Atari 8-bit'), "TRS-80" as `TRS - 80`. That vetoed 6 of 7 candidates
+# on prefix 116-0-0 before it was caught. Real leaks are spaced or use `*`/`/`:
+# "employees - 126", "total_money - illicit_money", "1.2 * force_level".
+_TIGHT_OPS = r"(?:\*\*|//|[*/%])"
+_SPACED_OPS = r"(?:\s+[-+]\s*|\s*[-+]\s+)"
+_ARITH_RE = re.compile(
+    r"(?:"
+    r"\b([A-Za-z_]\w*)\s*" + _TIGHT_OPS + r"\s*[\w.'\x22(]"
+    r"|[\w.)]\s*" + _TIGHT_OPS + r"\s*\b([A-Za-z_]\w*)\b"
+    r"|\b([A-Za-z_]\w*)" + _SPACED_OPS + r"[\w.'\x22(]"
+    r"|[\w.)]" + _SPACED_OPS + r"\b([A-Za-z_]\w*)\b"
+    r")"
+)
+
+
+def _gt_identifiers(ground_truth: str) -> frozenset[str]:
+  """Identifiers the hidden function actually uses, for gating detector (C).
+
+  Names of 3+ characters only, keywords and common builtins removed: a
+  one-or-two-letter match ("i", "os") fires on ordinary prose, and `len` or
+  `sum` appearing in a sentence says nothing about code.
+
+  Args:
+    ground_truth: the hidden GT source.
+
+  Returns:
+    The gating identifier set.
+  """
+  return frozenset(
+      t
+      for t in _IDENT_RE.findall(ground_truth or "")
+      if len(t) >= 3 and t not in _PY_KEYWORDS
+  )
+
+
+def _expression_over_gt_names(text: str, ground_truth: str) -> Optional[str]:
+  """Detector (C): a code expression written over the GT's own identifiers.
+
+  Args:
+    text: the simulator reply being screened.
+    ground_truth: the hidden GT source, used to gate on its identifiers.
+
+  Returns:
+    ``"index"``, ``"expr"``, or ``None``.
+  """
+  names = _gt_identifiers(ground_truth)
+  if not names:
+    return None
+  for m in _SUBSCRIPT_RE.finditer(text or ""):
+    if m.group(1) in names:
+      return "index"
+  for m in _ARITH_RE.finditer(text or ""):
+    # Four alternatives (tight-op left/right, spaced-op left/right), so check
+    # every group rather than just the first two.
+    if any((g or "") in names for g in m.groups()):
+      return "expr"
+  return None
+
 
 def _code_tokens(text: str) -> list[str]:
   r"""Symbol-aware tokenizer: each word OR each individual operator/punctuation char.
@@ -207,7 +311,11 @@ def _code_tokens(text: str) -> list[str]:
 
 
 def detect_code_leak(
-    text: str, ground_truth: str, ngram_n: int = 10, min_operators: int = 2
+    text: str,
+    ground_truth: str,
+    ngram_n: int = 10,
+    min_operators: int = 2,
+    expr_over_gt_names: bool = False,
 ) -> Optional[str]:
   """Return a short reason string if ``text`` leaks code, else ``None``.
 
@@ -229,6 +337,11 @@ def detect_code_leak(
     ngram_n: n-gram width for detector (D); ``<= 0`` disables it.
     min_operators: operators an n-gram match must contain to count, which is
       what separates copied code from prose sharing identifiers.
+    expr_over_gt_names: enable detector (C) -- an indexing or arithmetic
+      expression written over an identifier the GT itself uses
+      (``bios_config['boot_disk']``, ``1.2 * force_level``). OFF by default so
+      ``sim_leak_frac`` stays comparable with every run to date; simtrain's
+      stage-1 screen passes True. Reasons ``"index"`` / ``"expr"``.
   """
   if not text:
     return None
@@ -236,6 +349,10 @@ def detect_code_leak(
     return "def"
   if _PY_FENCE_RE.search(text):
     return "fenced"
+  if expr_over_gt_names:
+    reason = _expression_over_gt_names(text, ground_truth)
+    if reason is not None:
+      return reason
   if ngram_n <= 0:
     return None
   gt_toks = _code_tokens(ground_truth)
@@ -372,6 +489,53 @@ def strip_dialogue_cue(text: str) -> str:
     ``text`` without any line that consists solely of the cue.
   """
   return "\n".join(ln for ln in text.split("\n") if ln.strip() != DIALOGUE_CUE)
+
+
+# GT-path simulator SYSTEM prompts, keyed by the `sim_prompt` arm label that
+# `SIM_PROMPT=` / `--sim_prompt=` selects. The default is the stock sweet_rl
+# "You are a helpful assistant.", so an unset knob is byte-identical to every
+# run to date.
+#
+# The role variants exist because reading a 2026-09-09 candidate pilot found 96%
+# of sampled simulator replies in ANALYST register ("The function calculates...",
+# and once "I have written a Python function..."), and swapping this one string
+# cut the measured code-leak rate 0.34 -> 0.08. See the comment block above
+# SIM_ROLE_SYSTEM_PROMPT in prompts.py.
+GT_SIM_SYSTEM_PROMPTS = {
+    "": SIM_SYSTEM_PROMPT,
+    "auto": SIM_SYSTEM_PROMPT,
+    "none": SIM_SYSTEM_PROMPT,
+    "default": SIM_SYSTEM_PROMPT,
+    "role": SIM_ROLE_SYSTEM_PROMPT,
+    "role_restraint": SIM_ROLE_RESTRAINT_SYSTEM_PROMPT,
+}
+
+
+def resolve_sim_system(name: Optional[str]) -> str:
+  """Map a ``sim_prompt`` arm label to the simulator's system prompt.
+
+  RAISES on an unknown label rather than falling back to the default. A typo
+  (``role_restrant``) that silently ran the stock prompt would produce a run
+  labelled as one arm and trained as another -- the most expensive kind of
+  quiet failure this repo has, and the reason the error is loud here.
+
+  Args:
+    name: the arm label; ``None``/``""``/``"auto"``/``"none"``/``"default"``
+      all select the stock prompt.
+
+  Returns:
+    The system prompt string for that arm.
+
+  Raises:
+    ValueError: ``name`` is not a known arm label.
+  """
+  key = (name or "").strip().lower()
+  if key not in GT_SIM_SYSTEM_PROMPTS:
+    raise ValueError(
+        f"unknown sim_prompt {name!r}; expected one of "
+        f"{sorted(k for k in GT_SIM_SYSTEM_PROMPTS if k)}"
+    )
+  return GT_SIM_SYSTEM_PROMPTS[key]
 
 
 def str_dialogue_history(messages: list[dict[str, str]]) -> str:

@@ -1,0 +1,2 @@
+# The repository-wide entrypoint_* rule predates repo-owned Slurm entrypoints.
+!entrypoint_eval_colbench_slurm.sh

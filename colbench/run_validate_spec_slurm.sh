@@ -32,7 +32,7 @@ REPO=${REPO:-/n/home05/sqin/long-horizon-RL/verl}
 CONDA_SH=${CONDA_SH:-/n/sw/Mambaforge-23.11.0-0/etc/profile.d/conda.sh}
 CONDA_ENV=${CONDA_ENV:-/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf}
 
-MODEL_HFDIR=${MODEL_HFDIR:-/n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507}
+MODEL_HFDIR=${MODEL_HFDIR:-/n/netscratch/barak_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507}
 MODEL=${MODEL:-$(ls -d "$MODEL_HFDIR"/snapshots/*/ 2>/dev/null | head -1)}
 SERVED_NAME=${SERVED_NAME:-colbench-sim}
 

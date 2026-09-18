@@ -22,7 +22,7 @@ Phase 1 up (train/val split for RL is deferred). Reuses ``selfplay.dataio`` for
 the raw-parquet load + GT resolution + jsonl reader.
 
 Usage:
-    SPECS=/n/netscratch/dam_lab/Lab/sqin/colbench_specs
+    SPECS=/n/netscratch/barak_lab/Lab/sqin/colbench_specs
     python colbench/preprocess_colbench_spec.py \
         --raw_parquet InfoPO/data/colbench_code/train.parquet \
         --specs_jsonl $SPECS/specs/train.selfplay.plot.jsonl \

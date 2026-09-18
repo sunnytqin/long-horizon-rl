@@ -530,3 +530,47 @@ if __name__ == "__main__":
       fn()
       print(f"PASS {name}")
   print("(run via pytest for the monkeypatch/caplog debug test)")
+
+
+def test_sim_prompt_selects_the_system_prompt_and_fails_loud_on_a_typo():
+  """`sim_prompt` picks the sim's SYSTEM message; the GT still rides the user one.
+
+  An unknown label must RAISE. A typo that silently fell back to the stock
+  prompt would produce a run labelled as one arm and trained as another.
+  """
+  seen = {}
+
+  def backend(system_content, user_content):
+    seen["system"] = system_content
+    seen["user"] = user_content
+    return "ok"
+
+  for arm, marker in (
+      ("", "helpful assistant"),
+      ("auto", "helpful assistant"),
+      ("role", "role-playing"),
+      ("role_restraint", "role-playing"),
+  ):
+    env = ColBenchUserSimEnv(
+        problem_description="P",
+        ground_truth="def secret(): pass",
+        test_cases=[],
+        sim_prompt=arm,
+        sim_backend=backend,
+    )
+    env.generate_user_turn([{"role": "user", "content": "hi"}])
+    assert marker in seen["system"], (arm, seen["system"][:60])
+    # The hidden GT reaches the sim ONLY through the user message, in every arm.
+    assert "def secret" in seen["user"]
+    assert "def secret" not in seen["system"]
+
+  # role_restraint is role plus the withholding clause, and role is not.
+  assert "Answer only what you were just asked" in templates.resolve_sim_system(
+      "role_restraint"
+  )
+  assert "Answer only what you were just asked" not in (
+      templates.resolve_sim_system("role")
+  )
+  for bad in ("role_restrant", "ROLE-RESTRAINT", "spec", "x"):
+    with pytest.raises(ValueError):
+      templates.resolve_sim_system(bad)

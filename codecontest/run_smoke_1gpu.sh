@@ -7,8 +7,8 @@
 # Run INSIDE the verl SGLang container, e.g. on FASRC:
 #   singularity exec --nv \
 #     --bind /n/home05/sqin/long-horizon-RL/verl:/workspace/verl \
-#     --bind /n/netscratch/dam_lab/Lab/sqin:/data \
-#     /n/netscratch/dam_lab/Lab/sqin/docker_images/verl-sgl0512-dev2.sif \
+#     --bind /n/netscratch/barak_lab/Lab/sqin:/data \
+#     /n/netscratch/barak_lab/Lab/sqin/docker_images/verl-sgl0512-dev2.sif \
 #     bash -c 'cd /workspace/verl && PYTHONPATH=/workspace/verl codecontest/run_smoke_1gpu.sh'
 #
 # Prereq: a tiny smoke parquet, e.g.

@@ -302,6 +302,124 @@ def test_early_terminate_before_code_is_resampled_in_training():
   assert rei["term_standalone"] == 1.0
 
 
+# ── The two sim-side judge vetoes, as RL counters ────────────────────────────
+# Wired for the arm that actually runs them: sim_max_tries=0 (no code
+# rejection) + early_term_guard=False, i.e. every draw is injected as-is. Under
+# THAT config every guard-era termination counter is structurally dead, which is
+# the whole reason these three keys exist.
+
+
+def test_term_by_sim_separates_a_sim_ending_from_a_turn_cap():
+  # THE confound the denominator fixes: term_standalone is 0.0 both when the sim
+  # spoke before the sentinel and when the sim never ended the episode at all.
+  ended = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["It's 10.", "[TERMINATE]"],
+      sim_max_tries=0,
+      early_term_guard=False,
+  )
+  rei = _run(ended).extra_fields["reward_extra_info"]
+  assert rei["term_by_sim"] == 1.0
+  assert rei["term_standalone"] == 1.0
+
+  capped = _make_loop(
+      solver_turns=[_code_turn(GT), _code_turn(GT)],
+      sim_replies=["Keep going."],
+      max_assistant_turns=2,
+      max_code_proposals=9,
+      sim_max_tries=0,
+      early_term_guard=False,
+  )
+  rei2 = _run(capped).extra_fields["reward_extra_info"]
+  assert rei2["term_turn_cap"] == 1.0
+  # Same term_standalone as a speak-then-terminate, opposite meaning -- so
+  # term_standalone alone cannot be read, and term_by_sim is what tells them
+  # apart.
+  assert rei2["term_standalone"] == 0.0
+  assert rei2["term_by_sim"] == 0.0
+  assert rei2["sim_term_spoke"] == 0.0
+
+
+def test_sim_term_premature_fires_where_the_guard_era_counter_is_dead():
+  # Guard OFF: the sim quits on turn 1 with nothing on the table. That is the
+  # judge's `term_vetoed` -- and the pre-existing PER-DRAW counter cannot see
+  # it, because env_spec's raw census gates it on `not allow_terminate`, which
+  # is constantly True with the guard off. Both assertions together are the
+  # justification for the new key.
+  obj = _make_loop(
+      solver_turns=["Tell me more?"],
+      sim_replies=["I think you've got it. [TERMINATE]"],
+      sim_max_tries=0,
+      early_term_guard=False,
+  )
+  rei = _run(obj).extra_fields["reward_extra_info"]
+  assert rei["term_no_code"] == 1.0
+  assert rei["showed_code"] == 0.0
+  assert rei["term_by_sim"] == 1.0
+  assert rei["sim_term_premature"] == 1.0
+  assert rei["sim_raw_early_termination"] == 0.0
+  assert rei["sim_early_term_rejected"] == 0.0
+
+
+def test_sim_term_premature_is_zero_once_code_is_on_the_table():
+  # Terminating AFTER a function has been shown is legitimate and is scored
+  # nowhere -- the sim is not held to be a reliable code reviewer.
+  obj = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["It's 10.", "[TERMINATE]"],
+      sim_max_tries=0,
+      early_term_guard=False,
+  )
+  rei = _run(obj).extra_fields["reward_extra_info"]
+  assert rei["term_user"] == 1.0
+  assert rei["term_by_sim"] == 1.0
+  assert rei["sim_term_premature"] == 0.0
+
+
+def test_sim_term_spoke_fires_on_speak_then_terminate_only():
+  # The sim's own prompt forbids answering and quitting in one reply. Such a
+  # draw ALWAYS ends the episode -- `sim_terminated` is an unanchored substring
+  # match -- so it is always the terminating reply and the counter's event
+  # coverage is complete, not a sample.
+  spoke = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["It's 10.", "Looks right, thanks! [TERMINATE]"],
+      sim_max_tries=0,
+      early_term_guard=False,
+  )
+  rei = _run(spoke).extra_fields["reward_extra_info"]
+  assert rei["sim_term_spoke"] == 1.0
+  assert rei["term_standalone"] == 0.0
+  # Exactly term_by_sim - term_standalone, by construction.
+  assert rei["sim_term_spoke"] == rei["term_by_sim"] - rei["term_standalone"]
+
+  bare = _make_loop(
+      solver_turns=["What's the cutoff?", _code_turn(GT)],
+      sim_replies=["It's 10.", "[TERMINATE]"],
+      sim_max_tries=0,
+      early_term_guard=False,
+  )
+  rei2 = _run(bare).extra_fields["reward_extra_info"]
+  assert rei2["sim_term_spoke"] == 0.0
+  assert rei2["term_standalone"] == 1.0
+
+
+def test_veto_counters_present_on_a_no_sim_turn_episode():
+  # verl reads the reward_extra_info key set from the FIRST sample, so all three
+  # must be emitted (as 0.0) even when the sim never speaks.
+  obj = _make_loop(
+      solver_turns=[_code_turn(WRONG), _code_turn(WRONG)],
+      sim_replies=["Not quite."],
+      max_code_proposals=1,
+      sim_max_tries=0,
+      early_term_guard=False,
+  )
+  rei = _run(obj).extra_fields["reward_extra_info"]
+  assert rei["term_by_sim"] == 0.0
+  assert rei["sim_term_premature"] == 0.0
+  assert rei["sim_term_spoke"] == 0.0
+
+
 def test_sim_code_reject_exhaustion_aborts():
   # Sim always writes code -> exhaustion -> terminated_by sim_code_reject; grade
   # last shown code.

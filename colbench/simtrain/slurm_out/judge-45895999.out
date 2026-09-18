@@ -1,0 +1,56 @@
+[harness] node=holy7c04104.rc.fas.harvard.edu  rubric=r6  judge=gpt-5.4-mini
+[harness] prefixes=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/prefixes.test_small.fence.c1.jsonl
+[harness] candidates=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/candidates.test_small.fence.c1.jsonl
+[harness] -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/judged.test_small.fence.c1.r6.jsonl
+[harness] max_prefixes=0 (0 = all)  cap=$5 per pass  tier=default
+[harness] === pass 1/3 (rows on disk: 0) ===
+[judge_candidates] rubric=r6 harness=h2 judge=gpt-5.4-mini
+[judge_candidates] 614 prefixes in scope, 0 already judged, 614 to judge -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/judged.test_small.fence.c1.r6.jsonl
+[judge_candidates] 20/614 judged (20 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.03) in 15s
+[judge_candidates] 40/614 judged (40 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.06) in 18s
+[judge_candidates] 60/614 judged (60 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.09) in 21s
+[judge_candidates] 80/614 judged (80 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.11) in 23s
+[judge_candidates] 100/614 judged (100 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.16) in 28s
+[judge_candidates] 120/614 judged (120 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.18) in 32s
+[judge_candidates] 140/614 judged (140 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.22) in 35s
+[judge_candidates] 160/614 judged (160 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.24) in 38s
+[judge_candidates] 180/614 judged (180 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.27) in 41s
+[judge_candidates] 200/614 judged (200 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.30) in 45s
+[judge_candidates] 220/614 judged (220 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.33) in 48s
+[judge_candidates] 240/614 judged (240 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.36) in 52s
+[judge_candidates] 260/614 judged (260 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.39) in 55s
+[judge_candidates] 280/614 judged (280 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.42) in 58s
+[judge_candidates] 300/614 judged (300 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.44) in 61s
+[judge_candidates] 320/614 judged (320 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.48) in 66s
+[judge_candidates] 340/614 judged (340 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.51) in 69s
+[judge_candidates] 360/614 judged (360 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.54) in 73s
+[judge_candidates] 380/614 judged (380 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.58) in 77s
+[judge_candidates] 400/614 judged (400 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.61) in 80s
+[judge_candidates] 420/614 judged (420 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.64) in 83s
+[judge_candidates] 440/614 judged (440 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.67) in 86s
+[judge_candidates] 460/614 judged (460 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.70) in 89s
+[judge_candidates] 480/614 judged (480 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.73) in 92s
+[judge_candidates] 500/614 judged (500 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.76) in 95s
+[judge_candidates] 520/614 judged (520 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.79) in 99s
+[judge_candidates] 540/614 judged (540 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.82) in 102s
+[judge_candidates] 560/614 judged (560 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.85) in 105s
+[judge_candidates] 580/614 judged (580 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.88) in 109s
+[judge_candidates] 600/614 judged (600 parsed ok, 1 needed a temp-0 retry, 0 deferred, $0.92) in 112s
+[judge_candidates] DONE 614 judged, 614 parsed ok, 0 deferred, 0 refused, 115s -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/judged.test_small.fence.c1.r6.jsonl
+[judge_candidates] judge_parse_fail_rate=0.0000 (1 rows needed the temp-0 retry)
+[judge_candidates] USAGE: 977 requests issued / 977 returned | prompt 1,997,698 (cached 1,280) | completion 217,646 (reasoning 0)
+[judge_candidates] EST COST: $0.93 at $0.25/M in + $2.0/M out (completion tokens INCLUDE hidden reasoning)
+[harness] pass 1: 0 -> 614 rows
+[harness] === pass 2/3 (rows on disk: 614) ===
+[judge_candidates] rubric=r6 harness=h2 judge=gpt-5.4-mini
+[judge_candidates] 614 prefixes in scope, 614 already judged, 0 to judge -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/judged.test_small.fence.c1.r6.jsonl
+[harness] pass 2: 614 -> 614 rows
+[harness] no progress this pass -- stopping early
+[dump_judged] 614 pages -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/dump.test_small.fence.c1.r6.txt
+[harness] DONE. judged -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/judged.test_small.fence.c1.r6.jsonl
+[harness]       dump   -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/dump.test_small.fence.c1.r6.txt
+[harness] READ THE DUMP before spending the bulk budget. Fan it out with
+[harness]   python -m colbench.simtrain.dump_judged --prefixes /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/prefixes.test_small.fence.c1.jsonl \
+[harness]     --judged /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/eval_heldout/judged.test_small.fence.c1.r6.jsonl --slice i/4 --out part_i.txt
+[harness] and start with the cases the judge and the regex disagree about:
+[harness]   ... --only leak_disagree

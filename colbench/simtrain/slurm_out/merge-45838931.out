@@ -1,0 +1,30 @@
+[merge] node=holy8a24110
+[merge] src=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_mt/qwen3_4b_nonspec_role_restraint/checkpoints/global_step_200/actor
+[merge] dst=/n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_restraint_gs200
+config: ModelMergerConfig(operation='merge', backend='fsdp', target_dir='/n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_restraint_gs200', hf_upload_path=None, private=False, test_hf_dir=None, tie_word_embedding=False, trust_remote_code=False, is_value_model=False, local_dir='/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_mt/qwen3_4b_nonspec_role_restraint/checkpoints/global_step_200/actor', hf_model_config_path='/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_mt/qwen3_4b_nonspec_role_restraint/checkpoints/global_step_200/actor/huggingface', hf_upload=False, use_cpu_initialization=False)
+Got device mesh tensor([0, 1, 2, 3], dtype=torch.int32), mesh_dim_names ('fsdp',)
+Processing model shards with 4 (4,) in total
+Loading 4 FSDP shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading 4 FSDP shards:  25%|██▌       | 1/4 [00:01<00:05,  1.76s/it]Loading 4 FSDP shards:  50%|█████     | 2/4 [00:03<00:03,  1.56s/it]Loading 4 FSDP shards:  75%|███████▌  | 3/4 [00:03<00:00,  1.05it/s]Loading 4 FSDP shards: 100%|██████████| 4/4 [00:05<00:00,  1.38s/it]Loading 4 FSDP shards: 100%|██████████| 4/4 [00:05<00:00,  1.36s/it]
+WARNING:2026-09-10 09:36:23,834:Skipping import of cpp extensions due to incompatible torch version 2.7.1+cu126 for torchao version 0.14.0         Please see GitHub issue #2919 for more info
+`torch_dtype` is deprecated! Use `dtype` instead!
+Saving model to /n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_restraint_gs200
+[2026-09-10 09:36:26,329] [WARNING] [real_accelerator.py:181:get_accelerator] Setting accelerator to CPU. If you have GPU or other accelerator, we were unable to detect it.
+[2026-09-10 09:36:26,332] [INFO] [real_accelerator.py:222:get_accelerator] Setting ds_accelerator to cpu (auto detect)
+Warning: The cache directory for DeepSpeed Triton autotune, /n/home05/sqin/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+Saving tokenizer to /n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_restraint_gs200
+[merge] OK  2 weight file(s)  7.6G
+total 7871974
+drwxr-sr-x. 2 sqin dam_lab       4096 Sep 10 09:36 .
+drwxr-sr-x. 2 sqin dam_lab       4096 Sep 10 09:36 ..
+-rw-r--r--. 1 sqin dam_lab        707 Sep 10 09:36 added_tokens.json
+-rw-r--r--. 1 sqin dam_lab       2630 Sep 10 09:36 chat_template.jinja
+-rw-r--r--. 1 sqin dam_lab       1537 Sep 10 09:36 config.json
+-rw-r--r--. 1 sqin dam_lab        213 Sep 10 09:36 generation_config.json
+-rw-r--r--. 1 sqin dam_lab    1671853 Sep 10 09:36 merges.txt
+-rw-r--r--. 1 sqin dam_lab 4991523440 Sep 10 09:36 model-00001-of-00002.safetensors
+-rw-r--r--. 1 sqin dam_lab 3053458560 Sep 10 09:36 model-00002-of-00002.safetensors
+-rw-r--r--. 1 sqin dam_lab      32855 Sep 10 09:36 model.safetensors.index.json
+-rw-r--r--. 1 sqin dam_lab        613 Sep 10 09:36 special_tokens_map.json
+-rw-r--r--. 1 sqin dam_lab   11422654 Sep 10 09:36 tokenizer.json
+-rw-r--r--. 1 sqin dam_lab       5405 Sep 10 09:36 tokenizer_config.json
+-rw-r--r--. 1 sqin dam_lab    2776833 Sep 10 09:36 vocab.json

@@ -198,6 +198,43 @@ def openai_sim_backend(system_content: str, user_content: str) -> str:
   return "No response."
 
 
+def finalize_sim_reply(raw: str, limit: Optional[int] = None) -> str:
+  """<think>-strip a raw sim reply, then apply the post-hoc character cap.
+
+  Module-level so anything that draws sim replies OUTSIDE an env instance --
+  ``colbench/simtrain``'s candidate collector, which samples K replies from a
+  materialized prompt with no env in the loop -- applies the SAME transform the
+  training rollout does. Reimplementing it there is exactly the byte-drift the
+  materialized prompt exists to prevent; the env method delegates here, so the
+  two can never diverge.
+
+  The cap is sweet_rl's ``HUMAN_RESPONSE_CHARACTER_LIMIT`` (400) by default, so
+  anything that does not set ``SIM_CHAR_LIMIT`` is byte-identical to stock
+  ColBench. ``SIM_CHAR_LIMIT=0`` DISABLES the slice, which is what the
+  GT-vs-SPEC study (and every run since) uses -- see
+  ``ColBenchUserSimEnv._finalize_reply`` and run_colbench_grpo.sh for why.
+
+  Args:
+    raw: the backend's unprocessed reply.
+    limit: character cap; ``None`` reads ``SIM_CHAR_LIMIT`` from the
+      environment (default 400), and ``<= 0`` disables the slice.
+
+  Returns:
+    The reply the solver would see: ``<think>``-stripped and, unless the cap is
+    disabled, truncated to it.
+  """
+  if limit is None:
+    limit = int(
+        os.environ.get(
+            "SIM_CHAR_LIMIT", templates.HUMAN_RESPONSE_CHARACTER_LIMIT
+        )
+    )
+  reply = templates.strip_think(raw)
+  if limit > 0:
+    reply = reply[:limit]
+  return reply
+
+
 @dataclass
 class ColBenchUserSimEnv:
   """User-simulator env holding the problem, hidden GT, and GT call-strings.
@@ -210,6 +247,12 @@ class ColBenchUserSimEnv:
     max_steps: max solver turns before the episode is force-ended (sweet_rl
       default 10).
     reward_time_limit: per-case exec timeout (seconds) for grading.
+    sim_prompt: WHICH system prompt the simulator is given, as an arm label
+      (``""``/``auto`` = the stock "You are a helpful assistant."; ``role`` /
+      ``role_restraint`` = the client-role variants). Selected by
+      ``SIM_PROMPT=`` / ``--sim_prompt=``, resolved by
+      ``templates.resolve_sim_system``, which RAISES on an unknown label. The
+      hidden GT still reaches the sim only through the user message either way.
     sim_backend: (system, user) -> raw reply. Defaults to the frozen-server HTTP
       call; tests inject their own. This is the ONE seam that sees the GT.
     asim_backend: async (system, user) -> raw reply. When set, the LIVE-weights
@@ -226,6 +269,7 @@ class ColBenchUserSimEnv:
   test_cases: list[str]
   max_steps: int = 10
   reward_time_limit: float = 6.0
+  sim_prompt: str = ""
   sim_backend: Optional[SimBackend] = None
   asim_backend: Optional[AsyncSimBackend] = None
   last_sim_reply: str = field(default="", repr=False)
@@ -273,12 +317,17 @@ class ColBenchUserSimEnv:
       ``(system_content, user_content)`` -- byte-identical across the sync and
       async paths.
     """
-    return templates.SIM_SYSTEM_PROMPT, templates.build_sim_user_message(
+    return templates.resolve_sim_system(
+        self.sim_prompt
+    ), templates.build_sim_user_message(
         self.problem_description, self.ground_truth, messages
     )
 
   def _finalize_reply(self, raw: str, user_content: str) -> str:
     """<think>-strip, then apply the post-hoc character cap (and debug-dump it).
+
+    Delegates the transform to module-level ``finalize_sim_reply``; what stays
+    here is the debug dump, which needs ``self.ground_truth``.
 
     The cap is sweet_rl's ``HUMAN_RESPONSE_CHARACTER_LIMIT`` (400) by default,
     so anything that does not set ``SIM_CHAR_LIMIT`` is byte-identical to stock
@@ -299,14 +348,7 @@ class ColBenchUserSimEnv:
       The reply the solver will see: ``<think>``-stripped and, unless
       ``SIM_CHAR_LIMIT=0``, truncated to the character cap.
     """
-    limit = int(
-        os.environ.get(
-            "SIM_CHAR_LIMIT", templates.HUMAN_RESPONSE_CHARACTER_LIMIT
-        )
-    )
-    reply = templates.strip_think(raw)
-    if limit > 0:
-      reply = reply[:limit]
+    reply = finalize_sim_reply(raw)
     if _DEBUG_SIM:
       n = _DEBUG_PREVIEW
       logger.warning(

@@ -105,6 +105,16 @@ class ColBenchAgentLoop(AgentLoopBase):
       cc = self.config.get("colbench", {}) or {}
     except Exception:  # pylint: disable=broad-exception-caught  # config may not define the block
       cc = {}
+    # WHICH system prompt the frozen simulator is given
+    # (+colbench.sim_prompt): "" / auto = the stock "You are a helpful
+    # assistant."; role / role_restraint = the client-role variants. Same knob
+    # name and semantics as the spec path's sim_prompt ("what the sim is
+    # TOLD"), so one --sim_prompt flag reads the same on both paths.
+    # templates.resolve_sim_system raises on an unknown label, and it is called
+    # HERE as well as in the env so a typo fails at loop construction rather
+    # than on the first sim call of the first rollout.
+    self.sim_prompt = str(cc.get("sim_prompt", "") or "").strip()
+    templates.resolve_sim_system(self.sim_prompt)
     # Per-turn solver generation cap (tokens). None -> use remaining response
     # budget.
     self.max_new_tokens_per_turn = cc.get("max_new_tokens_per_turn", None)
@@ -241,6 +251,7 @@ class ColBenchAgentLoop(AgentLoopBase):
         test_cases=list(_tc) if _tc is not None else [],
         max_steps=self.max_assistant_turns,
         reward_time_limit=self.reward_time_limit,
+        sim_prompt=self.sim_prompt,
     )
     if self.sim_live:
       env.asim_backend = self._make_live_sim_backend()

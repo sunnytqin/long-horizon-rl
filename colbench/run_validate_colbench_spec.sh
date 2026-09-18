@@ -18,6 +18,8 @@
 #   OPENAI_BASE_URL (e.g. http://127.0.0.1:30000/v1) + MULTITURN_MODEL_NAME.
 # entrypoint_eval_colbench.sh brings this up (same as training); for a manual run start a
 # sim SGLang OpenAI server yourself and export those two vars first.
+# On Slurm use slurm_setup/launch_eval_slurm.sh --mode eval: it brings up a
+# dedicated remote simulator, an exec sidecar, and calls this runner unchanged.
 #
 # Env overrides: MODEL_PATH, VAL_FILE, OUT, MAX_PROBLEMS, N_SAMPLES, MAX_SAVED_CONVOS,
 #   TEMPERATURES, TOP_P, TOP_K, SEED, MAX_ASSISTANT_TURNS, MAX_NEW_TOKENS_PER_TURN,

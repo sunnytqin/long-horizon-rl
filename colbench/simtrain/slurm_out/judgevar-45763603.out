@@ -1,0 +1,23 @@
+=== judging role ===
+[judge_candidates] rubric=r2 harness=h1 judge=gpt-5.4-mini
+[judge_candidates] 87 prefixes in scope, 0 already judged, 87 to judge -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/gs200/judged.train.fence.c1.r2.role.jsonl
+[judge_candidates] 20/87 judged (20 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.02) in 11s
+[judge_candidates] 40/87 judged (40 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.05) in 13s
+[judge_candidates] 60/87 judged (60 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.07) in 15s
+[judge_candidates] 80/87 judged (80 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.09) in 18s
+[judge_candidates] DONE 87 judged, 87 parsed ok, 0 deferred, 0 refused, 19s -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/gs200/judged.train.fence.c1.r2.role.jsonl
+[judge_candidates] judge_parse_fail_rate=0.0000 (0 rows needed the temp-0 retry)
+[judge_candidates] USAGE: 87 requests issued / 87 returned | prompt 202,443 (cached 1,280) | completion 23,662 (reasoning 0)
+[judge_candidates] EST COST: $0.10 at $0.25/M in + $2.0/M out (completion tokens INCLUDE hidden reasoning)
+=== judging role_restraint ===
+[judge_candidates] rubric=r2 harness=h1 judge=gpt-5.4-mini
+[judge_candidates] 87 prefixes in scope, 0 already judged, 87 to judge -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/gs200/judged.train.fence.c1.r2.role_restraint.jsonl
+[judge_candidates] 20/87 judged (20 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.02) in 5s
+[judge_candidates] 40/87 judged (40 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.04) in 7s
+[judge_candidates] 60/87 judged (60 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.07) in 10s
+[judge_candidates] 80/87 judged (80 parsed ok, 0 needed a temp-0 retry, 0 deferred, $0.09) in 12s
+[judge_candidates] DONE 87 judged, 87 parsed ok, 0 deferred, 0 refused, 13s -> /n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/gs200/judged.train.fence.c1.r2.role_restraint.jsonl
+[judge_candidates] judge_parse_fail_rate=0.0000 (0 rows needed the temp-0 retry)
+[judge_candidates] USAGE: 87 requests issued / 87 returned | prompt 201,575 (cached 3,072) | completion 23,186 (reasoning 0)
+[judge_candidates] EST COST: $0.10 at $0.25/M in + $2.0/M out (completion tokens INCLUDE hidden reasoning)
+ALLDONE

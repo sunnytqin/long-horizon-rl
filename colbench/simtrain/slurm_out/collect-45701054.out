@@ -1,0 +1,194 @@
+[harness] node=holygpu8a11602  stage=both
+[harness] partner=/n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200
+[harness] sim=/n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
+[harness] data=/n/netscratch/dam_lab/Lab/sqin/verl_data/colbench/train.fence.parquet rows [0,40)  out=/n/netscratch/dam_lab/Lab/sqin/verl_runs/colbench_simtrain/gs200  SIM_CHAR_LIMIT=0
+[harness] python=/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/bin/python  vllm=0.10.1
+[harness] starting vllm 'colbench-sim' on 127.0.0.1:30001 ...
+[harness] starting vllm 'partner-gs200' on 127.0.0.1:30000 ...
+Skipping import of cpp extensions due to incompatible torch version 2.7.1+cu126 for torchao version 0.14.0         Please see GitHub issue #2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.7.1+cu126 for torchao version 0.14.0         Please see GitHub issue #2919 for more info
+INFO 09-09 14:22:00 [__init__.py:241] Automatically detected platform cuda.
+INFO 09-09 14:22:00 [__init__.py:241] Automatically detected platform cuda.
+[1;36m(APIServer pid=751571)[0;0m [1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:22:09 [api_server.py:1805] vLLM API server version 0.10.1
+INFO 09-09 14:22:09 [api_server.py:1805] vLLM API server version 0.10.1
+[1;36m(APIServer pid=751571)[0;0m INFO 09-09 14:22:09 [utils.py:326] non-default args: {'host': '127.0.0.1', 'port': 30000, 'model': '/n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200', 'max_model_len': 16384, 'enforce_eager': True, 'served_model_name': ['partner-gs200'], 'gpu_memory_utilization': 0.42}
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:22:09 [utils.py:326] non-default args: {'host': '127.0.0.1', 'port': 30001, 'model': '/n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554', 'max_model_len': 16384, 'enforce_eager': True, 'served_model_name': ['colbench-sim'], 'gpu_memory_utilization': 0.42}
+[1;36m(APIServer pid=751571)[0;0m INFO 09-09 14:22:27 [__init__.py:711] Resolved architecture: Qwen3ForCausalLM
+[1;36m(APIServer pid=751571)[0;0m `torch_dtype` is deprecated! Use `dtype` instead!
+[1;36m(APIServer pid=751571)[0;0m INFO 09-09 14:22:27 [__init__.py:1750] Using max model len 16384
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:22:27 [__init__.py:711] Resolved architecture: Qwen3ForCausalLM
+[1;36m(APIServer pid=751570)[0;0m `torch_dtype` is deprecated! Use `dtype` instead!
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:22:27 [__init__.py:1750] Using max model len 16384
+[1;36m(APIServer pid=751571)[0;0m INFO 09-09 14:22:29 [scheduler.py:222] Chunked prefill is enabled with max_num_batched_tokens=8192.
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:22:29 [scheduler.py:222] Chunked prefill is enabled with max_num_batched_tokens=8192.
+[1;36m(APIServer pid=751571)[0;0m INFO 09-09 14:22:29 [__init__.py:3565] Cudagraph is disabled under eager mode
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:22:29 [__init__.py:3565] Cudagraph is disabled under eager mode
+Skipping import of cpp extensions due to incompatible torch version 2.7.1+cu126 for torchao version 0.14.0         Please see GitHub issue #2919 for more info
+Skipping import of cpp extensions due to incompatible torch version 2.7.1+cu126 for torchao version 0.14.0         Please see GitHub issue #2919 for more info
+INFO 09-09 14:22:45 [__init__.py:241] Automatically detected platform cuda.
+INFO 09-09 14:22:45 [__init__.py:241] Automatically detected platform cuda.
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:22:47 [core.py:636] Waiting for init message from front-end.
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:22:47 [core.py:636] Waiting for init message from front-end.
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:22:47 [core.py:74] Initializing a V1 LLM engine (v0.10.1) with config: model='/n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200', speculative_config=None, tokenizer='/n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config={}, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16384, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=True, kv_cache_dtype=auto, device_config=cuda, decoding_config=DecodingConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_backend=''), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None), seed=0, served_model_name=partner-gs200, enable_prefix_caching=True, chunked_prefill_enabled=True, use_async_output_proc=True, pooler_config=None, compilation_config={"level":0,"debug_dump_path":"","cache_dir":"","backend":"","custom_ops":[],"splitting_ops":null,"use_inductor":true,"compile_sizes":[],"inductor_compile_config":{"enable_auto_functionalized_v2":false},"inductor_passes":{},"cudagraph_mode":0,"use_cudagraph":true,"cudagraph_num_of_warmups":0,"cudagraph_capture_sizes":[],"cudagraph_copy_inputs":false,"full_cuda_graph":false,"pass_config":{},"max_capture_size":0,"local_cache_dir":null}
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:22:47 [core.py:74] Initializing a V1 LLM engine (v0.10.1) with config: model='/n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554', speculative_config=None, tokenizer='/n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config={}, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16384, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=True, kv_cache_dtype=auto, device_config=cuda, decoding_config=DecodingConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_backend=''), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None), seed=0, served_model_name=colbench-sim, enable_prefix_caching=True, chunked_prefill_enabled=True, use_async_output_proc=True, pooler_config=None, compilation_config={"level":0,"debug_dump_path":"","cache_dir":"","backend":"","custom_ops":[],"splitting_ops":null,"use_inductor":true,"compile_sizes":[],"inductor_compile_config":{"enable_auto_functionalized_v2":false},"inductor_passes":{},"cudagraph_mode":0,"use_cudagraph":true,"cudagraph_num_of_warmups":0,"cudagraph_capture_sizes":[],"cudagraph_copy_inputs":false,"full_cuda_graph":false,"pass_config":{},"max_capture_size":0,"local_cache_dir":null}
+[W909 14:22:50.256303353 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [holygpu8a11602.rc.fas.harvard.edu]:57055 (errno: 97 - Address family not supported by protocol).
+[W909 14:22:50.256307443 socket.cpp:755] [c10d] The client socket cannot be initialized to connect to [holygpu8a11602.rc.fas.harvard.edu]:58263 (errno: 97 - Address family not supported by protocol).
+[1;36m(EngineCore_0 pid=751821)[0;0m [1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:22:50 [parallel_state.py:1134] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0, EP rank 0
+INFO 09-09 14:22:50 [parallel_state.py:1134] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0, EP rank 0
+[1;36m(EngineCore_0 pid=751820)[0;0m [1;36m(EngineCore_0 pid=751821)[0;0m WARNING 09-09 14:22:50 [topk_topp_sampler.py:61] FlashInfer is not available. Falling back to the PyTorch-native implementation of top-p & top-k sampling. For the best performance, please install FlashInfer.
+WARNING 09-09 14:22:50 [topk_topp_sampler.py:61] FlashInfer is not available. Falling back to the PyTorch-native implementation of top-p & top-k sampling. For the best performance, please install FlashInfer.
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:22:51 [gpu_model_runner.py:1953] Starting to load model /n/netscratch/dam_lab/Lab/sqin/models/local/qwen3_4b_nonspec_gs200...
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:22:51 [gpu_model_runner.py:1953] Starting to load model /n/netscratch/dam_lab/Lab/sqin/models/qwen/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554...
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:22:51 [gpu_model_runner.py:1985] Loading model from scratch...
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:22:51 [gpu_model_runner.py:1985] Loading model from scratch...
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:22:51 [cuda.py:328] Using Flash Attention backend on V1 engine.
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:22:51 [cuda.py:328] Using Flash Attention backend on V1 engine.
+[1;36m(EngineCore_0 pid=751820)[0;0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+[1;36m(EngineCore_0 pid=751821)[0;0m Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
+[1;36m(EngineCore_0 pid=751821)[0;0m Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:07<00:14,  7.45s/it]
+[1;36m(EngineCore_0 pid=751820)[0;0m Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:10<00:10, 10.03s/it]
+[1;36m(EngineCore_0 pid=751821)[0;0m Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:12<00:05,  5.94s/it]
+[1;36m(EngineCore_0 pid=751821)[0;0m Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:12<00:00,  3.35s/it]
+[1;36m(EngineCore_0 pid=751821)[0;0m Loading safetensors checkpoint shards: 100% Completed | 3/3 [00:12<00:00,  4.20s/it]
+[1;36m(EngineCore_0 pid=751821)[0;0m 
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:23:04 [default_loader.py:262] Loading weights took 12.60 seconds
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:23:05 [gpu_model_runner.py:2007] Model loading took 7.6065 GiB and 13.107806 seconds
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:23:06 [gpu_worker.py:276] Available KV cache memory: 12.29 GiB
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:23:07 [kv_cache_utils.py:849] GPU KV cache size: 89,472 tokens
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:23:07 [kv_cache_utils.py:853] Maximum concurrency for 16,384 tokens per request: 5.46x
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:23:07 [core.py:214] init engine (profile, create kv cache, warmup model) took 1.93 seconds
+[1;36m(EngineCore_0 pid=751821)[0;0m INFO 09-09 14:23:07 [__init__.py:3565] Cudagraph is disabled under eager mode
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [loggers.py:142] Engine 000: vllm cache_config_info with initialization after num_gpu_blocks is: 5592
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [api_server.py:1611] Supported_tasks: ['generate']
+[1;36m(APIServer pid=751570)[0;0m WARNING 09-09 14:23:07 [__init__.py:1625] Default sampling parameters have been overridden by the model's Hugging Face generation config recommended from the model creator. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [serving_responses.py:120] Using default chat sampling params from model: {'temperature': 0.7, 'top_k': 20, 'top_p': 0.8}
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [serving_chat.py:134] Using default chat sampling params from model: {'temperature': 0.7, 'top_k': 20, 'top_p': 0.8}
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [serving_completion.py:77] Using default completion sampling params from model: {'temperature': 0.7, 'top_k': 20, 'top_p': 0.8}
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [api_server.py:1880] Starting vLLM API server 0 on http://127.0.0.1:30001
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:29] Available routes are:
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /openapi.json, Methods: HEAD, GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /docs, Methods: HEAD, GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /docs/oauth2-redirect, Methods: HEAD, GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /redoc, Methods: HEAD, GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /health, Methods: GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /load, Methods: GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /ping, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /ping, Methods: GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /tokenize, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /detokenize, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/models, Methods: GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /version, Methods: GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/responses, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/responses/{response_id}, Methods: GET
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/responses/{response_id}/cancel, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/chat/completions, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/completions, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/embeddings, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /pooling, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /classify, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /score, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/score, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/audio/transcriptions, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/audio/translations, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /rerank, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v1/rerank, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /v2/rerank, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /scale_elastic_ep, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /is_scaling_elastic_ep, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /invocations, Methods: POST
+[1;36m(APIServer pid=751570)[0;0m INFO 09-09 14:23:07 [launcher.py:37] Route: /metrics, Methods: GET
+[1;36m(APIServer pid=751570)[0;0m INFO:     Started server process [751570]
+[1;36m(APIServer pid=751570)[0;0m INFO:     Waiting for application startup.
+[1;36m(APIServer pid=751570)[0;0m INFO:     Application startup complete.
+[1;36m(EngineCore_0 pid=751820)[0;0m Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:16<00:00,  8.05s/it]
+[1;36m(EngineCore_0 pid=751820)[0;0m Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:16<00:00,  8.35s/it]
+[1;36m(EngineCore_0 pid=751820)[0;0m 
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:23:08 [default_loader.py:262] Loading weights took 16.78 seconds
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:23:09 [gpu_model_runner.py:2007] Model loading took 7.6065 GiB and 17.286518 seconds
+[1;36m(EngineCore_0 pid=751820)[0;0m INFO 09-09 14:23:10 [gpu_worker.py:276] Available KV cache memory: -5.70 GiB
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700] EngineCore failed to start.
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700] Traceback (most recent call last):
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 691, in run_engine_core
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]     engine_core = EngineCoreProc(*args, **kwargs)
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 492, in __init__
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]     super().__init__(vllm_config, executor_class, log_stats,
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 89, in __init__
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]     self._initialize_kv_caches(vllm_config)
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 188, in _initialize_kv_caches
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]     kv_cache_configs = [
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 189, in <listcomp>
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]     get_kv_cache_config(vllm_config, kv_cache_spec_one_worker,
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/core/kv_cache_utils.py", line 1095, in get_kv_cache_config
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]     check_enough_kv_cache_memory(vllm_config, kv_cache_spec, available_memory)
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/core/kv_cache_utils.py", line 682, in check_enough_kv_cache_memory
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700]     raise ValueError("No available memory for the cache blocks. "
+[1;36m(EngineCore_0 pid=751820)[0;0m ERROR 09-09 14:23:10 [core.py:700] ValueError: No available memory for the cache blocks. Try increasing `gpu_memory_utilization` when initializing the engine.
+[1;36m(EngineCore_0 pid=751820)[0;0m Process EngineCore_0:
+[1;36m(EngineCore_0 pid=751820)[0;0m Traceback (most recent call last):
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/multiprocessing/process.py", line 314, in _bootstrap
+[1;36m(EngineCore_0 pid=751820)[0;0m     self.run()
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/multiprocessing/process.py", line 108, in run
+[1;36m(EngineCore_0 pid=751820)[0;0m     self._target(*self._args, **self._kwargs)
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 704, in run_engine_core
+[1;36m(EngineCore_0 pid=751820)[0;0m     raise e
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 691, in run_engine_core
+[1;36m(EngineCore_0 pid=751820)[0;0m     engine_core = EngineCoreProc(*args, **kwargs)
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 492, in __init__
+[1;36m(EngineCore_0 pid=751820)[0;0m     super().__init__(vllm_config, executor_class, log_stats,
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 89, in __init__
+[1;36m(EngineCore_0 pid=751820)[0;0m     self._initialize_kv_caches(vllm_config)
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 188, in _initialize_kv_caches
+[1;36m(EngineCore_0 pid=751820)[0;0m     kv_cache_configs = [
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 189, in <listcomp>
+[1;36m(EngineCore_0 pid=751820)[0;0m     get_kv_cache_config(vllm_config, kv_cache_spec_one_worker,
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/core/kv_cache_utils.py", line 1095, in get_kv_cache_config
+[1;36m(EngineCore_0 pid=751820)[0;0m     check_enough_kv_cache_memory(vllm_config, kv_cache_spec, available_memory)
+[1;36m(EngineCore_0 pid=751820)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/core/kv_cache_utils.py", line 682, in check_enough_kv_cache_memory
+[1;36m(EngineCore_0 pid=751820)[0;0m     raise ValueError("No available memory for the cache blocks. "
+[1;36m(EngineCore_0 pid=751820)[0;0m ValueError: No available memory for the cache blocks. Try increasing `gpu_memory_utilization` when initializing the engine.
+[rank0]:[W909 14:23:10.357783922 ProcessGroupNCCL.cpp:1479] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+[1;36m(APIServer pid=751571)[0;0m Traceback (most recent call last):
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+[1;36m(APIServer pid=751571)[0;0m     return _run_code(code, main_globals, None,
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/runpy.py", line 86, in _run_code
+[1;36m(APIServer pid=751571)[0;0m     exec(code, run_globals)
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 1918, in <module>
+[1;36m(APIServer pid=751571)[0;0m     uvloop.run(run_server(args))
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/uvloop/__init__.py", line 82, in run
+[1;36m(APIServer pid=751571)[0;0m     return loop.run_until_complete(wrapper())
+[1;36m(APIServer pid=751571)[0;0m   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/uvloop/__init__.py", line 61, in wrapper
+[1;36m(APIServer pid=751571)[0;0m     return await main
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 1850, in run_server
+[1;36m(APIServer pid=751571)[0;0m     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 1870, in run_server_worker
+[1;36m(APIServer pid=751571)[0;0m     async with build_async_engine_client(
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/contextlib.py", line 199, in __aenter__
+[1;36m(APIServer pid=751571)[0;0m     return await anext(self.gen)
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 178, in build_async_engine_client
+[1;36m(APIServer pid=751571)[0;0m     async with build_async_engine_client_from_engine_args(
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/contextlib.py", line 199, in __aenter__
+[1;36m(APIServer pid=751571)[0;0m     return await anext(self.gen)
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 220, in build_async_engine_client_from_engine_args
+[1;36m(APIServer pid=751571)[0;0m     async_llm = AsyncLLM.from_vllm_config(
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/utils/__init__.py", line 1557, in inner
+[1;36m(APIServer pid=751571)[0;0m     return fn(*args, **kwargs)
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/async_llm.py", line 174, in from_vllm_config
+[1;36m(APIServer pid=751571)[0;0m     return cls(
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/async_llm.py", line 120, in __init__
+[1;36m(APIServer pid=751571)[0;0m     self.engine_core = EngineCoreClient.make_async_mp_client(
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core_client.py", line 102, in make_async_mp_client
+[1;36m(APIServer pid=751571)[0;0m     return AsyncMPClient(*client_args)
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core_client.py", line 767, in __init__
+[1;36m(APIServer pid=751571)[0;0m     super().__init__(
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/core_client.py", line 446, in __init__
+[1;36m(APIServer pid=751571)[0;0m     with launch_core_engines(vllm_config, executor_class,
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/contextlib.py", line 142, in __exit__
+[1;36m(APIServer pid=751571)[0;0m     next(self.gen)
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/utils.py", line 706, in launch_core_engines
+[1;36m(APIServer pid=751571)[0;0m     wait_for_engine_startup(
+[1;36m(APIServer pid=751571)[0;0m   File "/n/holylabs/LABS/dam_lab/Lab/sqin/envs/openrlhf/lib/python3.10/site-packages/vllm/v1/engine/utils.py", line 759, in wait_for_engine_startup
+[1;36m(APIServer pid=751571)[0;0m     raise RuntimeError("Engine core initialization failed. "
+[1;36m(APIServer pid=751571)[0;0m RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}
+[harness] ERROR: server on :30000 died during startup
+[harness] tearing down servers 751570 751571
